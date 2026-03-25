@@ -26,12 +26,13 @@ All 44 tools from `@a-bonus/google-docs-mcp`, plus:
 
 Choose **one** of the following methods (whichever you prefer):
 
-#### Option A: Drop `credentials.json` into the config directory
+#### Option A: Use `credentials.json`
 
-Download the JSON file from Google Cloud Console and place it at:
+Download the JSON file from Google Cloud Console and place it in either location:
 
 ```
-~/.config/google-docs-mcp/credentials.json
+~/.config/google-docs-mcp/credentials.json   (recommended — shared across projects)
+./credentials.json                            (local to your project)
 ```
 
 That's it — no env vars needed. The server will find it automatically.
