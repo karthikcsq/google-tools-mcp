@@ -76,7 +76,26 @@ Add the credentials directly to your MCP configuration:
 
 ### Step 3: Add to Your MCP Client
 
-If you used Option A or B above, your MCP config can be minimal:
+#### Claude Code (recommended)
+
+If you used Option A or B above:
+
+```bash
+claude mcp add google-docs -- npx -y mcp-google-extras
+```
+
+Or with env vars (Option C):
+
+```bash
+claude mcp add google-docs \
+  -e GOOGLE_CLIENT_ID=your-client-id \
+  -e GOOGLE_CLIENT_SECRET=your-client-secret \
+  -- npx -y mcp-google-extras
+```
+
+#### Other MCP clients
+
+Add this to your MCP configuration (e.g., `.mcp.json`, `claude_desktop_config.json`):
 
 ```json
 {
@@ -88,6 +107,8 @@ If you used Option A or B above, your MCP config can be minimal:
   }
 }
 ```
+
+If using Option C, add an `"env"` block with your `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
 ### Step 4: Authenticate
 
