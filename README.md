@@ -39,7 +39,14 @@ That's it — no env vars needed. The server will find it automatically.
 
 #### Option B: Create a `.env` file
 
-Create `~/.config/google-docs-mcp/.env`:
+Create a `.env` file in either location:
+
+```
+~/.config/google-docs-mcp/.env   (recommended — shared across projects)
+./.env                           (local to your project)
+```
+
+With the following contents:
 
 ```env
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
