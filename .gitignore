@@ -1,3 +1,4 @@
 node_modules/
 .env
 *.tgz
+npm_recovery_codes.txt
