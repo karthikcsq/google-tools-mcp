@@ -4,7 +4,7 @@ import { getDriveClient } from '../../clients.js';
 export function register(server) {
     server.addTool({
         name: 'searchDocuments',
-        description: 'Searches for documents by name, content, or both. Use listDocuments for browsing and this tool for targeted queries.',
+        description: 'Searches for documents by name, content, or both. Finds Google Docs, Word (.docx), and PDF files. Use listDocuments for browsing and this tool for targeted queries.',
         parameters: z.object({
             query: z.string().min(1).describe('Search term to find in document names or content.'),
             searchIn: z
@@ -12,6 +12,11 @@ export function register(server) {
                 .optional()
                 .default('both')
                 .describe('Where to search: document names, content, or both.'),
+            fileType: z
+                .enum(['all', 'google-doc', 'docx', 'pdf'])
+                .optional()
+                .default('all')
+                .describe('Filter by file type: all document types, Google Docs only, Word (.docx) only, or PDF only.'),
             maxResults: z
                 .number()
                 .int()
@@ -29,7 +34,21 @@ export function register(server) {
             const drive = await getDriveClient();
             log.info(`Searching Google Docs for: "${args.query}" in ${args.searchIn}`);
             try {
-                let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
+                const mimeTypes = {
+                    'google-doc': ["mimeType='application/vnd.google-apps.document'"],
+                    'docx': ["mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document'"],
+                    'pdf': ["mimeType='application/pdf'"],
+                    'all': [
+                        "mimeType='application/vnd.google-apps.document'",
+                        "mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document'",
+                        "mimeType='application/pdf'",
+                    ],
+                };
+                const selectedMimes = mimeTypes[args.fileType || 'all'];
+                const mimeFilter = selectedMimes.length === 1
+                    ? selectedMimes[0]
+                    : `(${selectedMimes.join(' or ')})`;
+                let queryString = `${mimeFilter} and trashed=false`;
                 // Add search criteria
                 if (args.searchIn === 'name') {
                     queryString += ` and name contains '${args.query}'`;
@@ -48,14 +67,20 @@ export function register(server) {
                     q: queryString,
                     pageSize: args.maxResults,
                     orderBy: 'modifiedTime desc',
-                    fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents)',
+                    fields: 'files(id,name,mimeType,modifiedTime,createdTime,webViewLink,owners(displayName),parents)',
                     supportsAllDrives: true,
                     includeItemsFromAllDrives: true,
                 });
                 const files = response.data.files || [];
+                const mimeToType = {
+                    'application/vnd.google-apps.document': 'google-doc',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                    'application/pdf': 'pdf',
+                };
                 const documents = files.map((file) => ({
                     id: file.id,
                     name: file.name,
+                    type: mimeToType[file.mimeType] || file.mimeType,
                     modifiedTime: file.modifiedTime,
                     owner: file.owners?.[0]?.displayName || null,
                     url: file.webViewLink,
