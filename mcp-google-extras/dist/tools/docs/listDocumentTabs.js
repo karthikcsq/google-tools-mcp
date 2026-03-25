@@ -1,0 +1,60 @@
+import { UserError } from 'fastmcp';
+import { z } from 'zod';
+import { getDocsClient } from '../../clients.js';
+import { DocumentIdParameter } from '../../types.js';
+import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+export function register(server) {
+    server.addTool({
+        name: 'listTabs',
+        description: "Lists all tabs in a document with their IDs and hierarchy. Use the returned tab IDs with other tools' tabId parameter to target a specific tab.",
+        parameters: DocumentIdParameter.extend({
+            includeContent: z
+                .boolean()
+                .optional()
+                .default(false)
+                .describe('Whether to include a content summary for each tab (character count).'),
+        }),
+        execute: async (args, { log }) => {
+            const docs = await getDocsClient();
+            log.info(`Listing tabs for document: ${args.documentId}`);
+            try {
+                // Get document with tabs structure
+                const res = await docs.documents.get({
+                    documentId: args.documentId,
+                    includeTabsContent: true,
+                    // Only get essential fields for tab listing
+                    fields: args.includeContent
+                        ? 'title,tabs' // Get all tab data if we need content summary
+                        : 'title,tabs(tabProperties,childTabs)', // Otherwise just structure
+                });
+                const docTitle = res.data.title || 'Untitled Document';
+                // Get all tabs in a flat list with hierarchy info
+                const allTabs = GDocsHelpers.getAllTabs(res.data);
+                const tabs = allTabs.map((tab) => {
+                    const tabProperties = tab.tabProperties || {};
+                    const tabObj = {
+                        id: tabProperties.tabId || null,
+                        title: tabProperties.title || null,
+                        index: tabProperties.index ?? null,
+                    };
+                    if (tabProperties.parentTabId) {
+                        tabObj.parentTabId = tabProperties.parentTabId;
+                    }
+                    if (args.includeContent && tab.documentTab) {
+                        tabObj.characterCount = GDocsHelpers.getTabTextLength(tab.documentTab);
+                    }
+                    return tabObj;
+                });
+                return JSON.stringify({ documentTitle: docTitle, tabs }, null, 2);
+            }
+            catch (error) {
+                log.error(`Error listing tabs for doc ${args.documentId}: ${error.message || error}`);
+                if (error.code === 404)
+                    throw new UserError(`Document not found (ID: ${args.documentId}).`);
+                if (error.code === 403)
+                    throw new UserError(`Permission denied for document (ID: ${args.documentId}).`);
+                throw new UserError(`Failed to list tabs: ${error.message || 'Unknown error'}`);
+            }
+        },
+    });
+}

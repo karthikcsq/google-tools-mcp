@@ -1,0 +1,35 @@
+{
+  "name": "mcp-google-extras",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server for Google Docs, Sheets, Drive, plus .docx and .pdf file reading",
+  "bin": {
+    "mcp-google-extras": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "google-docs",
+    "google-sheets",
+    "google-drive",
+    "docx",
+    "pdf"
+  ],
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "fastmcp": "^3.24.0",
+    "google-auth-library": "^10.5.0",
+    "googleapis": "^171.4.0",
+    "markdown-it": "^14.1.0",
+    "mammoth": "^1.9.0",
+    "pdf-parse": "^1.1.1",
+    "zod": "^3.24.2"
+  }
+}
