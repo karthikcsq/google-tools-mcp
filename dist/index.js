@@ -8,7 +8,6 @@
 //   mcp-google-extras auth     Run the interactive OAuth flow
 import { FastMCP } from 'fastmcp';
 import { buildCachedToolsListPayload, collectToolsWhileRegistering, installCachedToolsListHandler, } from './cachedToolsList.js';
-import { initializeGoogleClient } from './clients.js';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
 // --- Auth subcommand ---
@@ -40,13 +39,12 @@ const registeredTools = [];
 collectToolsWhileRegistering(server, registeredTools);
 registerAllTools(server);
 try {
-    await initializeGoogleClient();
-    logger.info('Starting Ultimate Google Docs & Sheets MCP server...');
+    logger.info('Starting mcp-google-extras server...');
     const cachedToolsList = await buildCachedToolsListPayload(registeredTools);
     await server.start({ transportType: 'stdio' });
     installCachedToolsListHandler(server, cachedToolsList);
     logger.info('MCP Server running using stdio. Awaiting client connection...');
-    logger.info('Process-level error handling configured to prevent crashes from timeout errors.');
+    logger.info('Google auth will run automatically on first tool call.');
 }
 catch (startError) {
     logger.error('FATAL: Server failed to start:', startError.message || startError);

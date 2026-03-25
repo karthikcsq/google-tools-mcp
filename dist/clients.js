@@ -24,13 +24,17 @@ export async function initializeGoogleClient() {
             logger.info('Google API client authorized successfully.');
         }
         catch (error) {
-            logger.error('FATAL: Failed to initialize Google API client:', error);
+            logger.error('Failed to initialize Google API client:', error);
             authClient = null;
             googleDocs = null;
             googleDrive = null;
             googleSheets = null;
             googleScript = null;
-            throw new Error('Google client initialization failed. Cannot start server tools.');
+            throw new UserError(
+                'Google authentication required. A browser window should have opened automatically. ' +
+                'If not, run: npx mcp-google-extras auth\n\n' +
+                'Details: ' + (error.message || error)
+            );
         }
     }
     if (authClient && !googleDocs) {

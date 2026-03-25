@@ -5,6 +5,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as http from 'http';
+import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 // ---------------------------------------------------------------------------
@@ -42,42 +43,83 @@ const SCOPES = [
     'https://www.googleapis.com/auth/script.external_request',
 ];
 // ---------------------------------------------------------------------------
+// .env file loader
+// ---------------------------------------------------------------------------
+async function loadEnvFile(filePath) {
+    try {
+        const content = await fs.readFile(filePath, 'utf8');
+        for (const line of content.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx === -1) continue;
+            const key = trimmed.slice(0, eqIdx).trim();
+            let value = trimmed.slice(eqIdx + 1).trim();
+            // Strip surrounding quotes
+            if ((value.startsWith('"') && value.endsWith('"')) ||
+                (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+            if (!process.env[key]) {
+                process.env[key] = value;
+            }
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+// ---------------------------------------------------------------------------
 // Client secrets resolution
 // ---------------------------------------------------------------------------
 /**
  * Resolves OAuth client ID and secret.
  *
  * Priority:
- *   1. GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars (npx / production)
- *   2. credentials.json in the project root (local dev fallback)
+ *   1. GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars (including from MCP config)
+ *   2. .env file in config dir (~/.config/google-docs-mcp/.env)
+ *   3. .env file in project root
+ *   4. credentials.json in config dir (~/.config/google-docs-mcp/credentials.json)
+ *   5. credentials.json in project root (legacy dev fallback)
  */
 async function loadClientSecrets() {
-    // 1. Environment variables
-    const envId = process.env.GOOGLE_CLIENT_ID;
-    const envSecret = process.env.GOOGLE_CLIENT_SECRET;
-    if (envId && envSecret) {
-        return { client_id: envId, client_secret: envSecret };
+    // 1. Check env vars first (may already be set via MCP config)
+    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+        return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
     }
-    // 2. credentials.json fallback
-    try {
-        const content = await fs.readFile(CREDENTIALS_PATH, 'utf8');
-        const keys = JSON.parse(content);
-        const key = keys.installed || keys.web;
-        if (!key) {
-            throw new Error('Could not find client secrets in credentials.json.');
+    // 2–3. Try loading .env files (config dir first, then project root)
+    const configDir = getConfigDir();
+    await loadEnvFile(path.join(configDir, '.env'));
+    await loadEnvFile(path.join(projectRootDir, '.env'));
+    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+        logger.info('Loaded client credentials from .env file.');
+        return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
+    }
+    // 4–5. Try credentials.json (config dir first, then project root)
+    const credentialsPaths = [
+        path.join(configDir, 'credentials.json'),
+        CREDENTIALS_PATH,
+    ];
+    for (const credPath of credentialsPaths) {
+        try {
+            const content = await fs.readFile(credPath, 'utf8');
+            const keys = JSON.parse(content);
+            const key = keys.installed || keys.web;
+            if (key) {
+                logger.info('Loaded client credentials from', credPath);
+                return { client_id: key.client_id, client_secret: key.client_secret };
+            }
+        } catch (err) {
+            if (err.code !== 'ENOENT') throw err;
         }
-        return {
-            client_id: key.client_id,
-            client_secret: key.client_secret,
-        };
     }
-    catch (err) {
-        if (err.code === 'ENOENT') {
-            throw new Error('No OAuth credentials found. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET ' +
-                'environment variables, or place a credentials.json file in the project root.');
-        }
-        throw err;
-    }
+    const configDirDisplay = configDir.replace(os.homedir(), '~');
+    throw new Error(
+        'No OAuth credentials found. Provide them in any of these ways:\n' +
+        `  1. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars in your MCP config\n` +
+        `  2. Create ${configDirDisplay}/.env with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET\n` +
+        `  3. Place your credentials.json (from Google Cloud Console) in ${configDirDisplay}/`
+    );
 }
 // ---------------------------------------------------------------------------
 // Service account auth (unchanged)
@@ -144,6 +186,25 @@ async function saveCredentials(client) {
     logger.info('Token stored to', tokenPath);
 }
 // ---------------------------------------------------------------------------
+// Auto-open browser (cross-platform)
+// ---------------------------------------------------------------------------
+function openBrowser(url) {
+    const platform = process.platform;
+    let cmd;
+    if (platform === 'win32') {
+        cmd = `start "" "${url}"`;
+    } else if (platform === 'darwin') {
+        cmd = `open "${url}"`;
+    } else {
+        cmd = `xdg-open "${url}"`;
+    }
+    exec(cmd, (err) => {
+        if (err) {
+            logger.warn('Could not auto-open browser. Please open this URL manually.');
+        }
+    });
+}
+// ---------------------------------------------------------------------------
 // Interactive OAuth browser flow
 // ---------------------------------------------------------------------------
 async function authenticate() {
@@ -158,7 +219,9 @@ async function authenticate() {
         access_type: 'offline',
         scope: SCOPES.join(' '),
     });
-    logger.info('Authorize this app by visiting this url:', authorizeUrl);
+    logger.info('Opening browser for authorization...');
+    logger.info('If the browser does not open, visit this URL:', authorizeUrl);
+    openBrowser(authorizeUrl);
     // Wait for the OAuth callback
     const code = await new Promise((resolve, reject) => {
         server.on('request', (req, res) => {
