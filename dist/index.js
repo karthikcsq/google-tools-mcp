@@ -4,8 +4,8 @@
 // Single entry point for the Google Docs MCP Server.
 //
 // Usage:
-//   @a-bonus/google-docs-mcp          Start the MCP server (default)
-//   @a-bonus/google-docs-mcp auth     Run the interactive OAuth flow
+//   mcp-google-extras          Start the MCP server (default)
+//   mcp-google-extras auth     Run the interactive OAuth flow
 import { FastMCP } from 'fastmcp';
 import { buildCachedToolsListPayload, collectToolsWhileRegistering, installCachedToolsListHandler, } from './cachedToolsList.js';
 import { initializeGoogleClient } from './clients.js';
@@ -33,7 +33,7 @@ process.on('unhandledRejection', (reason, _promise) => {
     logger.error('Unhandled Promise Rejection:', reason);
 });
 const server = new FastMCP({
-    name: 'Ultimate Google Docs & Sheets MCP Server',
+    name: 'mcp-google-extras',
     version: '1.0.0',
 });
 const registeredTools = [];

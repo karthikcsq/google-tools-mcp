@@ -19,6 +19,18 @@
     "docx",
     "pdf"
   ],
+  "author": "karthikcsq",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karthikcsq/mcp-google-extras.git"
+  },
+  "homepage": "https://github.com/karthikcsq/mcp-google-extras#readme",
+  "bugs": {
+    "url": "https://github.com/karthikcsq/mcp-google-extras/issues"
+  },
+  "scripts": {
+    "start": "node dist/index.js"
+  },
   "license": "ISC",
   "engines": {
     "node": ">=18"
