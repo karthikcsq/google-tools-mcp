@@ -1,6 +1,6 @@
 {
   "name": "mcp-google-extras",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "description": "MCP server for Google Docs, Sheets, Drive, plus .docx and .pdf file reading",
   "bin": {

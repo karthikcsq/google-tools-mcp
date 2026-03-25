@@ -87,17 +87,20 @@ async function loadClientSecrets() {
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
     }
-    // 2–3. Try loading .env files (config dir first, then project root)
+    // 2–4. Try loading .env files (config dir, cwd, then package root)
     const configDir = getConfigDir();
+    const cwd = process.cwd();
     await loadEnvFile(path.join(configDir, '.env'));
+    await loadEnvFile(path.join(cwd, '.env'));
     await loadEnvFile(path.join(projectRootDir, '.env'));
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         logger.info('Loaded client credentials from .env file.');
         return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
     }
-    // 4–5. Try credentials.json (config dir first, then project root)
+    // 5–7. Try credentials.json (config dir, cwd, then package root)
     const credentialsPaths = [
         path.join(configDir, 'credentials.json'),
+        path.join(cwd, 'credentials.json'),
         CREDENTIALS_PATH,
     ];
     for (const credPath of credentialsPaths) {
@@ -117,8 +120,8 @@ async function loadClientSecrets() {
     throw new Error(
         'No OAuth credentials found. Provide them in any of these ways:\n' +
         `  1. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars in your MCP config\n` +
-        `  2. Create ${configDirDisplay}/.env with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET\n` +
-        `  3. Place your credentials.json (from Google Cloud Console) in ${configDirDisplay}/`
+        `  2. Create a .env file with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in ${configDirDisplay}/ or your project directory\n` +
+        `  3. Place your credentials.json (from Google Cloud Console) in ${configDirDisplay}/ or your project directory`
     );
 }
 // ---------------------------------------------------------------------------
