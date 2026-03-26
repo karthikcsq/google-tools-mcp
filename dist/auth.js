@@ -1,7 +1,7 @@
 // src/auth.ts
 //
-// OAuth2 authentication for gmail-mcp-tools.
-// Config dir: ~/.config/gmail-mcp-tools/ (with GOOGLE_MCP_PROFILE subdirs).
+// OAuth2 authentication for gmail-tools-mcp.
+// Config dir: ~/.config/gmail-tools-mcp/ (with GOOGLE_MCP_PROFILE subdirs).
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 import * as fs from 'fs/promises';
@@ -18,12 +18,12 @@ const projectRootDir = path.resolve(__dirname, '..');
 const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
 
 // ---------------------------------------------------------------------------
-// Paths (own config dir, same multi-profile pattern as gmail-mcp-tools)
+// Paths (own config dir, same multi-profile pattern as gmail-tools-mcp)
 // ---------------------------------------------------------------------------
 function getConfigDir() {
     const xdg = process.env.XDG_CONFIG_HOME;
     const base = xdg || path.join(os.homedir(), '.config');
-    const baseDir = path.join(base, 'gmail-mcp-tools');
+    const baseDir = path.join(base, 'gmail-tools-mcp');
     const profile = process.env.GOOGLE_MCP_PROFILE;
     return profile ? path.join(baseDir, profile) : baseDir;
 }
@@ -71,7 +71,7 @@ async function loadEnvFile(filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Client secrets resolution (same priority as gmail-mcp-tools)
+// Client secrets resolution (same priority as gmail-tools-mcp)
 // ---------------------------------------------------------------------------
 async function loadClientSecrets() {
     // 1. Check env vars first

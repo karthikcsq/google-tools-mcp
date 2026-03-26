@@ -1,10 +1,10 @@
 {
-  "name": "gmail-mcp-tools",
-  "version": "1.0.2",
+  "name": "gmail-tools-mcp",
+  "version": "1.0.0",
   "type": "module",
   "description": "MCP server for Gmail with lazy-loading auth and multi-profile support",
   "bin": {
-    "gmail-mcp-tools": "dist/index.js"
+    "gmail-tools-mcp": "dist/index.js"
   },
   "files": [
     "dist/",
@@ -20,11 +20,11 @@
   "author": "karthikcsq",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/karthikcsq/gmail-mcp-tools.git"
+    "url": "git+https://github.com/karthikcsq/gmail-tools-mcp.git"
   },
-  "homepage": "https://github.com/karthikcsq/gmail-mcp-tools#readme",
+  "homepage": "https://github.com/karthikcsq/gmail-tools-mcp#readme",
   "bugs": {
-    "url": "https://github.com/karthikcsq/gmail-mcp-tools/issues"
+    "url": "https://github.com/karthikcsq/gmail-tools-mcp/issues"
   },
   "scripts": {
     "start": "node dist/index.js"

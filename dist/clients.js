@@ -24,7 +24,7 @@ export async function initializeGmailClient() {
             gmailClient = null;
             throw new UserError(
                 'Gmail authentication required. A browser window should have opened automatically. ' +
-                'If not, run: npx gmail-mcp-tools auth\n\n' +
+                'If not, run: npx gmail-tools-mcp auth\n\n' +
                 'Details: ' + (error.message || error)
             );
         }

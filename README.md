@@ -1,4 +1,4 @@
-# gmail-mcp-tools
+# gmail-tools-mcp
 
 An MCP server for Gmail with lazy-loading auth and multi-profile support.
 
@@ -31,7 +31,7 @@ Choose **one** of the following methods (whichever you prefer):
 Download the JSON file from Google Cloud Console and place it in either location:
 
 ```
-~/.config/gmail-mcp-tools/credentials.json   (recommended — shared across projects)
+~/.config/gmail-tools-mcp/credentials.json   (recommended — shared across projects)
 ./credentials.json                             (local to your project)
 ```
 
@@ -42,7 +42,7 @@ That's it — no env vars needed. The server will find it automatically.
 Create a `.env` file in either location:
 
 ```
-~/.config/gmail-mcp-tools/.env   (recommended — shared across projects)
+~/.config/gmail-tools-mcp/.env   (recommended — shared across projects)
 ./.env                            (local to your project)
 ```
 
@@ -62,7 +62,7 @@ Add the credentials directly to your MCP configuration:
   "mcpServers": {
     "gmail": {
       "command": "npx",
-      "args": ["-y", "gmail-mcp-tools"],
+      "args": ["-y", "gmail-tools-mcp"],
       "env": {
         "GOOGLE_CLIENT_ID": "your-client-id",
         "GOOGLE_CLIENT_SECRET": "your-client-secret"
@@ -72,7 +72,7 @@ Add the credentials directly to your MCP configuration:
 }
 ```
 
-> **Credential lookup order:** env vars → `~/.config/gmail-mcp-tools/.env` → project root `.env` → `~/.config/gmail-mcp-tools/credentials.json` → project root `credentials.json`
+> **Credential lookup order:** env vars → `~/.config/gmail-tools-mcp/.env` → project root `.env` → `~/.config/gmail-tools-mcp/credentials.json` → project root `credentials.json`
 
 ### Step 3: Add to Your MCP Client
 
@@ -81,7 +81,7 @@ Add the credentials directly to your MCP configuration:
 If you used Option A or B above:
 
 ```bash
-claude mcp add gmail -- npx -y gmail-mcp-tools
+claude mcp add gmail -- npx -y gmail-tools-mcp
 ```
 
 Or with env vars (Option C):
@@ -90,7 +90,7 @@ Or with env vars (Option C):
 claude mcp add gmail \
   -e GOOGLE_CLIENT_ID=your-client-id \
   -e GOOGLE_CLIENT_SECRET=your-client-secret \
-  -- npx -y gmail-mcp-tools
+  -- npx -y gmail-tools-mcp
 ```
 
 #### Other MCP clients
@@ -102,7 +102,7 @@ Add this to your MCP configuration (e.g., `.mcp.json`, `claude_desktop_config.js
   "mcpServers": {
     "gmail": {
       "command": "npx",
-      "args": ["-y", "gmail-mcp-tools"]
+      "args": ["-y", "gmail-tools-mcp"]
     }
   }
 }
@@ -112,12 +112,12 @@ If using Option C, add an `"env"` block with your `GOOGLE_CLIENT_ID` and `GOOGLE
 
 ### Step 4: Authenticate
 
-On your first tool call, the server will automatically open your browser for Google OAuth consent. Sign in and grant access — the token is saved to `~/.config/gmail-mcp-tools/token.json` for future use.
+On your first tool call, the server will automatically open your browser for Google OAuth consent. Sign in and grant access — the token is saved to `~/.config/gmail-tools-mcp/token.json` for future use.
 
 You can also run the auth flow manually anytime:
 
 ```bash
-npx gmail-mcp-tools auth
+npx gmail-tools-mcp auth
 ```
 
 ### Multi-Account Support
@@ -132,7 +132,7 @@ Set the `GOOGLE_MCP_PROFILE` env var to use separate tokens per profile:
 }
 ```
 
-This stores tokens in `~/.config/gmail-mcp-tools/work/` instead of the default directory.
+This stores tokens in `~/.config/gmail-tools-mcp/work/` instead of the default directory.
 
 ## Tools
 

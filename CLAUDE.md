@@ -1,4 +1,4 @@
-# Project: gmail-mcp-tools
+# Project: gmail-tools-mcp
 
 ## npm Publishing
 
@@ -11,4 +11,4 @@
 - No TypeScript source — code is edited directly in `dist/`.
 - Entry point: `dist/index.js`
 - Forked from @shinzolabs/gmail-mcp with lazy-loading auth and multi-profile support.
-- Config dir at `~/.config/gmail-mcp-tools/` (with `GOOGLE_MCP_PROFILE` subdirs).
+- Config dir at `~/.config/gmail-tools-mcp/` (with `GOOGLE_MCP_PROFILE` subdirs).
