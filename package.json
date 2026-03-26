@@ -1,0 +1,42 @@
+{
+  "name": "mcp-gmail",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server for Gmail with lazy-loading auth and multi-profile support",
+  "bin": {
+    "mcp-gmail": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "gmail",
+    "google",
+    "email"
+  ],
+  "author": "karthikcsq",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karthikcsq/mcp-gmail.git"
+  },
+  "homepage": "https://github.com/karthikcsq/mcp-gmail#readme",
+  "bugs": {
+    "url": "https://github.com/karthikcsq/mcp-gmail/issues"
+  },
+  "scripts": {
+    "start": "node dist/index.js"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "fastmcp": "^3.24.0",
+    "google-auth-library": "^10.5.0",
+    "googleapis": "^171.4.0",
+    "zod": "^3.24.2"
+  }
+}
