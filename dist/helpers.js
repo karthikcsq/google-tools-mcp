@@ -34,7 +34,7 @@ export const processMessagePart = (messagePart, includeBodyHtml = false) => {
     return messagePart;
 };
 
-const getNestedHistory = (messagePart, level = 1) => {
+export const getNestedHistory = (messagePart, level = 1) => {
     if (messagePart.mimeType === 'text/plain' && messagePart.body?.data) {
         const { data } = decodedBody(messagePart.body);
         if (!data) return '';
@@ -43,12 +43,12 @@ const getNestedHistory = (messagePart, level = 1) => {
     return (messagePart.parts || []).map(p => getNestedHistory(p, level + 1)).filter(p => p).join('\n');
 };
 
-const findHeader = (headers, name) => {
+export const findHeader = (headers, name) => {
     if (!headers || !Array.isArray(headers) || !name) return undefined;
     return headers.find(h => h?.name?.toLowerCase() === name.toLowerCase())?.value ?? undefined;
 };
 
-const formatEmailList = (emailList) => {
+export const formatEmailList = (emailList) => {
     if (!emailList) return [];
     return emailList.split(',').map(email => email.trim());
 };
@@ -103,7 +103,7 @@ const getThreadHeaders = (thread) => {
     return headers;
 };
 
-const wrapTextBody = (text) => text.split('\n').map(line => {
+export const wrapTextBody = (text) => text.split('\n').map(line => {
     if (line.length <= 76) return line;
     const chunks = line.match(/.{1,76}/g) || [];
     return chunks.join('=\n');
@@ -139,4 +139,72 @@ export const constructRawMessage = async (gmail, params) => {
         }
     }
     return Buffer.from(message.join('\r\n')).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+export const constructRawMessageWithAttachments = async (gmail, params) => {
+    let thread = null;
+    if (params.threadId) {
+        const { data } = await gmail.users.threads.get({ userId: 'me', id: params.threadId, format: 'full' });
+        thread = data;
+    }
+    const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const headers = [];
+    if (params.to?.length) headers.push(`To: ${params.to.join(', ')}`);
+    if (params.cc?.length) headers.push(`Cc: ${params.cc.join(', ')}`);
+    if (params.bcc?.length) headers.push(`Bcc: ${params.bcc.join(', ')}`);
+    if (thread) {
+        headers.push(...getThreadHeaders(thread));
+    } else if (params.subject) {
+        headers.push(`Subject: ${params.subject}`);
+    } else {
+        headers.push('Subject: (No Subject)');
+    }
+    headers.push('MIME-Version: 1.0');
+    headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+    const parts = [];
+    // Text body part
+    let bodyText = params.body || '';
+    if (thread) {
+        const quotedContent = getQuotedContent(thread);
+        if (quotedContent) bodyText += '\n\n' + quotedContent;
+    }
+    parts.push([
+        `--${boundary}`,
+        'Content-Type: text/plain; charset="UTF-8"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        Buffer.from(bodyText).toString('base64'),
+    ].join('\r\n'));
+    // Attachment parts
+    for (const att of params.attachments) {
+        const attHeaders = [
+            `--${boundary}`,
+            `Content-Type: ${att.mimeType}; name="${att.filename}"`,
+            'Content-Transfer-Encoding: base64',
+            `Content-Disposition: attachment; filename="${att.filename}"`,
+            '',
+            att.base64Data,
+        ];
+        parts.push(attHeaders.join('\r\n'));
+    }
+    const raw = [
+        headers.join('\r\n'),
+        '',
+        parts.join('\r\n'),
+        `--${boundary}--`,
+    ].join('\r\n');
+    return Buffer.from(raw).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+export const getPlainTextBody = (messagePart) => {
+    if (messagePart.mimeType === 'text/plain' && messagePart.body?.data) {
+        return Buffer.from(messagePart.body.data, 'base64').toString('utf-8');
+    }
+    if (messagePart.parts) {
+        for (const part of messagePart.parts) {
+            const text = getPlainTextBody(part);
+            if (text) return text;
+        }
+    }
+    return '';
 };
