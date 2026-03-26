@@ -10,6 +10,8 @@ import { register as renameFile } from './renameFile.js';
 import { register as deleteFile } from './deleteFile.js';
 import { register as createDocument } from './createDocument.js';
 import { register as createFromTemplate } from './createFromTemplate.js';
+import { register as listSharedDrives } from './listSharedDrives.js';
+import { register as listSharedWithMe } from './listSharedWithMe.js';
 export function registerDriveTools(server) {
     listGoogleDocs(server);
     searchGoogleDocs(server);
@@ -23,4 +25,6 @@ export function registerDriveTools(server) {
     deleteFile(server);
     createDocument(server);
     createFromTemplate(server);
+    listSharedDrives(server);
+    listSharedWithMe(server);
 }
