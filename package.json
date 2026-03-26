@@ -20,11 +20,11 @@
   "author": "karthikcsq",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/karthikcsq/mcp-gmail.git"
+    "url": "git+https://github.com/karthikcsq/gmail-mcp-tools.git"
   },
-  "homepage": "https://github.com/karthikcsq/mcp-gmail#readme",
+  "homepage": "https://github.com/karthikcsq/gmail-mcp-tools#readme",
   "bugs": {
-    "url": "https://github.com/karthikcsq/mcp-gmail/issues"
+    "url": "https://github.com/karthikcsq/gmail-mcp-tools/issues"
   },
   "scripts": {
     "start": "node dist/index.js"
