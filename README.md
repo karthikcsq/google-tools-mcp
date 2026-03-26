@@ -62,7 +62,7 @@ Add the credentials directly to your MCP configuration:
   "mcpServers": {
     "gmail": {
       "command": "npx",
-      "args": ["-y", "mcp-gmail"],
+      "args": ["-y", "gmail-mcp-tools"],
       "env": {
         "GOOGLE_CLIENT_ID": "your-client-id",
         "GOOGLE_CLIENT_SECRET": "your-client-secret"
@@ -81,7 +81,7 @@ Add the credentials directly to your MCP configuration:
 If you used Option A or B above:
 
 ```bash
-claude mcp add gmail -- npx -y mcp-gmail
+claude mcp add gmail -- npx -y gmail-mcp-tools
 ```
 
 Or with env vars (Option C):
@@ -90,7 +90,7 @@ Or with env vars (Option C):
 claude mcp add gmail \
   -e GOOGLE_CLIENT_ID=your-client-id \
   -e GOOGLE_CLIENT_SECRET=your-client-secret \
-  -- npx -y mcp-gmail
+  -- npx -y gmail-mcp-tools
 ```
 
 #### Other MCP clients
@@ -102,7 +102,7 @@ Add this to your MCP configuration (e.g., `.mcp.json`, `claude_desktop_config.js
   "mcpServers": {
     "gmail": {
       "command": "npx",
-      "args": ["-y", "mcp-gmail"]
+      "args": ["-y", "gmail-mcp-tools"]
     }
   }
 }
@@ -117,7 +117,7 @@ On your first tool call, the server will automatically open your browser for Goo
 You can also run the auth flow manually anytime:
 
 ```bash
-npx mcp-gmail auth
+npx gmail-mcp-tools auth
 ```
 
 ### Multi-Account Support
