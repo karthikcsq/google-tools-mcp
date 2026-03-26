@@ -58,6 +58,37 @@ export function register(server) {
     });
 
     server.addTool({
+        name: 'batch_get_threads',
+        description: 'Get multiple threads by ID in parallel. More efficient than calling get_thread multiple times.',
+        parameters: z.object({
+            ids: z.array(z.string()).describe("The IDs of the threads to retrieve"),
+            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+        }),
+        execute: async (params) => {
+            const gmail = await getGmailClient();
+            const results = await Promise.all(
+                params.ids.map(async (id) => {
+                    try {
+                        const { data } = await gmail.users.threads.get({ userId: 'me', id, format: 'full' });
+                        if (data.messages) {
+                            data.messages = data.messages.map(message => {
+                                if (message.payload) {
+                                    message.payload = processMessagePart(message.payload, params.includeBodyHtml);
+                                }
+                                return message;
+                            });
+                        }
+                        return data;
+                    } catch (error) {
+                        return { id, error: error.message || 'Failed to retrieve thread' };
+                    }
+                })
+            );
+            return JSON.stringify(results);
+        },
+    });
+
+    server.addTool({
         name: 'modify_thread',
         description: 'Modify the labels applied to a thread',
         parameters: z.object({

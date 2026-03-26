@@ -407,6 +407,32 @@ export function register(server) {
     });
 
     server.addTool({
+        name: 'batch_get_messages',
+        description: 'Get multiple messages by ID in parallel. More efficient than calling get_message multiple times.',
+        parameters: z.object({
+            ids: z.array(z.string()).describe("The IDs of the messages to retrieve"),
+            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+        }),
+        execute: async (params) => {
+            const gmail = await getGmailClient();
+            const results = await Promise.all(
+                params.ids.map(async (id) => {
+                    try {
+                        const { data } = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+                        if (data.payload) {
+                            data.payload = processMessagePart(data.payload, params.includeBodyHtml);
+                        }
+                        return data;
+                    } catch (error) {
+                        return { id, error: error.message || 'Failed to retrieve message' };
+                    }
+                })
+            );
+            return JSON.stringify(results);
+        },
+    });
+
+    server.addTool({
         name: 'get_attachment',
         description: 'Get a message attachment',
         parameters: z.object({
