@@ -1,10 +1,10 @@
 {
-  "name": "gdrive-suite-mcp",
+  "name": "gdrive-tools-mcp",
   "version": "1.0.1",
   "type": "module",
   "description": "MCP server for Google Docs, Sheets, Drive, plus .docx and .pdf file reading",
   "bin": {
-    "gdrive-suite-mcp": "dist/index.js"
+    "gdrive-tools-mcp": "dist/index.js"
   },
   "files": [
     "dist/",
@@ -22,11 +22,11 @@
   "author": "karthikcsq",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/karthikcsq/gdrive-suite-mcp.git"
+    "url": "git+https://github.com/karthikcsq/gdrive-tools-mcp.git"
   },
-  "homepage": "https://github.com/karthikcsq/gdrive-suite-mcp#readme",
+  "homepage": "https://github.com/karthikcsq/gdrive-tools-mcp#readme",
   "bugs": {
-    "url": "https://github.com/karthikcsq/gdrive-suite-mcp/issues"
+    "url": "https://github.com/karthikcsq/gdrive-tools-mcp/issues"
   },
   "scripts": {
     "start": "node dist/index.js"
