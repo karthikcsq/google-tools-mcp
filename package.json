@@ -1,6 +1,6 @@
 {
   "name": "gmail-mcp-tools",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "MCP server for Gmail with lazy-loading auth and multi-profile support",
   "bin": {

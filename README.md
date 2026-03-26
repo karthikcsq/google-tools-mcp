@@ -1,4 +1,4 @@
-# mcp-gmail
+# gmail-mcp-tools
 
 An MCP server for Gmail with lazy-loading auth and multi-profile support.
 
@@ -31,7 +31,7 @@ Choose **one** of the following methods (whichever you prefer):
 Download the JSON file from Google Cloud Console and place it in either location:
 
 ```
-~/.config/google-gmail-mcp/credentials.json   (recommended — shared across projects)
+~/.config/gmail-mcp-tools/credentials.json   (recommended — shared across projects)
 ./credentials.json                             (local to your project)
 ```
 
@@ -42,7 +42,7 @@ That's it — no env vars needed. The server will find it automatically.
 Create a `.env` file in either location:
 
 ```
-~/.config/google-gmail-mcp/.env   (recommended — shared across projects)
+~/.config/gmail-mcp-tools/.env   (recommended — shared across projects)
 ./.env                            (local to your project)
 ```
 
@@ -72,7 +72,7 @@ Add the credentials directly to your MCP configuration:
 }
 ```
 
-> **Credential lookup order:** env vars → `~/.config/google-gmail-mcp/.env` → project root `.env` → `~/.config/google-gmail-mcp/credentials.json` → project root `credentials.json`
+> **Credential lookup order:** env vars → `~/.config/gmail-mcp-tools/.env` → project root `.env` → `~/.config/gmail-mcp-tools/credentials.json` → project root `credentials.json`
 
 ### Step 3: Add to Your MCP Client
 
@@ -112,7 +112,7 @@ If using Option C, add an `"env"` block with your `GOOGLE_CLIENT_ID` and `GOOGLE
 
 ### Step 4: Authenticate
 
-On your first tool call, the server will automatically open your browser for Google OAuth consent. Sign in and grant access — the token is saved to `~/.config/google-gmail-mcp/token.json` for future use.
+On your first tool call, the server will automatically open your browser for Google OAuth consent. Sign in and grant access — the token is saved to `~/.config/gmail-mcp-tools/token.json` for future use.
 
 You can also run the auth flow manually anytime:
 
@@ -132,7 +132,7 @@ Set the `GOOGLE_MCP_PROFILE` env var to use separate tokens per profile:
 }
 ```
 
-This stores tokens in `~/.config/google-gmail-mcp/work/` instead of the default directory.
+This stores tokens in `~/.config/gmail-mcp-tools/work/` instead of the default directory.
 
 ## Tools
 

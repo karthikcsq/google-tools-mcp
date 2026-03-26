@@ -5,8 +5,8 @@
 // Forked from @shinzolabs/gmail-mcp.
 //
 // Usage:
-//   mcp-gmail          Start the MCP server (default)
-//   mcp-gmail auth     Run the interactive OAuth flow
+//   gmail-mcp-tools          Start the MCP server (default)
+//   gmail-mcp-tools auth     Run the interactive OAuth flow
 import { FastMCP } from 'fastmcp';
 import { buildCachedToolsListPayload, collectToolsWhileRegistering, installCachedToolsListHandler } from './cachedToolsList.js';
 import { registerAllTools } from './tools/index.js';
@@ -34,7 +34,7 @@ process.on('unhandledRejection', (reason, _promise) => {
 });
 
 const server = new FastMCP({
-    name: 'mcp-gmail',
+    name: 'gmail-mcp-tools',
     version: '1.0.0',
 });
 
@@ -43,7 +43,7 @@ collectToolsWhileRegistering(server, registeredTools);
 registerAllTools(server);
 
 try {
-    logger.info('Starting mcp-gmail server...');
+    logger.info('Starting gmail-mcp-tools server...');
     const cachedToolsList = await buildCachedToolsListPayload(registeredTools);
     await server.start({ transportType: 'stdio' });
     installCachedToolsListHandler(server, cachedToolsList);
