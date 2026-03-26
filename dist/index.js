@@ -4,8 +4,8 @@
 // Single entry point for the Google Docs MCP Server.
 //
 // Usage:
-//   googledrive-mcp          Start the MCP server (default)
-//   googledrive-mcp auth     Run the interactive OAuth flow
+//   gdrive-suite-mcp          Start the MCP server (default)
+//   gdrive-suite-mcp auth     Run the interactive OAuth flow
 import { FastMCP } from 'fastmcp';
 import { buildCachedToolsListPayload, collectToolsWhileRegistering, installCachedToolsListHandler, } from './cachedToolsList.js';
 import { registerAllTools } from './tools/index.js';
@@ -32,14 +32,14 @@ process.on('unhandledRejection', (reason, _promise) => {
     logger.error('Unhandled Promise Rejection:', reason);
 });
 const server = new FastMCP({
-    name: 'googledrive-mcp',
+    name: 'gdrive-suite-mcp',
     version: '1.0.0',
 });
 const registeredTools = [];
 collectToolsWhileRegistering(server, registeredTools);
 registerAllTools(server);
 try {
-    logger.info('Starting googledrive-mcp server...');
+    logger.info('Starting gdrive-suite-mcp server...');
     const cachedToolsList = await buildCachedToolsListPayload(registeredTools);
     await server.start({ transportType: 'stdio' });
     installCachedToolsListHandler(server, cachedToolsList);

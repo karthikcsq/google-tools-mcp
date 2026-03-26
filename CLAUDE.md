@@ -1,4 +1,4 @@
-# Project: googledrive-mcp
+# Project: gdrive-suite-mcp
 
 ## npm Publishing
 
