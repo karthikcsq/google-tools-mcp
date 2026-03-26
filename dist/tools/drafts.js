@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { UserError } from 'fastmcp';
 import { getGmailClient } from '../clients.js';
-import { processMessagePart, constructRawMessage } from '../helpers.js';
+import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments } from '../helpers.js';
 
 export function register(server) {
     server.addTool({
@@ -16,17 +16,69 @@ export function register(server) {
             bcc: z.array(z.string()).optional().describe("List of BCC recipient email addresses"),
             subject: z.string().optional().describe("The subject of the email"),
             body: z.string().optional().describe("The body of the email"),
+            attachments: z.array(z.object({
+                filename: z.string().describe("Attachment file name"),
+                mimeType: z.string().describe("MIME type of the attachment"),
+                base64Data: z.string().describe("Base64 encoded attachment data"),
+            })).optional().describe("File attachments to include"),
             includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
         }),
         execute: async (params, { log }) => {
             const gmail = await getGmailClient();
             let raw = params.raw;
-            if (!raw) raw = await constructRawMessage(gmail, params);
+            if (!raw) {
+                if (params.attachments?.length) {
+                    raw = await constructRawMessageWithAttachments(gmail, params);
+                } else {
+                    raw = await constructRawMessage(gmail, params);
+                }
+            }
             const createParams = { userId: 'me', requestBody: { message: { raw } } };
             if (params.threadId && createParams.requestBody?.message) {
                 createParams.requestBody.message.threadId = params.threadId;
             }
             const { data } = await gmail.users.drafts.create(createParams);
+            if (data.message?.payload) {
+                data.message.payload = processMessagePart(data.message.payload, params.includeBodyHtml);
+            }
+            return JSON.stringify(data);
+        },
+    });
+
+    server.addTool({
+        name: 'update_draft',
+        description: 'Update an existing draft\'s content. Replaces the draft message with new content.',
+        parameters: z.object({
+            id: z.string().describe("The ID of the draft to update"),
+            raw: z.string().optional().describe("The entire email message in base64url encoded RFC 2822 format, ignores other params if provided"),
+            threadId: z.string().optional().describe("The thread ID to associate this draft with"),
+            to: z.array(z.string()).optional().describe("List of recipient email addresses"),
+            cc: z.array(z.string()).optional().describe("List of CC recipient email addresses"),
+            bcc: z.array(z.string()).optional().describe("List of BCC recipient email addresses"),
+            subject: z.string().optional().describe("The subject of the email"),
+            body: z.string().optional().describe("The body of the email"),
+            attachments: z.array(z.object({
+                filename: z.string().describe("Attachment file name"),
+                mimeType: z.string().describe("MIME type of the attachment"),
+                base64Data: z.string().describe("Base64 encoded attachment data"),
+            })).optional().describe("File attachments to include"),
+            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+        }),
+        execute: async (params) => {
+            const gmail = await getGmailClient();
+            let raw = params.raw;
+            if (!raw) {
+                if (params.attachments?.length) {
+                    raw = await constructRawMessageWithAttachments(gmail, params);
+                } else {
+                    raw = await constructRawMessage(gmail, params);
+                }
+            }
+            const updateParams = { userId: 'me', id: params.id, requestBody: { message: { raw } } };
+            if (params.threadId && updateParams.requestBody?.message) {
+                updateParams.requestBody.message.threadId = params.threadId;
+            }
+            const { data } = await gmail.users.drafts.update(updateParams);
             if (data.message?.payload) {
                 data.message.payload = processMessagePart(data.message.payload, params.includeBodyHtml);
             }
