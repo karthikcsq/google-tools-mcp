@@ -31,7 +31,7 @@ Choose **one** of the following methods (whichever you prefer):
 Download the JSON file from Google Cloud Console and place it in either location:
 
 ```
-~/.config/google-docs-mcp/credentials.json   (recommended — shared across projects)
+~/.config/gdrive-tools-mcp/credentials.json   (recommended — shared across projects)
 ./credentials.json                            (local to your project)
 ```
 
@@ -42,7 +42,7 @@ That's it — no env vars needed. The server will find it automatically.
 Create a `.env` file in either location:
 
 ```
-~/.config/google-docs-mcp/.env   (recommended — shared across projects)
+~/.config/gdrive-tools-mcp/.env   (recommended — shared across projects)
 ./.env                           (local to your project)
 ```
 
@@ -60,7 +60,7 @@ Add the credentials directly to your MCP configuration:
 ```json
 {
   "mcpServers": {
-    "google-docs": {
+    "gdrive-tools": {
       "command": "npx",
       "args": ["-y", "gdrive-tools-mcp"],
       "env": {
@@ -72,7 +72,7 @@ Add the credentials directly to your MCP configuration:
 }
 ```
 
-> **Credential lookup order:** env vars → `~/.config/google-docs-mcp/.env` → project root `.env` → `~/.config/google-docs-mcp/credentials.json` → project root `credentials.json`
+> **Credential lookup order:** env vars → `~/.config/gdrive-tools-mcp/.env` → project root `.env` → `~/.config/gdrive-tools-mcp/credentials.json` → project root `credentials.json`
 
 ### Step 3: Add to Your MCP Client
 
@@ -81,13 +81,13 @@ Add the credentials directly to your MCP configuration:
 If you used Option A or B above:
 
 ```bash
-claude mcp add google-docs -- npx -y gdrive-tools-mcp
+claude mcp add gdrive-tools -- npx -y gdrive-tools-mcp
 ```
 
 Or with env vars (Option C):
 
 ```bash
-claude mcp add google-docs \
+claude mcp add gdrive-tools \
   -e GOOGLE_CLIENT_ID=your-client-id \
   -e GOOGLE_CLIENT_SECRET=your-client-secret \
   -- npx -y gdrive-tools-mcp
@@ -100,7 +100,7 @@ Add this to your MCP configuration (e.g., `.mcp.json`, `claude_desktop_config.js
 ```json
 {
   "mcpServers": {
-    "google-docs": {
+    "gdrive-tools": {
       "command": "npx",
       "args": ["-y", "gdrive-tools-mcp"]
     }
@@ -112,7 +112,7 @@ If using Option C, add an `"env"` block with your `GOOGLE_CLIENT_ID` and `GOOGLE
 
 ### Step 4: Authenticate
 
-On your first tool call, the server will automatically open your browser for Google OAuth consent. Sign in and grant access — the token is saved to `~/.config/google-docs-mcp/token.json` for future use.
+On your first tool call, the server will automatically open your browser for Google OAuth consent. Sign in and grant access — the token is saved to `~/.config/gdrive-tools-mcp/token.json` for future use.
 
 You can also run the auth flow manually anytime:
 
@@ -132,7 +132,7 @@ Set the `GOOGLE_MCP_PROFILE` env var to use separate tokens per profile:
 }
 ```
 
-This stores tokens in `~/.config/google-docs-mcp/work/` instead of the default directory.
+This stores tokens in `~/.config/gdrive-tools-mcp/work/` instead of the default directory.
 
 ## Tools
 

@@ -1,6 +1,6 @@
 {
   "name": "gdrive-tools-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "MCP server for Google Docs, Sheets, Drive, plus .docx and .pdf file reading",
   "bin": {

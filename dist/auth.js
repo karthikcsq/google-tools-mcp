@@ -26,7 +26,7 @@ const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
 function getConfigDir() {
     const xdg = process.env.XDG_CONFIG_HOME;
     const base = xdg || path.join(os.homedir(), '.config');
-    const baseDir = path.join(base, 'google-docs-mcp');
+    const baseDir = path.join(base, 'gdrive-tools-mcp');
     const profile = process.env.GOOGLE_MCP_PROFILE;
     return profile ? path.join(baseDir, profile) : baseDir;
 }
@@ -77,9 +77,9 @@ async function loadEnvFile(filePath) {
  *
  * Priority:
  *   1. GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars (including from MCP config)
- *   2. .env file in config dir (~/.config/google-docs-mcp/.env)
+ *   2. .env file in config dir (~/.config/gdrive-tools-mcp/.env)
  *   3. .env file in project root
- *   4. credentials.json in config dir (~/.config/google-docs-mcp/credentials.json)
+ *   4. credentials.json in config dir (~/.config/gdrive-tools-mcp/credentials.json)
  *   5. credentials.json in project root (legacy dev fallback)
  */
 async function loadClientSecrets() {
@@ -265,7 +265,7 @@ async function authenticate() {
  *
  * Resolution order:
  *   1. SERVICE_ACCOUNT_PATH env var -> service account JWT
- *   2. Saved token in ~/.config/google-docs-mcp/token.json -> OAuth2Client
+ *   2. Saved token in ~/.config/gdrive-tools-mcp/token.json -> OAuth2Client
  *   3. Interactive browser OAuth flow -> OAuth2Client (saves token for next time)
  */
 export async function authorize() {

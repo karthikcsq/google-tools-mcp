@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // src/index.ts
 //
-// Single entry point for the Google Docs MCP Server.
+// Single entry point for the gdrive-tools-mcp server.
 //
 // Usage:
 //   gdrive-tools-mcp          Start the MCP server (default)
