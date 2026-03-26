@@ -1,4 +1,4 @@
-# mcp-google-extras
+# googledrive-mcp
 
 An MCP server for Google Docs, Sheets, and Drive — with added support for reading `.docx` and `.pdf` files directly from Google Drive.
 
@@ -62,7 +62,7 @@ Add the credentials directly to your MCP configuration:
   "mcpServers": {
     "google-docs": {
       "command": "npx",
-      "args": ["-y", "mcp-google-extras"],
+      "args": ["-y", "googledrive-mcp"],
       "env": {
         "GOOGLE_CLIENT_ID": "your-client-id",
         "GOOGLE_CLIENT_SECRET": "your-client-secret"
@@ -81,7 +81,7 @@ Add the credentials directly to your MCP configuration:
 If you used Option A or B above:
 
 ```bash
-claude mcp add google-docs -- npx -y mcp-google-extras
+claude mcp add google-docs -- npx -y googledrive-mcp
 ```
 
 Or with env vars (Option C):
@@ -90,7 +90,7 @@ Or with env vars (Option C):
 claude mcp add google-docs \
   -e GOOGLE_CLIENT_ID=your-client-id \
   -e GOOGLE_CLIENT_SECRET=your-client-secret \
-  -- npx -y mcp-google-extras
+  -- npx -y googledrive-mcp
 ```
 
 #### Other MCP clients
@@ -102,7 +102,7 @@ Add this to your MCP configuration (e.g., `.mcp.json`, `claude_desktop_config.js
   "mcpServers": {
     "google-docs": {
       "command": "npx",
-      "args": ["-y", "mcp-google-extras"]
+      "args": ["-y", "googledrive-mcp"]
     }
   }
 }
@@ -117,7 +117,7 @@ On your first tool call, the server will automatically open your browser for Goo
 You can also run the auth flow manually anytime:
 
 ```bash
-npx mcp-google-extras auth
+npx googledrive-mcp auth
 ```
 
 ### Multi-Account Support

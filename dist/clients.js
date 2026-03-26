@@ -32,7 +32,7 @@ export async function initializeGoogleClient() {
             googleScript = null;
             throw new UserError(
                 'Google authentication required. A browser window should have opened automatically. ' +
-                'If not, run: npx mcp-google-extras auth\n\n' +
+                'If not, run: npx googledrive-mcp auth\n\n' +
                 'Details: ' + (error.message || error)
             );
         }
