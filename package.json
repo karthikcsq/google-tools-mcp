@@ -1,40 +1,23 @@
 {
-  "name": "gdrive-tools-mcp",
-  "version": "1.0.2",
+  "name": "google-tools-mcp",
+  "version": "1.0.0",
+  "description": "Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail) with lazy-loaded tool categories",
   "type": "module",
-  "description": "MCP server for Google Docs, Sheets, Drive, plus .docx and .pdf file reading",
   "bin": {
-    "gdrive-tools-mcp": "dist/index.js"
+    "google-tools-mcp": "dist/index.js"
   },
   "files": [
-    "dist/",
-    "README.md",
-    "LICENSE"
+    "dist"
   ],
   "keywords": [
     "mcp",
-    "google-docs",
-    "google-sheets",
-    "google-drive",
-    "docx",
-    "pdf"
+    "google",
+    "gdrive",
+    "gmail",
+    "sheets",
+    "docs"
   ],
-  "author": "karthikcsq",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/karthikcsq/gdrive-tools-mcp.git"
-  },
-  "homepage": "https://github.com/karthikcsq/gdrive-tools-mcp#readme",
-  "bugs": {
-    "url": "https://github.com/karthikcsq/gdrive-tools-mcp/issues"
-  },
-  "scripts": {
-    "start": "node dist/index.js"
-  },
-  "license": "ISC",
-  "engines": {
-    "node": ">=18"
-  },
+  "license": "MIT",
   "dependencies": {
     "fastmcp": "^3.24.0",
     "google-auth-library": "^10.5.0",

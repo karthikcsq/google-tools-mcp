@@ -1,13 +1,32 @@
-# Project: gdrive-tools-mcp
+# Project: google-tools-mcp
+
+## Overview
+
+Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail) with lazy-loaded tool categories.
+Only 2 tools are exposed at startup: `load_google_tools` (discovery) and `logout`.
+Tool categories are dynamically registered when loaded via the discovery tool.
 
 ## npm Publishing
 
 - Always bump version before publishing (`npm version patch --no-git-tag-version`).
 - Use the NPM_ACCESS_TOKEN from `.env` to publish. This token bypasses 2FA and is reusable.
 - Command: `npm publish --//registry.npmjs.org/:_authToken=$NPM_ACCESS_TOKEN` (after sourcing .env or reading the token).
-- DO NOT use recovery codes from `npm_recovery_codes.txt` — those are one-time use and should only be used for account recovery.
 
 ## Project Structure
 
 - No TypeScript source — code is edited directly in `dist/`.
 - Entry point: `dist/index.js`
+- Config dir at `~/.config/google-tools-mcp/` (with `GOOGLE_MCP_PROFILE` subdirs).
+- Auth combines GDrive + Gmail OAuth scopes into a single token.
+
+## Tool Categories
+
+| Category | Tools | What's included |
+|---|---|---|
+| files | 16 | Drive file management + file content reading (pdf, docx) |
+| documents | 23 | Docs read/write/format/comments/tabs + markdown conversion |
+| spreadsheets | 30 | Sheets read/write/format/charts/tables |
+| email | 19 | Send/reply/forward messages + draft management |
+| email_threads | 7 | Thread-level operations |
+| email_labels | 6 | Label management |
+| email_settings | 37 | Gmail admin/config (forwarding, filters, S/MIME, etc.) |

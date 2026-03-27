@@ -1,9 +1,9 @@
-// FastMCP's default tools/list handler runs toJsonSchema() for every tool on every request.
-// Hosts that poll tools/list frequently (or many concurrent sessions) then burn a full CPU core.
-// We precompute the list once before stdio connects, then replace the handler to return that snapshot.
+// Precompute tools/list payload to avoid repeated toJsonSchema() calls.
+// Supports rebuilding the cache when new tools are dynamically loaded.
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { toJsonSchema } from 'xsschema';
 import { logger } from './logger.js';
+
 export function collectToolsWhileRegistering(server, out) {
     const add = server.addTool.bind(server);
     server.addTool = (tool) => {
@@ -11,6 +11,7 @@ export function collectToolsWhileRegistering(server, out) {
         add(tool);
     };
 }
+
 export async function buildCachedToolsListPayload(tools) {
     return {
         tools: await Promise.all(tools.map(async (tool) => ({
@@ -27,12 +28,25 @@ export async function buildCachedToolsListPayload(tools) {
         }))),
     };
 }
-export function installCachedToolsListHandler(server, listPayload) {
+
+export function installCachedToolsListHandler(server, registeredTools) {
     const session = server.sessions[0];
     if (!session) {
         logger.warn('No MCP session; skipping tools/list cache install.');
         return;
     }
-    session.server.setRequestHandler(ListToolsRequestSchema, async () => listPayload);
-    logger.debug(`Installed cached tools/list (${listPayload.tools.length} tools).`);
+
+    // Build the initial cache from whatever tools are registered at startup
+    let cachedPayload = null;
+
+    session.server.setRequestHandler(ListToolsRequestSchema, async () => {
+        // Rebuild cache when tool count changes (new tools dynamically loaded)
+        if (!cachedPayload || cachedPayload.tools.length !== registeredTools.length) {
+            logger.debug(`Rebuilding tools/list cache (${registeredTools.length} tools)...`);
+            cachedPayload = await buildCachedToolsListPayload(registeredTools);
+        }
+        return cachedPayload;
+    });
+
+    logger.debug(`Installed dynamic tools/list cache handler (${registeredTools.length} tools initially).`);
 }

@@ -1,17 +1,5 @@
-// src/logger.ts
-//
 // Centralized logger with LOG_LEVEL support.
-//
-// Log levels (from most to least verbose):
-//   debug  - Detailed diagnostic info (text range mapping, request building, etc.)
-//   info   - General operational messages (server started, auth succeeded, etc.)
-//   warn   - Potentially harmful situations (missing content, fallback behavior)
-//   error  - Error conditions (API failures, auth failures, etc.)
-//
-// Set via the LOG_LEVEL environment variable. Defaults to "info".
-// Example: LOG_LEVEL=debug npm start
-//
-// MCP servers communicate over stdout, so all log output goes to stderr.
+// All log output goes to stderr (stdout reserved for MCP protocol).
 const LOG_LEVELS = {
     debug: 0,
     info: 1,
@@ -27,7 +15,6 @@ function resolveLevel() {
     return 'info';
 }
 let currentLevel = resolveLevel();
-/** Re-read LOG_LEVEL from the environment (useful for testing). */
 export function refreshLogLevel() {
     currentLevel = resolveLevel();
 }
