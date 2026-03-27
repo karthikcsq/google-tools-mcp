@@ -93,6 +93,32 @@ claude mcp add gmail \
   -- npx -y gmail-tools-mcp
 ```
 
+#### Project-Local Installation (with profile)
+
+Via the `claude` CLI:
+
+```bash
+claude mcp add gmail \
+  -e GOOGLE_MCP_PROFILE=myprofile \
+  -- npx -y gmail-tools-mcp
+```
+
+Or manually in your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gmail": {
+      "command": "npx",
+      "args": ["-y", "gmail-tools-mcp"],
+      "env": {
+        "GOOGLE_MCP_PROFILE": "myprofile"
+      }
+    }
+  }
+}
+```
+
 #### Other MCP clients
 
 Add this to your MCP configuration (e.g., `.mcp.json`, `claude_desktop_config.json`):
