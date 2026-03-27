@@ -12,6 +12,7 @@ import { register as createDocument } from './createDocument.js';
 import { register as createFromTemplate } from './createFromTemplate.js';
 import { register as listSharedDrives } from './listSharedDrives.js';
 import { register as listSharedWithMe } from './listSharedWithMe.js';
+import { register as downloadFile } from './downloadFile.js';
 export function registerDriveTools(server) {
     listDriveFiles(server);
     searchGoogleDocs(server);
@@ -27,4 +28,5 @@ export function registerDriveTools(server) {
     createFromTemplate(server);
     listSharedDrives(server);
     listSharedWithMe(server);
+    downloadFile(server);
 }
