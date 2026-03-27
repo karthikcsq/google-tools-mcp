@@ -63,6 +63,12 @@ const CATEGORIES = {
             registerCalendarTools(server);
         },
     },
+    forms: {
+        async loader(server) {
+            const { registerFormsTools } = await import('./forms/index.js');
+            registerFormsTools(server);
+        },
+    },
 };
 
 // ---------------------------------------------------------------------------

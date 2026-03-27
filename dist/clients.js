@@ -12,6 +12,7 @@ let googleSheets = null;
 let googleScript = null;
 let gmailClient = null;
 let calendarClient = null;
+let formsClient = null;
 
 async function ensureAuth() {
     if (authClient) return;
@@ -58,6 +59,14 @@ export async function initializeCalendarClient() {
     return { authClient, calendarClient };
 }
 
+// --- Forms client ---
+export async function initializeFormsClient() {
+    if (formsClient) return { authClient, formsClient };
+    await ensureAuth();
+    if (!formsClient) formsClient = google.forms({ version: 'v1', auth: authClient });
+    return { authClient, formsClient };
+}
+
 // --- Reset all clients (used by logout) ---
 export function resetClients() {
     authClient = null;
@@ -67,6 +76,7 @@ export function resetClients() {
     googleScript = null;
     gmailClient = null;
     calendarClient = null;
+    formsClient = null;
 }
 
 // --- Individual client getters ---
@@ -110,4 +120,10 @@ export async function getCalendarClient() {
     const { calendarClient: calendar } = await initializeCalendarClient();
     if (!calendar) throw new UserError('Google Calendar client is not initialized.');
     return calendar;
+}
+
+export async function getFormsClient() {
+    const { formsClient: forms } = await initializeFormsClient();
+    if (!forms) throw new UserError('Google Forms client is not initialized.');
+    return forms;
 }

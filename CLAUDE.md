@@ -2,8 +2,8 @@
 
 ## Overview
 
-Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail, Calendar).
-All 146 tools across 8 categories are loaded eagerly at startup. Only `logout` is a standalone utility tool.
+Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail, Calendar, Forms).
+All 152 tools across 9 categories are loaded eagerly at startup. Only `logout` is a standalone utility tool.
 
 ## npm Publishing
 
@@ -16,7 +16,7 @@ All 146 tools across 8 categories are loaded eagerly at startup. Only `logout` i
 - No TypeScript source — code is edited directly in `dist/`.
 - Entry point: `dist/index.js`
 - Config dir at `~/.config/google-tools-mcp/` (with `GOOGLE_MCP_PROFILE` subdirs).
-- Auth combines GDrive + Gmail + Calendar OAuth scopes into a single token.
+- Auth combines GDrive + Gmail + Calendar + Forms OAuth scopes into a single token.
 
 ## Tool Categories
 
@@ -30,3 +30,4 @@ All 146 tools across 8 categories are loaded eagerly at startup. Only `logout` i
 | email_labels | 6 | Label management |
 | email_settings | 37 | Gmail admin/config (forwarding, filters, S/MIME, etc.) |
 | calendar | 8 | Calendar events, busy/free times, recurring instances, calendar management |
+| forms | 6 | Create/read forms, manage responses, batch update items, publish settings |

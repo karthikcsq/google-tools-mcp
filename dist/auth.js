@@ -48,6 +48,10 @@ const SCOPES = [
     'https://www.googleapis.com/auth/gmail.settings.sharing',
     // Calendar
     'https://www.googleapis.com/auth/calendar',
+    // Forms
+    'https://www.googleapis.com/auth/forms.body',
+    'https://www.googleapis.com/auth/forms.body.readonly',
+    'https://www.googleapis.com/auth/forms.responses.readonly',
 ];
 
 // ---------------------------------------------------------------------------
