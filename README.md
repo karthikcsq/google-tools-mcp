@@ -13,6 +13,7 @@ Most Google MCP servers split functionality across separate packages. This serve
 - **146 tools** across 8 categories, all available immediately
 - **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, Gmail, and Calendar
 - **Lazy-loading auth** — no browser popup until your first tool call
+- **No lazy tool loading** — all 146 tools are registered eagerly at startup since most MCP clients (including Claude Code) don't support `notifications/tools/list_changed`
 - **Multi-profile support** — separate tokens per Google account
 - **No telemetry**
 
