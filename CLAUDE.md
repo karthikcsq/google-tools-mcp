@@ -2,7 +2,7 @@
 
 ## Overview
 
-Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail) with lazy-loaded tool categories.
+Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail, Calendar) with lazy-loaded tool categories.
 Only 2 tools are exposed at startup: `load_google_tools` (discovery) and `logout`.
 Tool categories are dynamically registered when loaded via the discovery tool.
 
@@ -17,7 +17,7 @@ Tool categories are dynamically registered when loaded via the discovery tool.
 - No TypeScript source — code is edited directly in `dist/`.
 - Entry point: `dist/index.js`
 - Config dir at `~/.config/google-tools-mcp/` (with `GOOGLE_MCP_PROFILE` subdirs).
-- Auth combines GDrive + Gmail OAuth scopes into a single token.
+- Auth combines GDrive + Gmail + Calendar OAuth scopes into a single token.
 
 ## Tool Categories
 
@@ -30,3 +30,4 @@ Tool categories are dynamically registered when loaded via the discovery tool.
 | email_threads | 7 | Thread-level operations |
 | email_labels | 6 | Label management |
 | email_settings | 37 | Gmail admin/config (forwarding, filters, S/MIME, etc.) |
+| calendar | 8 | Calendar events, busy/free times, recurring instances, calendar management |

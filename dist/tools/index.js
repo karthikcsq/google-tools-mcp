@@ -74,6 +74,14 @@ const CATEGORIES = {
             register(server);
         },
     },
+    calendar: {
+        description: 'Google Calendar — list calendars, get/create/update/delete events, check busy times, find free slots, move events, recurring event instances, manage calendars',
+        toolCount: 8,
+        async loader(server) {
+            const { registerCalendarTools } = await import('./calendar/index.js');
+            registerCalendarTools(server);
+        },
+    },
 };
 
 // Track which categories have been loaded

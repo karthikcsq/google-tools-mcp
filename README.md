@@ -1,6 +1,6 @@
 # google-tools-mcp
 
-A unified MCP server for Google Workspace — Drive, Docs, Sheets, and Gmail — with **lazy-loaded tool categories** to keep your context window lean.
+A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, and Calendar — with **lazy-loaded tool categories** to keep your context window lean.
 
 Only 2 tools are exposed at startup. When the AI agent needs a Google service, it calls `load_google_tools` to load just the relevant category. No bloat, no wasted context.
 
@@ -12,8 +12,8 @@ This server starts with **2 tools** and loads categories on demand — so you on
 
 ## Features
 
-- **Lazy-loaded tools** — 138 tools across 7 categories, loaded only when needed
-- **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, and Gmail
+- **Lazy-loaded tools** — 146 tools across 8 categories, loaded only when needed
+- **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, Gmail, and Calendar
 - **Lazy-loading auth** — no browser popup until your first tool call
 - **Multi-profile support** — separate tokens per Google account
 - **No telemetry**
@@ -24,7 +24,7 @@ This server starts with **2 tools** and loads categories on demand — so you on
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project (or use an existing one)
-3. Enable the **Google Docs API**, **Google Sheets API**, **Google Drive API**, and **Gmail API**
+3. Enable the **Google Docs API**, **Google Sheets API**, **Google Drive API**, **Gmail API**, and **Google Calendar API**
 4. Go to **Credentials** → **Create Credentials** → **OAuth Client ID**
 5. Select **Desktop application** as the application type
 6. Download the credentials or note your **Client ID** and **Client Secret**
@@ -205,6 +205,11 @@ Gmail label management.
 Gmail admin and configuration.
 
 `get_auto_forwarding`, `update_auto_forwarding`, `get_imap`, `update_imap`, `get_language`, `update_language`, `get_pop`, `update_pop`, `get_vacation`, `update_vacation`, `add_delegate`, `remove_delegate`, `get_delegate`, `list_delegates`, `create_filter`, `delete_filter`, `get_filter`, `list_filters`, `create_forwarding_address`, `delete_forwarding_address`, `get_forwarding_address`, `list_forwarding_addresses`, `create_send_as`, `delete_send_as`, `get_send_as`, `list_send_as`, `patch_send_as`, `update_send_as`, `verify_send_as`, `delete_smime_info`, `get_smime_info`, `insert_smime_info`, `list_smime_info`, `set_default_smime_info`, `get_profile`, `watch_mailbox`, `stop_mail_watch`
+
+### `calendar` (8 tools)
+Google Calendar — events, availability, and calendar management.
+
+`list_calendars`, `get_events`, `manage_event`, `get_busy`, `get_free`, `move_event`, `list_recurring_event_instances`, `manage_calendar`
 
 ## Environment Variables
 

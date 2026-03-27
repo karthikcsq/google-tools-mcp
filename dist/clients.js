@@ -11,6 +11,7 @@ let googleDrive = null;
 let googleSheets = null;
 let googleScript = null;
 let gmailClient = null;
+let calendarClient = null;
 
 async function ensureAuth() {
     if (authClient) return;
@@ -49,6 +50,14 @@ export async function initializeGmailClient() {
     return { authClient, gmailClient };
 }
 
+// --- Calendar client ---
+export async function initializeCalendarClient() {
+    if (calendarClient) return { authClient, calendarClient };
+    await ensureAuth();
+    if (!calendarClient) calendarClient = google.calendar({ version: 'v3', auth: authClient });
+    return { authClient, calendarClient };
+}
+
 // --- Reset all clients (used by logout) ---
 export function resetClients() {
     authClient = null;
@@ -57,6 +66,7 @@ export function resetClients() {
     googleSheets = null;
     googleScript = null;
     gmailClient = null;
+    calendarClient = null;
 }
 
 // --- Individual client getters ---
@@ -94,4 +104,10 @@ export async function getGmailClient() {
     const { gmailClient: gmail } = await initializeGmailClient();
     if (!gmail) throw new UserError('Gmail client is not initialized.');
     return gmail;
+}
+
+export async function getCalendarClient() {
+    const { calendarClient: calendar } = await initializeCalendarClient();
+    if (!calendar) throw new UserError('Google Calendar client is not initialized.');
+    return calendar;
 }
