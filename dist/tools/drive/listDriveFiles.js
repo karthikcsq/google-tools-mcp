@@ -56,8 +56,9 @@ export function register(server) {
                 // Filter by mime type
                 if (args.fileType !== 'all') {
                     queryParts.push(`mimeType='${MIME_TYPES[args.fileType]}'`);
-                } else {
-                    // Exclude folders from "all" results
+                } else if (!args.query) {
+                    // Exclude folders from "all" results only when not doing fullText search
+                    // (Drive API doesn't allow fullText contains with negated mimeType filters)
                     queryParts.push("mimeType!='application/vnd.google-apps.folder'");
                 }
 
