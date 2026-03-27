@@ -73,14 +73,19 @@ export function register(server) {
                     queryParts.push(`modifiedTime > '${cutoffDate}'`);
                 }
 
-                const response = await drive.files.list({
+                // Drive API does not allow orderBy when using fullText contains
+                const useFullText = !!args.query;
+                const listParams = {
                     q: queryParts.join(' and '),
                     pageSize: args.maxResults,
-                    orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
                     fields: 'files(id,name,mimeType,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
                     supportsAllDrives: true,
                     includeItemsFromAllDrives: true,
-                });
+                };
+                if (!useFullText) {
+                    listParams.orderBy = args.orderBy === 'name' ? 'name' : args.orderBy;
+                }
+                const response = await drive.files.list(listParams);
 
                 const files = (response.data.files || []).map((file) => ({
                     id: file.id,
