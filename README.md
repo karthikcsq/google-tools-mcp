@@ -93,6 +93,32 @@ claude mcp add gdrive-tools \
   -- npx -y gdrive-tools-mcp
 ```
 
+#### Project-Local Installation (with profile)
+
+Via the `claude` CLI:
+
+```bash
+claude mcp add gdrive-tools \
+  -e GOOGLE_MCP_PROFILE=myprofile \
+  -- npx -y gdrive-tools-mcp
+```
+
+Or manually in your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gdrive-tools": {
+      "command": "npx",
+      "args": ["-y", "gdrive-tools-mcp"],
+      "env": {
+        "GOOGLE_MCP_PROFILE": "myprofile"
+      }
+    }
+  }
+}
+```
+
 #### Other MCP clients
 
 Add this to your MCP configuration (e.g., `.mcp.json`, `claude_desktop_config.json`):
