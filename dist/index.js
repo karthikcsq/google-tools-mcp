@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // google-tools-mcp — Combined Google Workspace MCP server
 //
-// Provides lazy-loaded tool categories for Drive, Docs, Sheets, and Gmail.
-// Only a discovery tool is exposed at startup; individual tools are loaded on demand.
+// All tool categories (Drive, Docs, Sheets, Gmail, Calendar) are loaded at
+// startup so they're available in the initial tools/list response.
 //
 // Usage:
 //   google-tools-mcp          Start the MCP server (default)
 //   google-tools-mcp auth     Run the interactive OAuth flow
 import { FastMCP } from 'fastmcp';
-import { collectToolsWhileRegistering, installCachedToolsListHandler } from './cachedToolsList.js';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
 
@@ -38,17 +37,13 @@ const server = new FastMCP({
     version: '1.0.0',
 });
 
-const registeredTools = [];
-collectToolsWhileRegistering(server, registeredTools);
-registerAllTools(server);
+await registerAllTools(server);
 
 try {
     logger.info('Starting google-tools-mcp server...');
     await server.start({ transportType: 'stdio' });
-    installCachedToolsListHandler(server, registeredTools);
     logger.info('MCP Server running using stdio. Awaiting client connection...');
     logger.info('Google auth will run automatically on first tool call.');
-    logger.info(`${registeredTools.length} tools registered at startup (discovery + logout). Call load_google_tools to load more.`);
 } catch (startError) {
     logger.error('FATAL: Server failed to start:', startError.message || startError);
     process.exit(1);

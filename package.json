@@ -1,6 +1,6 @@
 {
   "name": "google-tools-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail) with lazy-loaded tool categories",
   "type": "module",
   "bin": {

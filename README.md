@@ -1,18 +1,16 @@
 # google-tools-mcp
 
-A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, and Calendar — with **lazy-loaded tool categories** to keep your context window lean.
+A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, and Calendar — with **146 tools** across 8 categories.
 
-Only 2 tools are exposed at startup. When the AI agent needs a Google service, it calls `load_google_tools` to load just the relevant category. No bloat, no wasted context.
+All tools are loaded at startup so they're immediately available to your AI agent. No discovery step needed.
 
 ## Why This Exists
 
-Most Google MCP servers dump 70+ tool definitions into your context on startup. If you need both Drive and Gmail, that's 140+ tools competing for attention before a single useful thing happens.
-
-This server starts with **2 tools** and loads categories on demand — so you only pay the context cost for what you actually use.
+Most Google MCP servers split functionality across separate packages. This server combines everything into one — single auth token, single process, single config.
 
 ## Features
 
-- **Lazy-loaded tools** — 146 tools across 8 categories, loaded only when needed
+- **146 tools** across 8 categories, all available immediately
 - **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, Gmail, and Calendar
 - **Lazy-loading auth** — no browser popup until your first tool call
 - **Multi-profile support** — separate tokens per Google account
@@ -169,8 +167,6 @@ This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default 
 
 ## Tool Categories
 
-Call `load_google_tools` with one or more category names to load them. You can load multiple at once.
-
 ### `files` (16 tools)
 Google Drive file management and content reading.
 
@@ -230,7 +226,7 @@ This package replaces both [`gdrive-tools-mcp`](https://www.npmjs.com/package/gd
 
 1. Replace both MCP server entries with a single `google-tools-mcp` entry
 2. Re-authenticate (the combined server uses its own config dir at `~/.config/google-tools-mcp/`)
-3. All the same tools are available — the agent just needs to call `load_google_tools` first
+3. All tools are available immediately — no discovery step needed
 
 ## License
 

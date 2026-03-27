@@ -2,9 +2,8 @@
 
 ## Overview
 
-Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail, Calendar) with lazy-loaded tool categories.
-Only 2 tools are exposed at startup: `load_google_tools` (discovery) and `logout`.
-Tool categories are dynamically registered when loaded via the discovery tool.
+Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail, Calendar).
+All 146 tools across 8 categories are loaded eagerly at startup. Only `logout` is a standalone utility tool.
 
 ## npm Publishing
 
