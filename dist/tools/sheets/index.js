@@ -6,7 +6,6 @@ import { register as clearSpreadsheetRange } from './clearSpreadsheetRange.js';
 import { register as getSpreadsheetInfo } from './getSpreadsheetInfo.js';
 import { register as addSpreadsheetSheet } from './addSpreadsheetSheet.js';
 import { register as createSpreadsheet } from './createSpreadsheet.js';
-import { register as listGoogleSheets } from './listGoogleSheets.js';
 import { register as deleteSheet } from './deleteSheet.js';
 import { register as renameSheet } from './renameSheet.js';
 import { register as duplicateSheet } from './duplicateSheet.js';
@@ -39,7 +38,6 @@ export function registerSheetsTools(server) {
     getSpreadsheetInfo(server);
     addSpreadsheetSheet(server);
     createSpreadsheet(server);
-    listGoogleSheets(server);
     deleteSheet(server);
     renameSheet(server);
     duplicateSheet(server);

@@ -1,6 +1,6 @@
-import { register as listGoogleDocs } from './listGoogleDocs.js';
+import { register as listDriveFiles } from './listDriveFiles.js';
 import { register as searchGoogleDocs } from './searchGoogleDocs.js';
-import { register as getDocumentInfo } from './getDocumentInfo.js';
+import { register as getFileInfo } from './getFileInfo.js';
 import { register as createFolder } from './createFolder.js';
 import { register as listFolderContents } from './listFolderContents.js';
 import { register as getFolderInfo } from './getFolderInfo.js';
@@ -13,9 +13,9 @@ import { register as createFromTemplate } from './createFromTemplate.js';
 import { register as listSharedDrives } from './listSharedDrives.js';
 import { register as listSharedWithMe } from './listSharedWithMe.js';
 export function registerDriveTools(server) {
-    listGoogleDocs(server);
+    listDriveFiles(server);
     searchGoogleDocs(server);
-    getDocumentInfo(server);
+    getFileInfo(server);
     createFolder(server);
     listFolderContents(server);
     getFolderInfo(server);

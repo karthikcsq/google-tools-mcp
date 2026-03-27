@@ -3,3 +3,4 @@ node_modules/
 credentials.json
 token.json
 *.tgz
+CLAUDE.md

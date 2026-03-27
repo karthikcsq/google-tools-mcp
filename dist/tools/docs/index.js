@@ -4,7 +4,6 @@ import { register as listDocumentTabs } from './listDocumentTabs.js';
 import { register as renameTab } from './renameTab.js';
 import { register as addTab } from './addTab.js';
 import { register as appendToGoogleDoc } from './appendToGoogleDoc.js';
-import { register as insertText } from './insertText.js';
 import { register as deleteRange } from './deleteRange.js';
 import { register as modifyText } from './modifyText.js';
 import { register as findAndReplace } from './findAndReplace.js';
@@ -23,7 +22,6 @@ export function registerDocsTools(server) {
     renameTab(server);
     addTab(server);
     appendToGoogleDoc(server);
-    insertText(server);
     deleteRange(server);
     modifyText(server);
     findAndReplace(server);
