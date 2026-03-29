@@ -1,6 +1,6 @@
 # google-tools-mcp
 
-A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, and Calendar — with **146 tools** across 8 categories.
+A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, and Forms — with **152 tools** across 9 categories.
 
 All tools are loaded at startup so they're immediately available to your AI agent. No discovery step needed.
 
@@ -10,10 +10,10 @@ Most Google MCP servers split functionality across separate packages. This serve
 
 ## Features
 
-- **146 tools** across 8 categories, all available immediately
-- **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, Gmail, and Calendar
+- **152 tools** across 9 categories, all available immediately
+- **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, Gmail, Calendar, and Forms
 - **Lazy-loading auth** — no browser popup until your first tool call
-- **No lazy tool loading** — all 146 tools are registered eagerly at startup since most MCP clients (including Claude Code) don't support `notifications/tools/list_changed`
+- **No lazy tool loading** — all 150 tools are registered eagerly at startup since most MCP clients (including Claude Code) don't support `notifications/tools/list_changed`
 - **Multi-profile support** — separate tokens per Google account
 - **No telemetry**
 
@@ -23,7 +23,7 @@ Most Google MCP servers split functionality across separate packages. This serve
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project (or use an existing one)
-3. Enable the **Google Docs API**, **Google Sheets API**, **Google Drive API**, **Gmail API**, and **Google Calendar API**
+3. Enable the **Google Docs API**, **Google Sheets API**, **Google Drive API**, **Gmail API**, **Google Calendar API**, and **Google Forms API**
 4. Go to **Credentials** → **Create Credentials** → **OAuth Client ID**
 5. Select **Desktop application** as the application type
 6. Download the credentials or note your **Client ID** and **Client Secret**
@@ -168,20 +168,20 @@ This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default 
 
 ## Tool Categories
 
-### `files` (16 tools)
+### `files` (17 tools)
 Google Drive file management and content reading.
 
-`listDocuments`, `searchDocuments`, `getDocumentInfo`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `readFile`, `searchFileContents`
+`listDriveFiles`, `searchDocuments`, `getFileInfo`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `downloadFile`, `readFile`, `searchFileContents`
 
-### `documents` (23 tools)
+### `documents` (22 tools)
 Google Docs read/write/format with markdown support.
 
-`readDocument`, `appendText`, `insertText`, `deleteRange`, `modifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `applyTextStyle`, `applyParagraphStyle`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`
+`readDocument`, `appendText`, `deleteRange`, `modifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`
 
-### `spreadsheets` (30 tools)
+### `spreadsheets` (29 tools)
 Google Sheets operations.
 
-`readSpreadsheet`, `writeSpreadsheet`, `batchWrite`, `appendRows`, `clearRange`, `createSpreadsheet`, `getSpreadsheetInfo`, `addSheet`, `deleteSheet`, `duplicateSheet`, `renameSheet`, `formatCells`, `readCellFormat`, `autoResizeColumns`, `freezeRowsAndColumns`, `setColumnWidths`, `addConditionalFormatting`, `copyFormatting`, `setDropdownValidation`, `createTable`, `deleteTable`, `getTable`, `listTables`, `appendTableRows`, `updateTableRange`, `insertChart`, `deleteChart`, `groupRows`, `ungroupAllRows`, `listSpreadsheets`
+`readSpreadsheet`, `writeSpreadsheet`, `batchWrite`, `appendRows`, `clearRange`, `createSpreadsheet`, `getSpreadsheetInfo`, `addSheet`, `deleteSheet`, `duplicateSheet`, `renameSheet`, `formatCells`, `readCellFormat`, `autoResizeColumns`, `freezeRowsAndColumns`, `setColumnWidths`, `addConditionalFormatting`, `copyFormatting`, `setDropdownValidation`, `createTable`, `deleteTable`, `getTable`, `listTables`, `appendTableRows`, `updateTableRange`, `insertChart`, `deleteChart`, `groupRows`, `ungroupAllRows`
 
 ### `email` (19 tools)
 Gmail messages and drafts.
@@ -207,6 +207,11 @@ Gmail admin and configuration.
 Google Calendar — events, availability, and calendar management.
 
 `list_calendars`, `get_events`, `manage_event`, `get_busy`, `get_free`, `move_event`, `list_recurring_event_instances`, `manage_calendar`
+
+### `forms` (6 tools)
+Google Forms — create/read forms, manage responses, and publish settings.
+
+`create_form`, `get_form`, `batch_update_form`, `get_form_response`, `list_form_responses`, `set_publish_settings`
 
 ## Environment Variables
 

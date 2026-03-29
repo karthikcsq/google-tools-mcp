@@ -102,7 +102,8 @@ export function register(server) {
     server.addTool({
         name: 'getFormatting',
         description: 'Returns the text styling (bold, italic, font, colors, etc.) and paragraph styling ' +
-            '(alignment, headings, spacing, indentation) for a specific range or found text in a Google Doc.',
+            '(alignment, headings, spacing, indentation) for a specific range or found text in a Google Doc. ' +
+            'Returns per-run text styles and per-paragraph styles, so mixed formatting (e.g. bold + italic spans) is fully represented.',
         parameters: GetFormattingParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
