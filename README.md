@@ -1,6 +1,6 @@
 # google-tools-mcp
 
-A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, and Forms — with **152 tools** across 9 categories.
+A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, and Forms — with **153 tools** across 9 categories.
 
 All tools are loaded at startup so they're immediately available to your AI agent. No discovery step needed.
 
@@ -10,10 +10,10 @@ Most Google MCP servers split functionality across separate packages. This serve
 
 ## Features
 
-- **152 tools** across 9 categories, all available immediately
+- **153 tools** across 9 categories, all available immediately
 - **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, Gmail, Calendar, and Forms
 - **Lazy-loading auth** — no browser popup until your first tool call
-- **No lazy tool loading** — all 150 tools are registered eagerly at startup since most MCP clients (including Claude Code) don't support `notifications/tools/list_changed`
+- **No lazy tool loading** — all 153 tools are registered eagerly at startup since most MCP clients (including Claude Code) don't support `notifications/tools/list_changed`
 - **Multi-profile support** — separate tokens per Google account
 - **No telemetry**
 
@@ -169,10 +169,10 @@ This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default 
 
 ## Tool Categories
 
-### `files` (17 tools)
+### `files` (18 tools)
 Google Drive file management and content reading.
 
-`listDriveFiles`, `searchDocuments`, `getFileInfo`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `downloadFile`, `readFile`, `searchFileContents`
+`listDriveFiles`, `searchDocuments`, `getFileInfo`, `getFilePath`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `downloadFile`, `readFile`, `searchFileContents`
 
 ### `documents` (22 tools)
 Google Docs read/write/format with markdown support.
