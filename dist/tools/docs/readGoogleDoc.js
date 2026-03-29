@@ -7,13 +7,13 @@ import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 export function register(server) {
     server.addTool({
         name: 'readDocument',
-        description: "Reads the content of a Google Document. Returns plain text by default. Use format='markdown' to get formatted content suitable for editing and re-uploading with replaceDocumentWithMarkdown, or format='json' for the raw document structure.",
+        description: "Reads the content of a Google Document. Returns markdown by default (formatted content suitable for editing and re-uploading with replaceDocumentWithMarkdown). Use format='text' for plain text, or format='json' for the raw document structure.",
         parameters: DocumentIdParameter.extend({
             format: z
                 .enum(['text', 'json', 'markdown'])
                 .optional()
-                .default('text')
-                .describe("Output format: 'text' (plain text), 'json' (raw API structure, complex), 'markdown' (experimental conversion)."),
+                .default('markdown')
+                .describe("Output format: 'markdown' (formatted content), 'text' (plain text), 'json' (raw API structure, complex)."),
             maxLength: z
                 .number()
                 .optional()
