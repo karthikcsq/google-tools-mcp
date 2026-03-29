@@ -3,6 +3,8 @@
 //  so lazy-loading doesn't work.)
 import { z } from 'zod';
 import * as fs from 'fs/promises';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { getTokenPath } from '../auth.js';
 import { resetClients } from '../clients.js';
 import { logger } from '../logger.js';
@@ -80,6 +82,23 @@ export async function registerAllTools(server) {
         await loader(server);
     }
     logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories at startup.`);
+
+    // --- Help tool (always available) ---
+    server.addTool({
+        name: 'help',
+        description:
+            'Show documentation for google-tools-mcp: setup instructions, available tool categories, environment variables, and troubleshooting. Call this when you need guidance on how to use the Google Workspace tools.',
+        parameters: z.object({}),
+        execute: async () => {
+            const __dirname = path.dirname(fileURLToPath(import.meta.url));
+            const readmePath = path.resolve(__dirname, '..', '..', 'README.md');
+            try {
+                return await fs.readFile(readmePath, 'utf-8');
+            } catch {
+                return 'README not found. Visit https://www.npmjs.com/package/google-tools-mcp for documentation.';
+            }
+        },
+    });
 
     // --- Logout tool (always available) ---
     server.addTool({

@@ -24,9 +24,10 @@ Most Google MCP servers split functionality across separate packages. This serve
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project (or use an existing one)
 3. Enable the **Google Docs API**, **Google Sheets API**, **Google Drive API**, **Gmail API**, **Google Calendar API**, and **Google Forms API**
-4. Go to **Credentials** → **Create Credentials** → **OAuth Client ID**
-5. Select **Desktop application** as the application type
-6. Download the credentials or note your **Client ID** and **Client Secret**
+4. Go to **OAuth consent screen** and configure it (External is fine for personal use). If your app's publishing status is **Testing** (the default), you must add your Google account as a test user — go to **OAuth consent screen** → **Test users** → **Add users** and enter your email. Without this, Google will block the OAuth flow with an "Access denied" or "app not verified" error.
+5. Go to **Credentials** → **Create Credentials** → **OAuth Client ID**
+6. Select **Desktop application** as the application type
+7. Download the credentials or note your **Client ID** and **Client Secret**
 
 ### Step 2: Provide Your Credentials
 
