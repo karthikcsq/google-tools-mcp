@@ -69,6 +69,11 @@ export function register(server) {
                 .array(z.string())
                 .optional()
                 .describe('RRULE recurrence rules (e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"]). Only for create.'),
+            send_updates: z
+                .enum(['all', 'externalOnly', 'none'])
+                .optional()
+                .default('all')
+                .describe('Who to send email notifications to: "all" = all attendees (default), "externalOnly" = non-Google Calendar attendees only, "none" = no emails.'),
         }),
         execute: async (args, { log }) => {
             const calendar = await getCalendarClient();
@@ -80,6 +85,7 @@ export function register(server) {
                     await calendar.events.delete({
                         calendarId: args.calendar_id,
                         eventId: args.event_id,
+                        sendUpdates: args.send_updates,
                     });
                     return JSON.stringify({ success: true, message: `Event ${args.event_id} deleted.` });
                 }
@@ -96,6 +102,7 @@ export function register(server) {
                         calendarId: args.calendar_id,
                         requestBody: eventBody,
                         conferenceDataVersion: args.add_google_meet ? 1 : 0,
+                        sendUpdates: args.send_updates,
                     };
 
                     const response = await calendar.events.insert(params);
@@ -119,6 +126,7 @@ export function register(server) {
                         eventId: args.event_id,
                         requestBody: eventBody,
                         conferenceDataVersion: args.add_google_meet !== undefined ? 1 : 0,
+                        sendUpdates: args.send_updates,
                     };
 
                     const response = await calendar.events.update(params);

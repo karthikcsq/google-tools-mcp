@@ -17,6 +17,11 @@ export function register(server) {
             destination_calendar_id: z
                 .string()
                 .describe('Calendar ID to move the event to.'),
+            send_updates: z
+                .enum(['all', 'externalOnly', 'none'])
+                .optional()
+                .default('all')
+                .describe('Who to send email notifications to: "all" = all attendees (default), "externalOnly" = non-Google Calendar attendees only, "none" = no emails.'),
         }),
         execute: async (args, { log }) => {
             const calendar = await getCalendarClient();
@@ -29,6 +34,7 @@ export function register(server) {
                     calendarId: args.source_calendar_id,
                     eventId: args.event_id,
                     destination: args.destination_calendar_id,
+                    sendUpdates: args.send_updates,
                 });
 
                 const event = response.data;
