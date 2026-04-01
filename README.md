@@ -85,15 +85,28 @@ Add the credentials directly to your MCP configuration:
 
 #### Claude Code (recommended)
 
-If you used Option A or B above:
+**User-scope** (available in all projects):
+
+```bash
+claude mcp add -s user google -- npx -y google-tools-mcp
+```
+
+**Project-scope** (available only in the current project):
 
 ```bash
 claude mcp add google -- npx -y google-tools-mcp
 ```
 
-Or with env vars (Option C):
+With env vars (Option C):
 
 ```bash
+# User-scope
+claude mcp add -s user google \
+  -e GOOGLE_CLIENT_ID=your-client-id \
+  -e GOOGLE_CLIENT_SECRET=your-client-secret \
+  -- npx -y google-tools-mcp
+
+# Project-scope
 claude mcp add google \
   -e GOOGLE_CLIENT_ID=your-client-id \
   -e GOOGLE_CLIENT_SECRET=your-client-secret \
@@ -105,7 +118,7 @@ claude mcp add google \
 Via the `claude` CLI:
 
 ```bash
-claude mcp add google \
+claude mcp add -s user google \
   -e GOOGLE_MCP_PROFILE=myprofile \
   -- npx -y google-tools-mcp
 ```
