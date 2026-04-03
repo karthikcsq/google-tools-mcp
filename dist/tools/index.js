@@ -6,8 +6,25 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { getTokenPath } from '../auth.js';
-import { resetClients } from '../clients.js';
+import { resetClients, withAuthRetry } from '../clients.js';
 import { logger } from '../logger.js';
+
+// ---------------------------------------------------------------------------
+// Wrap server.addTool so every tool's execute() auto-retries on invalid_grant.
+// ---------------------------------------------------------------------------
+function wrapServerWithAuthRetry(server) {
+    const originalAddTool = server.addTool.bind(server);
+    server.addTool = function (toolDef) {
+        const originalExecute = toolDef.execute;
+        if (originalExecute) {
+            toolDef.execute = function (...args) {
+                return withAuthRetry(() => originalExecute.apply(this, args));
+            };
+        }
+        return originalAddTool(toolDef);
+    };
+    return server;
+}
 
 // --- Category registry ---
 const CATEGORIES = {
@@ -77,9 +94,12 @@ const CATEGORIES = {
 // Public: register all tools eagerly, plus the logout utility.
 // ---------------------------------------------------------------------------
 export async function registerAllTools(server) {
+    // Wrap server so every tool auto-retries on invalid_grant (expired refresh token)
+    const wrappedServer = wrapServerWithAuthRetry(server);
+
     // Load every category
     for (const [name, { loader }] of Object.entries(CATEGORIES)) {
-        await loader(server);
+        await loader(wrappedServer);
     }
     logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories at startup.`);
 

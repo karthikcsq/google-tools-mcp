@@ -269,8 +269,25 @@ export async function authorize() {
     logger.info('Attempting OAuth 2.0 authentication...');
     const client = await loadSavedCredentialsIfExist();
     if (client) {
-        logger.info('Using saved credentials.');
-        return client;
+        // Proactively refresh to verify the token is still valid
+        try {
+            const { credentials } = await client.refreshAccessToken();
+            client.setCredentials(credentials);
+            if (credentials.refresh_token) {
+                await saveCredentials(client);
+            }
+            logger.info('Using saved credentials (token refreshed successfully).');
+            return client;
+        } catch (err) {
+            const isInvalidGrant = err.message?.includes('invalid_grant') ||
+                err.response?.data?.error === 'invalid_grant';
+            if (isInvalidGrant) {
+                logger.warn('Saved refresh token is invalid/revoked. Starting re-authentication...');
+                try { await fs.unlink(getTokenPath()); } catch {}
+                return authenticate();
+            }
+            throw err;
+        }
     }
     logger.info('No saved token found. Starting interactive authentication flow...');
     return authenticate();

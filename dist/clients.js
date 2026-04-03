@@ -31,6 +31,33 @@ async function ensureAuth() {
     }
 }
 
+/**
+ * Re-authenticate and rebuild all API clients after an invalid_grant error.
+ */
+async function reauthorize() {
+    logger.info('Re-authorizing after invalid_grant...');
+    authClient = null;
+    googleDocs = null;
+    googleDrive = null;
+    googleSheets = null;
+    googleScript = null;
+    gmailClient = null;
+    calendarClient = null;
+    formsClient = null;
+    authClient = await authorize();
+    logger.info('Re-authorization successful.');
+}
+
+/**
+ * Check if an error is an invalid_grant error (expired/revoked refresh token).
+ */
+function isInvalidGrantError(error) {
+    if (!error) return false;
+    const msg = error.message || '';
+    const code = error.response?.data?.error || error.code || '';
+    return msg.includes('invalid_grant') || code === 'invalid_grant';
+}
+
 // --- GDrive clients ---
 export async function initializeGoogleClient() {
     if (googleDocs && googleDrive && googleSheets)
@@ -77,6 +104,24 @@ export function resetClients() {
     gmailClient = null;
     calendarClient = null;
     formsClient = null;
+}
+
+/**
+ * Execute a function with automatic re-auth on invalid_grant errors.
+ * Wraps any API call so that if the refresh token has been revoked mid-session,
+ * we re-authenticate transparently and retry once.
+ */
+export async function withAuthRetry(fn) {
+    try {
+        return await fn();
+    } catch (error) {
+        if (isInvalidGrantError(error)) {
+            logger.warn('Got invalid_grant during API call. Re-authenticating...');
+            await reauthorize();
+            return await fn();
+        }
+        throw error;
+    }
 }
 
 // --- Individual client getters ---
