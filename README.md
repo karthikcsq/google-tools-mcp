@@ -235,6 +235,7 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_CLIENT_SECRET` | No* | OAuth 2.0 Client Secret |
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
+| `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
 

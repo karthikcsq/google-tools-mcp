@@ -271,12 +271,16 @@ export async function authorize() {
     if (client) {
         // Proactively refresh to verify the token is still valid
         try {
+            logger.info('Refreshing access token...');
             const { credentials } = await client.refreshAccessToken();
             client.setCredentials(credentials);
             if (credentials.refresh_token) {
                 await saveCredentials(client);
             }
-            logger.info('Using saved credentials (token refreshed successfully).');
+            const expiryDate = credentials.expiry_date
+                ? new Date(credentials.expiry_date).toISOString()
+                : 'unknown';
+            logger.info(`Token refreshed successfully. Expires: ${expiryDate}`);
             return client;
         } catch (err) {
             const isInvalidGrant = err.message?.includes('invalid_grant') ||
@@ -286,6 +290,7 @@ export async function authorize() {
                 try { await fs.unlink(getTokenPath()); } catch {}
                 return authenticate();
             }
+            logger.error('Token refresh failed:', err.message || err);
             throw err;
         }
     }

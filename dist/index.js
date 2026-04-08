@@ -24,14 +24,26 @@ if (process.argv[2] === 'auth') {
     }
 }
 
-// --- Server startup ---
+// --- Process lifecycle logging ---
 process.on('uncaughtException', (error) => {
     logger.error('Uncaught Exception:', error);
 });
 process.on('unhandledRejection', (reason, _promise) => {
     logger.error('Unhandled Promise Rejection:', reason);
 });
+process.on('SIGINT', () => {
+    logger.info('Received SIGINT — shutting down.');
+    process.exit(0);
+});
+process.on('SIGTERM', () => {
+    logger.info('Received SIGTERM — shutting down.');
+    process.exit(0);
+});
+process.on('exit', (code) => {
+    logger.info(`Process exiting with code ${code}.`);
+});
 
+// --- Server startup ---
 const server = new FastMCP({
     name: 'google-tools-mcp',
     version: '1.0.0',
