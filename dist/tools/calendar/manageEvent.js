@@ -6,9 +6,9 @@ export function register(server) {
     server.addTool({
         name: 'manage_event',
         description:
-            'Create, update, or delete a calendar event. Supports attendees, Google Meet, reminders, attachments, visibility, and transparency settings.',
+            'Create, update, or delete a calendar event. Supports attendees, Google Meet, reminders, attachments, visibility, and transparency settings. IMPORTANT: To modify an existing event, always use action "update" with the existing event_id. Never delete and recreate an event to make changes — this destroys the event ID, attendee RSVPs, and sent notifications.',
         parameters: z.object({
-            action: z.enum(['create', 'update', 'delete']).describe('The operation to perform.'),
+            action: z.enum(['create', 'update', 'delete']).describe('The operation to perform. Use "update" to modify existing events — do not delete and recreate. "delete" should only be used to permanently remove an event, not to redo one.'),
             calendar_id: z
                 .string()
                 .optional()
