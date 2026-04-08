@@ -14,7 +14,7 @@ export function register(server) {
             cc: z.array(z.string()).optional().describe("List of CC recipient email addresses"),
             bcc: z.array(z.string()).optional().describe("List of BCC recipient email addresses"),
             subject: z.string().optional().describe("The subject of the email"),
-            body: z.string().optional().describe("The body of the email"),
+            body: z.string().optional().describe("The body of the email. Supports plain text or HTML (auto-detected). Use HTML tags like <p>, <br>, <b> for formatted emails."),
             attachments: z.array(z.object({
                 filename: z.string().describe("Attachment file name"),
                 mimeType: z.string().describe("MIME type of the attachment"),
@@ -49,7 +49,7 @@ export function register(server) {
         description: 'Reply to a message. Automatically handles To/Cc recipients, subject prefix, threading headers, and quoted content. Use replyAll to include all original recipients.',
         parameters: z.object({
             messageId: z.string().describe("The ID of the message to reply to"),
-            body: z.string().describe("The reply body text"),
+            body: z.string().describe("The reply body text. Supports plain text or HTML (auto-detected). Use HTML tags like <p>, <br>, <b> for formatted replies."),
             replyAll: z.boolean().optional().describe("If true, reply to all original recipients (To + Cc minus yourself). Default: false"),
             to: z.array(z.string()).optional().describe("Override recipient list (if omitted, replies to sender or Reply-To)"),
             cc: z.array(z.string()).optional().describe("Override CC list (if omitted and replyAll, uses original To + Cc minus yourself)"),
@@ -168,7 +168,7 @@ export function register(server) {
             to: z.array(z.string()).describe("Recipient email addresses to forward to"),
             cc: z.array(z.string()).optional().describe("CC recipient email addresses"),
             bcc: z.array(z.string()).optional().describe("BCC recipient email addresses"),
-            body: z.string().optional().describe("Optional commentary to prepend above the forwarded content"),
+            body: z.string().optional().describe("Optional commentary to prepend above the forwarded content. Supports plain text or HTML (auto-detected)."),
             includeAttachments: z.boolean().optional().describe("Whether to include original attachments. Default: true"),
             includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return"),
         }),

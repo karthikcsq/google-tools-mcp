@@ -109,6 +109,8 @@ export const wrapTextBody = (text) => text.split('\n').map(line => {
     return chunks.join('=\n');
 }).join('\n');
 
+export const isHtmlBody = (text) => /<\/?[a-z][\s\S]*?>/i.test(text);
+
 export const constructRawMessage = async (gmail, params) => {
     let thread = null;
     if (params.threadId) {
@@ -126,11 +128,12 @@ export const constructRawMessage = async (gmail, params) => {
     } else {
         message.push('Subject: (No Subject)');
     }
-    message.push('Content-Type: text/plain; charset="UTF-8"');
+    const htmlMode = params.body && isHtmlBody(params.body);
+    message.push(`Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`);
     message.push('Content-Transfer-Encoding: quoted-printable');
     message.push('MIME-Version: 1.0');
     message.push('');
-    if (params.body) message.push(wrapTextBody(params.body));
+    if (params.body) message.push(htmlMode ? params.body : wrapTextBody(params.body));
     if (thread) {
         const quotedContent = getQuotedContent(thread);
         if (quotedContent) {
@@ -168,9 +171,10 @@ export const constructRawMessageWithAttachments = async (gmail, params) => {
         const quotedContent = getQuotedContent(thread);
         if (quotedContent) bodyText += '\n\n' + quotedContent;
     }
+    const htmlMode = isHtmlBody(bodyText);
     parts.push([
         `--${boundary}`,
-        'Content-Type: text/plain; charset="UTF-8"',
+        `Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
         'Content-Transfer-Encoding: base64',
         '',
         Buffer.from(bodyText).toString('base64'),

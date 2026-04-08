@@ -14,7 +14,7 @@ export function register(server) {
             cc: z.array(z.string()).optional().describe("List of CC recipient email addresses"),
             bcc: z.array(z.string()).optional().describe("List of BCC recipient email addresses"),
             subject: z.string().optional().describe("The subject of the email"),
-            body: z.string().optional().describe("The body of the email"),
+            body: z.string().optional().describe("The body of the email. Supports plain text or HTML (auto-detected). Use HTML tags like <p>, <br>, <b> for formatted emails."),
             attachments: z.array(z.object({
                 filename: z.string().describe("Attachment file name"),
                 mimeType: z.string().describe("MIME type of the attachment"),
