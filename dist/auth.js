@@ -259,7 +259,7 @@ async function authenticate() {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-export { getTokenPath };
+export { getTokenPath, getConfigDir, SCOPES };
 
 export async function authorize() {
     if (process.env.SERVICE_ACCOUNT_PATH) {

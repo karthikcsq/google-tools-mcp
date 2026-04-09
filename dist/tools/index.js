@@ -5,9 +5,11 @@ import { z } from 'zod';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { getTokenPath } from '../auth.js';
-import { resetClients, withAuthRetry } from '../clients.js';
+import * as os from 'os';
+import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
+import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
+import { google } from 'googleapis';
 
 // ---------------------------------------------------------------------------
 // Wrap server.addTool so every tool's execute() auto-retries on invalid_grant.
@@ -138,6 +140,216 @@ export async function registerAllTools(server) {
                 success: true,
                 message: 'Logged out. The next tool call will require re-authentication.',
             });
+        },
+    });
+
+    // --- Troubleshoot tool (always available) ---
+    server.addTool({
+        name: 'troubleshoot',
+        description:
+            'Run a health check on google-tools-mcp: verify OAuth token, test API connectivity, show config and recent logs. Call this when tools are failing or behaving unexpectedly.',
+        parameters: z.object({}),
+        execute: async () => {
+            const report = { auth: {}, services: {}, config: {}, recentLogs: null, environment: {} };
+
+            // --- Auth status ---
+            const tokenPath = getTokenPath();
+            try {
+                const tokenContent = await fs.readFile(tokenPath, 'utf8');
+                const token = JSON.parse(tokenContent);
+                report.auth.tokenFile = 'present';
+                report.auth.hasRefreshToken = !!token.refresh_token;
+                report.auth.type = token.type || 'unknown';
+            } catch (err) {
+                report.auth.tokenFile = err.code === 'ENOENT' ? 'missing' : 'unreadable';
+                report.auth.hasRefreshToken = false;
+            }
+
+            // Try refreshing token
+            const client = getAuthClientIfReady();
+            if (client) {
+                try {
+                    const { credentials } = await client.refreshAccessToken();
+                    client.setCredentials(credentials);
+                    report.auth.status = 'valid';
+                    report.auth.expiry = credentials.expiry_date
+                        ? new Date(credentials.expiry_date).toISOString()
+                        : 'unknown';
+                } catch (err) {
+                    report.auth.status = 'expired_or_revoked';
+                    report.auth.refreshError = err.message;
+                }
+            } else {
+                report.auth.status = report.auth.tokenFile === 'present' ? 'not_initialized' : 'missing';
+            }
+
+            // --- Service probes ---
+            if (client && report.auth.status === 'valid') {
+                // Drive
+                try {
+                    const drive = google.drive({ version: 'v3', auth: client });
+                    const res = await drive.about.get({ fields: 'user' });
+                    report.services.drive = { status: 'ok', account: res.data.user?.emailAddress || 'unknown' };
+                } catch (err) {
+                    report.services.drive = { status: 'error', error: err.message };
+                }
+
+                // Gmail
+                try {
+                    const gmail = google.gmail({ version: 'v1', auth: client });
+                    const res = await gmail.users.getProfile({ userId: 'me' });
+                    report.services.gmail = { status: 'ok', email: res.data.emailAddress || 'unknown' };
+                } catch (err) {
+                    report.services.gmail = { status: 'error', error: err.message };
+                }
+
+                // Calendar
+                try {
+                    const calendar = google.calendar({ version: 'v3', auth: client });
+                    await calendar.calendarList.list({ maxResults: 1 });
+                    report.services.calendar = { status: 'ok' };
+                } catch (err) {
+                    report.services.calendar = { status: 'error', error: err.message };
+                }
+
+                // Forms — just check scope presence
+                report.services.forms = {
+                    status: SCOPES.some(s => s.includes('forms')) ? 'configured' : 'no_scope',
+                };
+
+                // Docs/Sheets — covered by Drive auth
+                report.services.docs = { status: report.services.drive.status === 'ok' ? 'ok (via Drive auth)' : 'unknown' };
+                report.services.sheets = { status: report.services.drive.status === 'ok' ? 'ok (via Drive auth)' : 'unknown' };
+            } else {
+                report.services = { note: 'Skipped — auth not available' };
+            }
+
+            // --- Config summary ---
+            const configDir = getConfigDir();
+            report.config = {
+                configDir,
+                profile: process.env.GOOGLE_MCP_PROFILE || '(default)',
+                tokenPath,
+                credentialSource: process.env.GOOGLE_CLIENT_ID ? 'environment' : 'file',
+                scopes: SCOPES,
+                logFile: process.env.GOOGLE_MCP_LOG_FILE || '(not set)',
+            };
+
+            // --- Recent logs ---
+            const logFilePath = process.env.GOOGLE_MCP_LOG_FILE === '1'
+                ? path.join(configDir, 'server.log')
+                : process.env.GOOGLE_MCP_LOG_FILE;
+            if (logFilePath) {
+                try {
+                    const logContent = await fs.readFile(logFilePath, 'utf8');
+                    const lines = logContent.trimEnd().split('\n');
+                    report.recentLogs = lines.slice(-20);
+                } catch (err) {
+                    report.recentLogs = err.code === 'ENOENT' ? '(log file not found)' : `(error reading log: ${err.message})`;
+                }
+            } else {
+                report.recentLogs = '(file logging not enabled — set GOOGLE_MCP_LOG_FILE to enable)';
+            }
+
+            // --- Environment ---
+            const __dirname = path.dirname(fileURLToPath(import.meta.url));
+            let pkgVersion = 'unknown';
+            try {
+                const pkgPath = path.resolve(__dirname, '..', '..', 'package.json');
+                const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
+                pkgVersion = pkg.version;
+            } catch {}
+            report.environment = {
+                serverVersion: pkgVersion,
+                nodeVersion: process.version,
+                platform: process.platform,
+                osRelease: os.release(),
+                arch: process.arch,
+            };
+
+            return JSON.stringify(report, null, 2);
+        },
+    });
+
+    // --- Feedback tool (always available) ---
+    server.addTool({
+        name: 'feedback',
+        description:
+            'Submit feedback or a bug report for google-tools-mcp. Automatically collects diagnostic info and generates a pre-filled GitHub issue URL.',
+        parameters: z.object({
+            type: z.enum(['bug', 'feature']).describe('Type of feedback'),
+            title: z.string().describe('Short summary'),
+            description: z.string().describe('Detailed description of the issue or feature request'),
+        }),
+        execute: async (args) => {
+            // Collect diagnostics
+            const __dirname = path.dirname(fileURLToPath(import.meta.url));
+            let pkgVersion = 'unknown';
+            try {
+                const pkgPath = path.resolve(__dirname, '..', '..', 'package.json');
+                const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
+                pkgVersion = pkg.version;
+            } catch {}
+
+            let authStatus = 'unknown';
+            const tokenPath = getTokenPath();
+            try {
+                await fs.access(tokenPath);
+                const client = getAuthClientIfReady();
+                if (client) {
+                    try {
+                        await client.refreshAccessToken();
+                        authStatus = 'valid';
+                    } catch {
+                        authStatus = 'expired_or_revoked';
+                    }
+                } else {
+                    authStatus = 'not_initialized';
+                }
+            } catch {
+                authStatus = 'missing';
+            }
+
+            const enabledScopes = SCOPES.map(s => s.split('/').pop());
+
+            // Build markdown body
+            const diagnostics = [
+                `- **Server version:** ${pkgVersion}`,
+                `- **Node version:** ${process.version}`,
+                `- **OS:** ${process.platform} ${os.release()} (${process.arch})`,
+                `- **Auth status:** ${authStatus}`,
+                `- **Scopes:** ${enabledScopes.join(', ')}`,
+            ].join('\n');
+
+            const body = [
+                `## Description`,
+                ``,
+                args.description,
+                ``,
+                `<details>`,
+                `<summary>Diagnostic Info</summary>`,
+                ``,
+                diagnostics,
+                ``,
+                `</details>`,
+            ].join('\n');
+
+            // Build GitHub issue URL
+            const label = args.type === 'bug' ? 'bug' : 'enhancement';
+            const params = new URLSearchParams({
+                title: args.title,
+                body,
+                labels: label,
+            });
+            const url = `https://github.com/karthikcsq/google-tools-mcp/issues/new?${params.toString()}`;
+
+            return JSON.stringify({
+                url,
+                markdown: body,
+                note: url.length > 8000
+                    ? 'The URL may be too long for some browsers. Use the markdown body below to create the issue manually.'
+                    : 'Open the URL to create a pre-filled GitHub issue.',
+            }, null, 2);
         },
     });
 }

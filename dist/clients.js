@@ -94,6 +94,11 @@ export async function initializeFormsClient() {
     return { authClient, formsClient };
 }
 
+// --- Get auth client without triggering init (for diagnostics) ---
+export function getAuthClientIfReady() {
+    return authClient;
+}
+
 // --- Reset all clients (used by logout) ---
 export function resetClients() {
     authClient = null;
