@@ -6,10 +6,61 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as os from 'os';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
 import { google } from 'googleapis';
+
+const execAsync = promisify(exec);
+
+const REPO = 'karthikcsq/google-tools-mcp';
+
+async function tryGhCli(title, body, label) {
+    // Probe for gh CLI
+    try {
+        await execAsync('gh --version');
+    } catch {
+        return { ok: false, reason: 'gh CLI not installed' };
+    }
+    // Probe for auth
+    try {
+        await execAsync('gh auth status');
+    } catch {
+        return { ok: false, reason: 'gh CLI not authenticated (run: gh auth login)' };
+    }
+    // Write body to a temp file to avoid shell-escaping issues with newlines/quotes.
+    const tmpFile = path.join(os.tmpdir(), `gtm-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+    try {
+        await fs.writeFile(tmpFile, body, 'utf8');
+        const { stdout } = await execAsync(
+            `gh issue create --repo ${REPO} --title ${JSON.stringify(title)} --label ${JSON.stringify(label)} --body-file ${JSON.stringify(tmpFile)}`,
+            { maxBuffer: 10 * 1024 * 1024 }
+        );
+        const issueUrl = stdout.trim().split('\n').pop();
+        return { ok: true, issueUrl };
+    } catch (err) {
+        return { ok: false, reason: `gh CLI failed: ${err.stderr || err.message || err}` };
+    } finally {
+        try { await fs.unlink(tmpFile); } catch {}
+    }
+}
+
+function openBrowser(url) {
+    const platform = process.platform;
+    let cmd;
+    if (platform === 'win32') {
+        cmd = `start "" "${url}"`;
+    } else if (platform === 'darwin') {
+        cmd = `open "${url}"`;
+    } else {
+        cmd = `xdg-open "${url}"`;
+    }
+    return new Promise((resolve) => {
+        exec(cmd, (err) => resolve(!err));
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Wrap server.addTool so every tool's execute() auto-retries on invalid_grant
@@ -306,7 +357,7 @@ export async function registerAllTools(server) {
     server.addTool({
         name: 'feedback',
         description:
-            'Submit feedback or a bug report for google-tools-mcp. Automatically collects diagnostic info and generates a pre-filled GitHub issue URL.',
+            'Submit feedback or a bug report for google-tools-mcp. Automatically collects diagnostic info, then files the issue via the GitHub CLI (`gh`) if available, or falls back to opening a pre-filled GitHub issue URL in the user\'s browser.',
         parameters: z.object({
             type: z.enum(['bug', 'feature']).describe('Type of feedback'),
             title: z.string().describe('Short summary'),
@@ -365,21 +416,38 @@ export async function registerAllTools(server) {
                 `</details>`,
             ].join('\n');
 
-            // Build GitHub issue URL
             const label = args.type === 'bug' ? 'bug' : 'enhancement';
+
+            // Try gh CLI first
+            const ghResult = await tryGhCli(args.title, body, label);
+            if (ghResult.ok) {
+                return JSON.stringify({
+                    method: 'gh-cli',
+                    issueUrl: ghResult.issueUrl,
+                    note: 'Issue filed successfully via GitHub CLI.',
+                }, null, 2);
+            }
+
+            // Fallback: open pre-filled GitHub issue URL in the user's browser
             const params = new URLSearchParams({
                 title: args.title,
                 body,
                 labels: label,
             });
-            const url = `https://github.com/karthikcsq/google-tools-mcp/issues/new?${params.toString()}`;
+            const url = `https://github.com/${REPO}/issues/new?${params.toString()}`;
+            const opened = await openBrowser(url);
 
             return JSON.stringify({
+                method: 'browser-fallback',
+                ghCliUnavailableReason: ghResult.reason,
                 url,
+                browserOpened: opened,
                 markdown: body,
                 note: url.length > 8000
-                    ? 'The URL may be too long for some browsers. Use the markdown body below to create the issue manually.'
-                    : 'Open the URL to create a pre-filled GitHub issue.',
+                    ? 'The URL may be too long for some browsers. Use the markdown body to create the issue manually.'
+                    : opened
+                        ? 'Opened the pre-filled GitHub issue in your browser. Click "Submit new issue" to file it.'
+                        : 'Could not auto-open browser. Please open the URL manually.',
             }, null, 2);
         },
     });
