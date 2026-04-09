@@ -18,8 +18,8 @@ export function register(server) {
                 // STEP 1: Determine the target paragraph's range based on the targeting method
                 if ('textToFind' in args.target) {
                     // Find the text first
-                    log.info(`Finding text "${args.target.textToFind}" (instance ${args.target.matchInstance || 1})${args.tabId ? ` in tab ${args.tabId}` : ''}`);
-                    const textRange = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance || 1, args.tabId);
+                    log.info(`Finding text "${args.target.textToFind}" (instance ${args.target.matchInstance ?? 'auto'})${args.tabId ? ` in tab ${args.tabId}` : ''}`);
+                    const textRange = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance, args.tabId);
                     if (!textRange) {
                         throw new UserError(`Could not find "${args.target.textToFind}" in the document${args.tabId ? ` (tab: ${args.tabId})` : ''}.`);
                     }

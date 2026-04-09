@@ -66,8 +66,7 @@ export const TextFindParameter = z.object({
         .int()
         .min(1)
         .optional()
-        .default(1)
-        .describe('Which instance of the text to target (1st, 2nd, etc.). Defaults to 1.'),
+        .describe('Which instance of the text to target (1st, 2nd, etc.). Required when multiple matches exist — omit to auto-select if only one match.'),
 });
 // --- Style Parameter Schemas ---
 export const TextStyleParameters = z

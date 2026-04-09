@@ -160,127 +160,158 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
 }
 // --- Text Finding Helper ---
 // This improved version is more robust in handling various text structure scenarios
-export async function findTextRange(docs, documentId, textToFind, instance = 1, tabId) {
-    try {
-        // Request more detailed information about the document structure
-        // When tabId is specified, we need to use includeTabsContent to access tab-specific content
-        const needsTabsContent = !!tabId;
-        const res = await docs.documents.get({
-            documentId,
-            ...(needsTabsContent && { includeTabsContent: true }),
-            // Request more fields to handle various container types (not just paragraphs)
-            fields: needsTabsContent
-                ? 'tabs(tabProperties(tabId),documentTab(body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))))'
-                : 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
+/**
+ * Fetches document content and builds a flat text representation with segment mappings.
+ * Shared by findTextRange and other text-search utilities.
+ */
+async function getDocumentTextAndSegments(docs, documentId, tabId) {
+    const needsTabsContent = !!tabId;
+    const res = await docs.documents.get({
+        documentId,
+        ...(needsTabsContent && { includeTabsContent: true }),
+        fields: needsTabsContent
+            ? 'tabs(tabProperties(tabId),documentTab(body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))))'
+            : 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
+    });
+    let bodyContent;
+    if (tabId) {
+        const targetTab = findTabById(res.data, tabId);
+        if (!targetTab) {
+            throw new UserError(`Tab with ID "${tabId}" not found in document.`);
+        }
+        if (!targetTab.documentTab?.body?.content) {
+            throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
+        }
+        bodyContent = targetTab.documentTab.body.content;
+    }
+    else {
+        bodyContent = res.data.body?.content;
+    }
+    if (!bodyContent) {
+        return null;
+    }
+    let fullText = '';
+    const segments = [];
+    const collectTextFromContent = (content) => {
+        content.forEach((element) => {
+            if (element.paragraph?.elements) {
+                element.paragraph.elements.forEach((pe) => {
+                    if (pe.textRun?.content && pe.startIndex !== undefined && pe.endIndex !== undefined) {
+                        const content = pe.textRun.content;
+                        fullText += content;
+                        segments.push({
+                            text: content,
+                            start: pe.startIndex,
+                            end: pe.endIndex,
+                        });
+                    }
+                });
+            }
+            if (element.table && element.table.tableRows) {
+                element.table.tableRows.forEach((row) => {
+                    if (row.tableCells) {
+                        row.tableCells.forEach((cell) => {
+                            if (cell.content) {
+                                collectTextFromContent(cell.content);
+                            }
+                        });
+                    }
+                });
+            }
         });
-        // Get body content from the correct tab or default
-        let bodyContent;
-        if (tabId) {
-            const targetTab = findTabById(res.data, tabId);
-            if (!targetTab) {
-                throw new UserError(`Tab with ID "${tabId}" not found in document.`);
-            }
-            if (!targetTab.documentTab?.body?.content) {
-                throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
-            }
-            bodyContent = targetTab.documentTab.body.content;
+    };
+    collectTextFromContent(bodyContent);
+    segments.sort((a, b) => a.start - b.start);
+    return { fullText, segments };
+}
+/**
+ * Maps a position in the concatenated fullText back to the actual document index.
+ */
+function mapFullTextPositionToDocIndex(posInFullText, segments) {
+    let currentPos = 0;
+    for (const seg of segments) {
+        const segStart = currentPos;
+        const segEnd = segStart + seg.text.length;
+        if (posInFullText >= segStart && posInFullText < segEnd) {
+            return seg.start + (posInFullText - segStart);
         }
-        else {
-            bodyContent = res.data.body?.content;
+        // Also handle the position being exactly at segEnd (for end indices)
+        if (posInFullText === segEnd) {
+            return seg.start + seg.text.length;
         }
-        if (!bodyContent) {
+        currentPos = segEnd;
+    }
+    return -1;
+}
+/**
+ * Finds all occurrences of textToFind in the document and returns them with
+ * surrounding context and mapped document indices.
+ */
+function findAllOccurrences(fullText, segments, textToFind) {
+    const CONTEXT_CHARS = 30;
+    const occurrences = [];
+    let searchFrom = 0;
+    while (true) {
+        const idx = fullText.indexOf(textToFind, searchFrom);
+        if (idx === -1)
+            break;
+        const docStart = mapFullTextPositionToDocIndex(idx, segments);
+        const docEnd = mapFullTextPositionToDocIndex(idx + textToFind.length, segments);
+        // Extract surrounding context
+        const contextStart = Math.max(0, idx - CONTEXT_CHARS);
+        const contextEnd = Math.min(fullText.length, idx + textToFind.length + CONTEXT_CHARS);
+        const before = fullText.slice(contextStart, idx).replace(/\n/g, '\\n');
+        const match = fullText.slice(idx, idx + textToFind.length).replace(/\n/g, '\\n');
+        const after = fullText.slice(idx + textToFind.length, contextEnd).replace(/\n/g, '\\n');
+        const context = `${contextStart > 0 ? '...' : ''}${before}[${match}]${after}${contextEnd < fullText.length ? '...' : ''}`;
+        occurrences.push({
+            instance: occurrences.length + 1,
+            startIndex: docStart,
+            endIndex: docEnd,
+            context,
+        });
+        searchFrom = idx + 1;
+    }
+    return occurrences;
+}
+export async function findTextRange(docs, documentId, textToFind, instance, tabId) {
+    try {
+        const result = await getDocumentTextAndSegments(docs, documentId, tabId);
+        if (!result) {
             logger.warn(`No content found in document ${documentId}${tabId ? ` (tab: ${tabId})` : ''}`);
             return null;
         }
-        // More robust text collection and index tracking
-        let fullText = '';
-        const segments = [];
-        // Process all content elements, including structural ones
-        const collectTextFromContent = (content) => {
-            content.forEach((element) => {
-                // Handle paragraph elements
-                if (element.paragraph?.elements) {
-                    element.paragraph.elements.forEach((pe) => {
-                        if (pe.textRun?.content && pe.startIndex !== undefined && pe.endIndex !== undefined) {
-                            const content = pe.textRun.content;
-                            fullText += content;
-                            segments.push({
-                                text: content,
-                                start: pe.startIndex,
-                                end: pe.endIndex,
-                            });
-                        }
-                    });
-                }
-                // Handle table elements - this is simplified and might need expansion
-                if (element.table && element.table.tableRows) {
-                    element.table.tableRows.forEach((row) => {
-                        if (row.tableCells) {
-                            row.tableCells.forEach((cell) => {
-                                if (cell.content) {
-                                    collectTextFromContent(cell.content);
-                                }
-                            });
-                        }
-                    });
-                }
-                // Add handling for other structural elements as needed
-            });
-        };
-        collectTextFromContent(bodyContent);
-        // Sort segments by starting position to ensure correct ordering
-        segments.sort((a, b) => a.start - b.start);
+        const { fullText, segments } = result;
         logger.debug(`Document ${documentId} contains ${segments.length} text segments and ${fullText.length} characters in total.`);
-        // Find the specified instance of the text
-        let startIndex = -1;
-        let endIndex = -1;
-        let foundCount = 0;
-        let searchStartIndex = 0;
-        while (foundCount < instance) {
-            const currentIndex = fullText.indexOf(textToFind, searchStartIndex);
-            if (currentIndex === -1) {
-                logger.debug(`Search text "${textToFind}" not found for instance ${foundCount + 1} (requested: ${instance})`);
-                break;
-            }
-            foundCount++;
-            logger.debug(`Found instance ${foundCount} of "${textToFind}" at position ${currentIndex} in full text`);
-            if (foundCount === instance) {
-                const targetStartInFullText = currentIndex;
-                const targetEndInFullText = currentIndex + textToFind.length;
-                let currentPosInFullText = 0;
-                logger.debug(`Target text range in full text: ${targetStartInFullText}-${targetEndInFullText}`);
-                for (const seg of segments) {
-                    const segStartInFullText = currentPosInFullText;
-                    const segTextLength = seg.text.length;
-                    const segEndInFullText = segStartInFullText + segTextLength;
-                    // Map from reconstructed text position to actual document indices
-                    if (startIndex === -1 &&
-                        targetStartInFullText >= segStartInFullText &&
-                        targetStartInFullText < segEndInFullText) {
-                        startIndex = seg.start + (targetStartInFullText - segStartInFullText);
-                        logger.debug(`Mapped start to segment ${seg.start}-${seg.end}, position ${startIndex}`);
-                    }
-                    if (targetEndInFullText > segStartInFullText && targetEndInFullText <= segEndInFullText) {
-                        endIndex = seg.start + (targetEndInFullText - segStartInFullText);
-                        logger.debug(`Mapped end to segment ${seg.start}-${seg.end}, position ${endIndex}`);
-                        break;
-                    }
-                    currentPosInFullText = segEndInFullText;
-                }
-                if (startIndex === -1 || endIndex === -1) {
-                    logger.warn(`Failed to map text "${textToFind}" instance ${instance} to actual document indices`);
-                    return { startIndex, endIndex };
-                }
-                logger.debug(`Successfully mapped "${textToFind}" to document range ${startIndex}-${endIndex}`);
-                return { startIndex, endIndex };
-            }
-            // Prepare for next search iteration
-            searchStartIndex = currentIndex + 1;
+        const allOccurrences = findAllOccurrences(fullText, segments, textToFind);
+        if (allOccurrences.length === 0) {
+            logger.warn(`Text "${textToFind}" not found in document ${documentId}`);
+            return null;
         }
-        logger.warn(`Could not find instance ${instance} of text "${textToFind}" in document ${documentId}`);
-        return null; // Instance not found or mapping failed for all attempts
+        // If instance is not specified and there are multiple matches, return all of them
+        // so the caller can disambiguate
+        if (instance === undefined && allOccurrences.length > 1) {
+            const listing = allOccurrences.map((o) => `  ${o.instance}. index ${o.startIndex}-${o.endIndex}: ${o.context}`).join('\n');
+            throw new UserError(`Found ${allOccurrences.length} instances of "${textToFind}". ` +
+                `Specify matchInstance to target the correct one:\n${listing}`);
+        }
+        // Use instance 1 if not specified (single match case)
+        const targetInstance = instance ?? 1;
+        if (targetInstance > allOccurrences.length) {
+            logger.warn(`Requested instance ${targetInstance} but only ${allOccurrences.length} found`);
+            return null;
+        }
+        const match = allOccurrences[targetInstance - 1];
+        if (match.startIndex === -1 || match.endIndex === -1) {
+            logger.warn(`Failed to map text "${textToFind}" instance ${targetInstance} to actual document indices`);
+            return { startIndex: match.startIndex, endIndex: match.endIndex };
+        }
+        logger.debug(`Successfully mapped "${textToFind}" instance ${targetInstance} to document range ${match.startIndex}-${match.endIndex}`);
+        return { startIndex: match.startIndex, endIndex: match.endIndex };
     }
     catch (error) {
+        if (error instanceof UserError)
+            throw error;
         logger.error(`Error finding text "${textToFind}" in doc ${documentId}: ${error.message || 'Unknown error'}`);
         if (error.code === 404)
             throw new UserError(`Document not found while searching text (ID: ${documentId}).`);

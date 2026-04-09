@@ -97,7 +97,8 @@ export function register(server) {
             'Can insert text at a position, replace a range or found text, apply text styling (bold, italic, etc.), ' +
             'apply paragraph styling (alignment, headings, spacing, etc.), or any combination. ' +
             "Use readGoogleDoc with format='json' to determine indices. " +
-            'Supports \\n for line breaks and \\t for tabs in replacement text.',
+            'Supports \\n for line breaks and \\t for tabs in replacement text. ' +
+            'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance.',
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -132,7 +133,7 @@ export function register(server) {
                 else if ('textToFind' in args.target) {
                     const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance, args.tabId);
                     if (!range) {
-                        throw new UserError(`Could not find instance ${args.target.matchInstance ?? 1} of text "${args.target.textToFind}"${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
+                        throw new UserError(`Could not find text "${args.target.textToFind}"${args.target.matchInstance ? ` (instance ${args.target.matchInstance})` : ''}${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
                     }
                     startIndex = range.startIndex;
                     endIndex = range.endIndex;
