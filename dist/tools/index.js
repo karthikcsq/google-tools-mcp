@@ -12,15 +12,46 @@ import { logger } from '../logger.js';
 import { google } from 'googleapis';
 
 // ---------------------------------------------------------------------------
-// Wrap server.addTool so every tool's execute() auto-retries on invalid_grant.
+// Wrap server.addTool so every tool's execute() auto-retries on invalid_grant
+// and appends a troubleshoot/feedback hint to errors.
 // ---------------------------------------------------------------------------
+const ERROR_HINT =
+    '\n\nIf this error is unexpected or unclear, you can:\n' +
+    '  • Call the `troubleshoot` tool to run a health check (auth, API connectivity, recent logs).\n' +
+    '  • Call the `feedback` tool to file a bug report with diagnostics auto-attached.';
+
+// Tools that should NOT have the hint appended (would be circular/noisy).
+const HINT_EXCLUDED_TOOLS = new Set(['troubleshoot', 'feedback', 'help', 'logout']);
+
+function appendHintToError(error, toolName) {
+    if (HINT_EXCLUDED_TOOLS.has(toolName)) return error;
+    if (!error) return error;
+    // Avoid double-appending if something else (or a retry) already added it.
+    const existingMsg = error.message || '';
+    if (existingMsg.includes('`troubleshoot` tool')) return error;
+    try {
+        error.message = existingMsg + ERROR_HINT;
+    } catch {
+        // Some error types have non-writable message; fall back to a new error.
+        const wrapped = new Error(existingMsg + ERROR_HINT);
+        wrapped.cause = error;
+        return wrapped;
+    }
+    return error;
+}
+
 function wrapServerWithAuthRetry(server) {
     const originalAddTool = server.addTool.bind(server);
     server.addTool = function (toolDef) {
         const originalExecute = toolDef.execute;
+        const toolName = toolDef.name;
         if (originalExecute) {
-            toolDef.execute = function (...args) {
-                return withAuthRetry(() => originalExecute.apply(this, args));
+            toolDef.execute = async function (...args) {
+                try {
+                    return await withAuthRetry(() => originalExecute.apply(this, args));
+                } catch (err) {
+                    throw appendHintToError(err, toolName);
+                }
             };
         }
         return originalAddTool(toolDef);
