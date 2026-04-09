@@ -95,7 +95,9 @@ export function register(server) {
         name: 'modifyText',
         description: 'Combines text replacement/insertion and formatting in one atomic operation. ' +
             'Can insert text at a position, replace a range or found text, apply text styling (bold, italic, etc.), ' +
-            "apply paragraph styling (alignment, headings, spacing, etc.), or any combination. Use readGoogleDoc with format='json' to determine indices.",
+            'apply paragraph styling (alignment, headings, spacing, etc.), or any combination. ' +
+            "Use readGoogleDoc with format='json' to determine indices. " +
+            'Supports \\n for line breaks and \\t for tabs in replacement text.',
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -143,10 +145,15 @@ export function register(server) {
                 // Clamp to minimum 1 (index 0 is the document section break)
                 if (startIndex < 1)
                     startIndex = 1;
+                // Normalize escape sequences so literal \n / \t in the input
+                // are converted to real newline / tab characters (issue #9).
+                const normalizedText = args.text
+                    ?.replace(/\\n/g, '\n')
+                    .replace(/\\t/g, '\t');
                 const requests = buildModifyTextRequests({
                     startIndex,
                     endIndex,
-                    text: args.text,
+                    text: normalizedText,
                     style: args.style,
                     paragraphStyle: args.paragraphStyle,
                     tabId: args.tabId,
