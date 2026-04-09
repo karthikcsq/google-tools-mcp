@@ -49,7 +49,8 @@ export function register(server) {
                     spreadsheetId: args.spreadsheetId,
                     requestBody: { requests },
                 });
-                return `Successfully created ${args.groups.length} row group(s).`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully created ${args.groups.length} row group(s).`;
             }
             catch (error) {
                 log.error(`Error grouping rows: ${error.message || error}`);

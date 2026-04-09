@@ -66,7 +66,8 @@ export function register(server) {
                 };
                 await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
                 log.info(`Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
-                return `Successfully appended text to ${args.tabId ? `tab ${args.tabId} in ` : ''}document ${args.documentId}.`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully appended text to ${args.tabId ? `tab ${args.tabId} in ` : ''}document ${args.documentId}.`;
             }
             catch (error) {
                 log.error(`Error appending to doc ${args.documentId}: ${error.message || error}`);

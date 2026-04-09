@@ -37,11 +37,12 @@ export function register(server) {
                     commentId: args.commentId,
                     fields: 'resolved',
                 });
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 if (verifyComment.data.resolved) {
-                    return `Comment ${args.commentId} has been marked as resolved.`;
+                    return `${docUrl}\nComment ${args.commentId} has been marked as resolved.`;
                 }
                 else {
-                    return `Attempted to resolve comment ${args.commentId}, but the resolved status may not persist in the Google Docs UI due to API limitations. The comment can be resolved manually in the Google Docs interface.`;
+                    return `${docUrl}\nAttempted to resolve comment ${args.commentId}, but the resolved status may not persist in the Google Docs UI due to API limitations. The comment can be resolved manually in the Google Docs interface.`;
                 }
             }
             catch (error) {

@@ -19,7 +19,8 @@ export function register(server) {
                     fileId: args.documentId,
                     commentId: args.commentId,
                 });
-                return `Comment ${args.commentId} has been deleted.`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nComment ${args.commentId} has been deleted.`;
             }
             catch (error) {
                 log.error(`Error deleting comment: ${error.message || error}`);

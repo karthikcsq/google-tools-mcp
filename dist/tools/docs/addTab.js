@@ -67,6 +67,7 @@ export function register(server) {
                 const newTabProps = response.data.replies?.[0]?.addDocumentTab?.tabProperties;
                 if (newTabProps) {
                     return JSON.stringify({
+                        url: `https://docs.google.com/document/d/${args.documentId}/edit`,
                         message: `Successfully added new tab "${newTabProps.title || '(untitled)'}"`,
                         tabId: newTabProps.tabId,
                         title: newTabProps.title,

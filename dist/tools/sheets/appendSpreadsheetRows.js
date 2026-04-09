@@ -30,7 +30,8 @@ export function register(server) {
                 const updatedCells = response.updates?.updatedCells || 0;
                 const updatedRows = response.updates?.updatedRows || 0;
                 const updatedRange = response.updates?.updatedRange || args.range;
-                return `Successfully appended ${updatedRows} row(s) (${updatedCells} cells) to spreadsheet. Updated range: ${updatedRange}`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully appended ${updatedRows} row(s) (${updatedCells} cells) to spreadsheet. Updated range: ${updatedRange}`;
             }
             catch (error) {
                 log.error(`Error appending to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

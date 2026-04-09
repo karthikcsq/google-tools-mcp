@@ -40,7 +40,8 @@ export function register(server) {
                     }
                 }
                 await GDocsHelpers.createTable(docs, args.documentId, args.rows, args.columns, args.index, args.tabId);
-                return `Successfully inserted a ${args.rows}x${args.columns} table at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully inserted a ${args.rows}x${args.columns} table at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
                 log.error(`Error inserting table in doc ${args.documentId}: ${error.message || error}`);

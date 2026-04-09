@@ -65,7 +65,8 @@ export function register(server) {
                 }
                 log.info(`Applying styles: ${requestInfo.fields.join(', ')}`);
                 await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
-                return `Successfully applied paragraph styles (${requestInfo.fields.join(', ')}) to the paragraph${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully applied paragraph styles (${requestInfo.fields.join(', ')}) to the paragraph${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
                 // Detailed error logging

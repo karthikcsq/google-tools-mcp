@@ -212,7 +212,8 @@ export function register(server) {
                     },
                 });
                 const chartId = response.data.replies?.[0]?.addChart?.chart?.chartId;
-                return `Chart created successfully${chartId ? ` (Chart ID: ${chartId})` : ''}.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nChart created successfully${chartId ? ` (Chart ID: ${chartId})` : ''}.`;
             }
             catch (error) {
                 log.error(`Error inserting chart: ${error.message || error}`);

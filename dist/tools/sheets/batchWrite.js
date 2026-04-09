@@ -40,7 +40,8 @@ export function register(server) {
                 const totalRows = response.data.totalUpdatedRows || 0;
                 const totalColumns = response.data.totalUpdatedColumns || 0;
                 const totalSheets = response.data.totalUpdatedSheets || 0;
-                return `Successfully batch-wrote ${totalCells} cells (${totalRows} rows, ${totalColumns} columns) across ${totalSheets} sheet(s) in ${args.data.length} range(s).`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully batch-wrote ${totalCells} cells (${totalRows} rows, ${totalColumns} columns) across ${totalSheets} sheet(s) in ${args.data.length} range(s).`;
             }
             catch (error) {
                 log.error(`Error batch writing to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

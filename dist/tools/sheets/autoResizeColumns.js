@@ -54,7 +54,8 @@ export function register(server) {
                     },
                 });
                 const rangeDesc = args.columns ? `columns ${args.columns}` : 'all columns';
-                return `Successfully auto-resized ${rangeDesc} to fit content.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully auto-resized ${rangeDesc} to fit content.`;
             }
             catch (error) {
                 log.error(`Error auto-resizing columns: ${error.message || error}`);

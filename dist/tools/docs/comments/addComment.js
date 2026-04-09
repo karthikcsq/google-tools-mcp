@@ -72,7 +72,8 @@ export function register(server) {
                         }),
                     },
                 });
-                return `Comment added successfully. Comment ID: ${response.data.id}`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nComment added successfully. Comment ID: ${response.data.id}`;
             }
             catch (error) {
                 log.error(`Error adding comment: ${error.message || error}`);

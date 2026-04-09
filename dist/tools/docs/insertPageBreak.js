@@ -45,7 +45,8 @@ export function register(server) {
                     insertPageBreak: { location },
                 };
                 await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-                return `Successfully inserted page break at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully inserted page break at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
                 log.error(`Error inserting page break in doc ${args.documentId}: ${error.message || error}`);

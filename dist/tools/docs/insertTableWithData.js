@@ -119,7 +119,8 @@ export function register(server) {
                 }
                 const requests = buildInsertTableWithDataRequests(args.data, args.index, args.hasHeaderRow ?? false, args.tabId);
                 const metadata = await GDocsHelpers.executeBatchUpdateWithSplitting(docs, args.documentId, requests, log);
-                return (`Successfully inserted a ${numRows}x${numCols} table with data at index ${args.index}` +
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return (`${docUrl}\nSuccessfully inserted a ${numRows}x${numCols} table with data at index ${args.index}` +
                     `${args.tabId ? ` in tab ${args.tabId}` : ''}. ` +
                     `${args.hasHeaderRow ? 'Header row bolded. ' : ''}` +
                     `(${metadata.totalRequests} requests in ${metadata.totalApiCalls} API calls, ${metadata.totalElapsedMs}ms)`);

@@ -35,6 +35,7 @@ export function register(server) {
                     clearedRange = range;
                 }
                 return JSON.stringify({
+                    url: `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`,
                     tableId: table.tableId,
                     name: table.name,
                     deleted: true,

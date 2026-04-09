@@ -79,7 +79,8 @@ export function register(server) {
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
-                return `Successfully appended ${args.markdown.length} characters of markdown.\n\n${debugSummary}`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully appended ${args.markdown.length} characters of markdown.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error appending markdown: ${error.message}`);

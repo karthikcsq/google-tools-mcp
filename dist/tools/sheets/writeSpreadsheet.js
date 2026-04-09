@@ -30,7 +30,8 @@ export function register(server) {
                 const updatedCells = response.updatedCells || 0;
                 const updatedRows = response.updatedRows || 0;
                 const updatedColumns = response.updatedColumns || 0;
-                return `Successfully wrote ${updatedCells} cells (${updatedRows} rows, ${updatedColumns} columns) to range ${args.range}.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully wrote ${updatedCells} cells (${updatedRows} rows, ${updatedColumns} columns) to range ${args.range}.`;
             }
             catch (error) {
                 log.error(`Error writing to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

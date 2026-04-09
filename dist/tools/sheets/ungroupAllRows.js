@@ -53,7 +53,8 @@ export function register(server) {
                         break;
                     }
                 }
-                return `Successfully removed all row groups (${removed} level(s) cleared).`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully removed all row groups (${removed} level(s) cleared).`;
             }
             catch (error) {
                 log.error(`Error removing row groups: ${error.message || error}`);

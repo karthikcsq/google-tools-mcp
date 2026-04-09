@@ -46,7 +46,8 @@ export function register(server) {
                         ],
                     },
                 });
-                return `Successfully copied formatting from ${args.sourceSheetName}!${args.sourceRange} to ${args.destinationSheetName}!${args.destinationRange}.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully copied formatting from ${args.sourceSheetName}!${args.sourceRange} to ${args.destinationSheetName}!${args.destinationRange}.`;
             }
             catch (error) {
                 log.error(`Error copying formatting in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

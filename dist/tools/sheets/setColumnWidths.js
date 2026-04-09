@@ -30,7 +30,8 @@ export function register(server) {
             try {
                 await SheetsHelpers.setColumnWidths(sheets, args.spreadsheetId, args.sheetName, args.columnWidths);
                 const summary = args.columnWidths.map((cw) => `${cw.column}=${cw.width}px`).join(', ');
-                return `Successfully set column widths: ${summary}.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully set column widths: ${summary}.`;
             }
             catch (error) {
                 log.error(`Error setting column widths: ${error.message || error}`);

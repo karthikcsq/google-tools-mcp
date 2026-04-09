@@ -40,7 +40,8 @@ export function register(server) {
                 if (!duplicatedSheet) {
                     throw new UserError('Failed to duplicate sheet - no sheet properties returned.');
                 }
-                return `Successfully duplicated sheet as "${duplicatedSheet.title}" (Sheet ID: ${duplicatedSheet.sheetId}).`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully duplicated sheet as "${duplicatedSheet.title}" (Sheet ID: ${duplicatedSheet.sheetId}).`;
             }
             catch (error) {
                 log.error(`Error duplicating sheet in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

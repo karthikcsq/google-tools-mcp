@@ -24,7 +24,8 @@ export function register(server) {
                         content: args.content,
                     },
                 });
-                return `Reply added successfully. Reply ID: ${response.data.id}`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nReply added successfully. Reply ID: ${response.data.id}`;
             }
             catch (error) {
                 log.error(`Error adding reply: ${error.message || error}`);

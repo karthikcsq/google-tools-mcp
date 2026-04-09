@@ -130,7 +130,8 @@ export function register(server) {
                     format.textFormat = textFormat;
                 }
                 await SheetsHelpers.addConditionalFormatRule(sheets, args.spreadsheetId, gridRanges, args.conditionType, conditionValues, format);
-                return `Successfully added conditional formatting rule to ${args.ranges.join(', ')}.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully added conditional formatting rule to ${args.ranges.join(', ')}.`;
             }
             catch (error) {
                 log.error(`Error adding conditional format rule: ${error.message || error}`);

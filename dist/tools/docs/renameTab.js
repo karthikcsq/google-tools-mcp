@@ -44,7 +44,8 @@ export function register(server) {
                         ],
                     },
                 });
-                return `Successfully renamed tab from "${oldTitle}" to "${args.newTitle}".`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully renamed tab from "${oldTitle}" to "${args.newTitle}".`;
             }
             catch (error) {
                 log.error(`Error renaming tab ${args.tabId} in doc ${args.documentId}: ${error.message || error}`);

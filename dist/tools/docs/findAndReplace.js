@@ -41,7 +41,8 @@ export function register(server) {
                 };
                 const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
                 const changed = response.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
-                return `Replaced ${changed} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nReplaced ${changed} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;
             }
             catch (error) {
                 log.error(`Error in findAndReplace for doc ${args.documentId}: ${error.message || error}`);

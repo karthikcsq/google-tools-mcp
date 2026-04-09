@@ -18,7 +18,8 @@ export function register(server) {
             try {
                 const response = await SheetsHelpers.clearRange(sheets, args.spreadsheetId, args.range);
                 const clearedRange = response.clearedRange || args.range;
-                return `Successfully cleared range ${clearedRange}.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully cleared range ${clearedRange}.`;
             }
             catch (error) {
                 log.error(`Error clearing range in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

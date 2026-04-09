@@ -35,10 +35,11 @@ export function register(server) {
                 : `Setting dropdown validation on "${args.range}" with ${args.values.length} options in spreadsheet ${args.spreadsheetId}`);
             try {
                 await SheetsHelpers.setDropdownValidation(sheets, args.spreadsheetId, args.range, args.values, args.strict, args.inputMessage);
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
                 if (isClearing) {
-                    return `Successfully removed dropdown validation from range "${args.range}".`;
+                    return `${sheetUrl}\nSuccessfully removed dropdown validation from range "${args.range}".`;
                 }
-                return `Successfully added dropdown validation to range "${args.range}" with ${args.values.length} options: ${args.values.join(', ')}.`;
+                return `${sheetUrl}\nSuccessfully added dropdown validation to range "${args.range}" with ${args.values.length} options: ${args.values.join(', ')}.`;
             }
             catch (error) {
                 log.error(`Error setting dropdown validation: ${error.message || error}`);

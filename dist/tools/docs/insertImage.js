@@ -76,7 +76,8 @@ export function register(server) {
                     );
                     log.info(`[AppsScript] Inserting image via marker at index ${args.index} (fileId: ${driveFileId})`);
                     await GDocsHelpers.insertImageViaAppsScript(docs, scriptClient, appsScriptDeploymentId, args.documentId, driveFileId, args.index, args.tabId);
-                    return `Successfully inserted local image at index ${args.index} via Apps Script${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                    const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                    return `${docUrl}\nSuccessfully inserted local image at index ${args.index} via Apps Script${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
                 }
                 // --- Standard path: public URL insertion via Docs API ---
                 let resolvedUrl;
@@ -109,7 +110,8 @@ export function register(server) {
                 if (args.width && args.height) {
                     sizeInfo = ` with size ${args.width}x${args.height}pt`;
                 }
-                return `Successfully inserted image at index ${args.index}${sizeInfo}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                const docUrl2 = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl2}\nSuccessfully inserted image at index ${args.index}${sizeInfo}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
                 log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);

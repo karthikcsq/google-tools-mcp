@@ -102,6 +102,7 @@ export function register(server) {
                     columnProperties,
                 });
                 return JSON.stringify({
+                    url: `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`,
                     tableId: table.tableId,
                     name: table.name,
                     range: args.range,

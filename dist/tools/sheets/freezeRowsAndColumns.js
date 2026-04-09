@@ -45,7 +45,8 @@ export function register(server) {
                         ? 'unfroze columns'
                         : `froze left ${args.frozenColumns} column(s)`);
                 }
-                return `Successfully ${parts.join(' and ')}.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully ${parts.join(' and ')}.`;
             }
             catch (error) {
                 log.error(`Error freezing rows/columns: ${error.message || error}`);

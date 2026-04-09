@@ -49,6 +49,7 @@ export function register(server) {
                 const replies = data.replies || [];
 
                 const result = {
+                    url: `https://docs.google.com/forms/d/${args.formId}/edit`,
                     requestsApplied: args.requests.length,
                     repliesReceived: replies.length,
                 };

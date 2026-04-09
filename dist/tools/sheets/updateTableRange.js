@@ -30,6 +30,7 @@ export function register(server) {
                 // Update the table range
                 const updatedTable = await SheetsHelpers.updateTableRangeHelper(sheets, args.spreadsheetId, table.tableId || '', newRange);
                 return JSON.stringify({
+                    url: `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`,
                     tableId: updatedTable.tableId,
                     name: updatedTable.name,
                     oldRange: table.range

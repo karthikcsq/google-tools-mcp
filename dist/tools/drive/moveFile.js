@@ -31,7 +31,7 @@ export function register(server) {
                 let updateParams = {
                     fileId: args.fileId,
                     addParents: args.newParentId,
-                    fields: 'id,name,parents',
+                    fields: 'id,name,parents,webViewLink',
                     supportsAllDrives: true,
                 };
                 if (args.removeFromAllParents && currentParents.length > 0) {
@@ -39,7 +39,8 @@ export function register(server) {
                 }
                 const response = await drive.files.update(updateParams);
                 const action = args.removeFromAllParents ? 'moved' : 'copied';
-                return `Successfully ${action} "${fileName}" to new location.\nFile ID: ${response.data.id}`;
+                const fileUrl = response.data.webViewLink || `https://drive.google.com/file/d/${response.data.id}/view`;
+                return `${fileUrl}\nSuccessfully ${action} "${fileName}" to new location.\nFile ID: ${response.data.id}`;
             }
             catch (error) {
                 log.error(`Error moving file: ${error.message || error}`);

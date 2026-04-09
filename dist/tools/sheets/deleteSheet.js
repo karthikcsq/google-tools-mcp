@@ -30,7 +30,8 @@ export function register(server) {
                         ],
                     },
                 });
-                return `Successfully deleted sheet (ID: ${args.sheetId}) from spreadsheet.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully deleted sheet (ID: ${args.sheetId}) from spreadsheet.`;
             }
             catch (error) {
                 log.error(`Error deleting sheet in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

@@ -41,6 +41,7 @@ export function register(server) {
                 });
 
                 return JSON.stringify({
+                    url: `https://docs.google.com/forms/d/${args.formId}/edit`,
                     success: true,
                     formId: args.formId,
                     message: 'Publish settings updated successfully.',

@@ -32,6 +32,7 @@ export function register(server) {
                 // Append rows to the table
                 const result = await SheetsHelpers.appendToTableHelper(sheets, args.spreadsheetId, table.tableId || '', args.values);
                 return JSON.stringify({
+                    url: `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`,
                     tableId: table.tableId,
                     name: table.name,
                     rowsAppended: result.rowsAppended,

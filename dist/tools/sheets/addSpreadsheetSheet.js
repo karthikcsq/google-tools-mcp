@@ -21,7 +21,8 @@ export function register(server) {
                 if (!addedSheet) {
                     throw new UserError('Failed to add sheet - no sheet properties returned.');
                 }
-                return `Successfully added sheet "${addedSheet.title}" (Sheet ID: ${addedSheet.sheetId}) to spreadsheet.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully added sheet "${addedSheet.title}" (Sheet ID: ${addedSheet.sheetId}) to spreadsheet.`;
             }
             catch (error) {
                 log.error(`Error adding sheet to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

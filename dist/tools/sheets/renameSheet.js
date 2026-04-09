@@ -35,7 +35,8 @@ export function register(server) {
                         ],
                     },
                 });
-                return `Successfully renamed sheet (ID: ${args.sheetId}) to "${args.newName}".`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully renamed sheet (ID: ${args.sheetId}) to "${args.newName}".`;
             }
             catch (error) {
                 log.error(`Error renaming sheet in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

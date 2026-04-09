@@ -165,7 +165,8 @@ export function register(server) {
                     actions.push('applied text formatting');
                 if (args.paragraphStyle)
                     actions.push('applied paragraph formatting');
-                return `Successfully ${actions.join(' and ')} at range ${startIndex}-${endIndex ?? startIndex + (args.text?.length ?? 0)}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully ${actions.join(' and ')} at range ${startIndex}-${endIndex ?? startIndex + (args.text?.length ?? 0)}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
                 log.error(`Error in modifyText for doc ${args.documentId}: ${error.message || error}`);

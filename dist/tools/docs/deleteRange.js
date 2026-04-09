@@ -59,7 +59,8 @@ export function register(server) {
                     deleteContentRange: { range },
                 };
                 await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-                return `Successfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                return `${docUrl}\nSuccessfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
                 log.error(`Error deleting range in doc ${args.documentId}: ${error.message || error}`);

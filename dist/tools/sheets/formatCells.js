@@ -93,7 +93,8 @@ export function register(server) {
                     format.numberFormat = args.numberFormat;
                 }
                 await SheetsHelpers.formatCells(sheets, args.spreadsheetId, args.range, format);
-                return `Successfully applied formatting to range "${args.range}".`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nSuccessfully applied formatting to range "${args.range}".`;
             }
             catch (error) {
                 log.error(`Error formatting cells: ${error.message || error}`);

@@ -28,7 +28,8 @@ export function register(server) {
                         ],
                     },
                 });
-                return `Chart ${args.chartId} deleted successfully.`;
+                const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
+                return `${sheetUrl}\nChart ${args.chartId} deleted successfully.`;
             }
             catch (error) {
                 log.error(`Error deleting chart: ${error.message || error}`);
