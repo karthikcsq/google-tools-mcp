@@ -100,6 +100,7 @@ export async function runSetup() {
     });
     if (p.isCancel(ready1)) cancelled();
     openBrowser(ENABLE_APIS_URL);
+    p.log.message(chalk.dim(ENABLE_APIS_URL));
 
     const step1 = await p.confirm({
         message: 'Done enabling APIs?',
@@ -123,6 +124,7 @@ export async function runSetup() {
     });
     if (p.isCancel(ready2)) cancelled();
     openBrowser(CONSENT_SCREEN_URL);
+    p.log.message(chalk.dim(CONSENT_SCREEN_URL));
 
     const step2 = await p.confirm({
         message: 'Done configuring consent screen?',
@@ -146,6 +148,7 @@ export async function runSetup() {
     });
     if (p.isCancel(ready3)) cancelled();
     openBrowser(CREATE_CREDENTIALS_URL);
+    p.log.message(chalk.dim(CREATE_CREDENTIALS_URL));
 
     const credentials = await p.group({
         clientId: () => p.text({
