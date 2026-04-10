@@ -1,15 +1,22 @@
+import * as fs from 'fs/promises';
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult } from '../../markdown-transformer/index.js';
+import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'replaceDocumentWithMarkdown',
-        description: "Replaces the entire document body with content parsed from markdown. Supports headings, bold, italic, strikethrough, links, and bullet/numbered lists. Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes.",
+        description: "Best for rewriting entire sections or full documents. Replaces the entire document body with content parsed from markdown. " +
+            "Supports headings, bold, italic, strikethrough, links, and bullet/numbered lists. " +
+            "Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes. " +
+            "For small single-location edits (one line or paragraph), use modifyText instead. " +
+            "To add content without rewriting, use appendMarkdown.",
         parameters: DocumentIdParameter.extend({
-            markdown: z.string().min(1).describe('The markdown content to apply to the document.'),
+            markdown: z.string().optional().describe('The markdown content to apply to the document. For content longer than ~2000 characters, prefer writing to a local file first and passing filePath instead.'),
+            filePath: z.string().optional().describe('Path to a local markdown file to use as content. Takes precedence over the markdown parameter. Use this for large documents to avoid truncation.'),
             preserveTitle: z
                 .boolean()
                 .optional()
@@ -26,8 +33,22 @@ export function register(server) {
                 .describe('If true (default), the first H1 heading (# ...) in the markdown is styled as a Google Docs TITLE instead of Heading 1. Useful when the markdown represents a full document whose first line is the document title. Set to false if the first H1 should remain a Heading 1.'),
         }),
         execute: async (args, { log }) => {
+            await guardMutation(args.documentId);
             const docs = await getDocsClient();
-            log.info(`Replacing doc ${args.documentId} with markdown (${args.markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
+            // Resolve markdown content from filePath or inline parameter
+            let markdown = args.markdown;
+            if (args.filePath) {
+                try {
+                    markdown = await fs.readFile(args.filePath, 'utf-8');
+                    log.info(`Read ${markdown.length} chars from file: ${args.filePath}`);
+                } catch (err) {
+                    throw new UserError(`Failed to read file at "${args.filePath}": ${err.message}`);
+                }
+            }
+            if (!markdown || markdown.length === 0) {
+                throw new UserError('Either markdown or filePath must be provided with non-empty content.');
+            }
+            log.info(`Replacing doc ${args.documentId} with markdown (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
                 // 1. Get document structure
                 const doc = await docs.documents.get({
@@ -133,15 +154,16 @@ export function register(server) {
                 }
                 // 5. Convert markdown and insert (indices calculated for empty document)
                 log.info(`Inserting markdown starting at index ${startIndex} (after delete, document should be empty)`);
-                const result = await insertMarkdown(docs, args.documentId, args.markdown, {
+                const result = await insertMarkdown(docs, args.documentId, markdown, {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
+                trackMutation(args.documentId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
-                return `${docUrl}\nSuccessfully replaced document content with ${args.markdown.length} characters of markdown.\n\n${debugSummary}`;
+                return `${docUrl}\nSuccessfully replaced document content with ${markdown.length} characters of markdown.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error replacing document with markdown: ${error.message}`);
