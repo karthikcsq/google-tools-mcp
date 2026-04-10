@@ -191,15 +191,22 @@ export async function registerAllTools(server) {
     server.addTool({
         name: 'help',
         description:
-            'Show documentation for google-tools-mcp: setup instructions, available tool categories, environment variables, and troubleshooting. Call this when you need guidance on how to use the Google Workspace tools.',
+            'Show documentation for google-tools-mcp: setup instructions, available tool categories, environment variables, and troubleshooting. ' +
+            'Call this when you need guidance on how to use the Google Workspace tools. ' +
+            'Also available: `troubleshoot` (run health check when tools fail) and `feedback` (submit bug reports/feature requests with diagnostics auto-attached).',
         parameters: z.object({}),
         execute: async () => {
             const __dirname = path.dirname(fileURLToPath(import.meta.url));
             const readmePath = path.resolve(__dirname, '..', '..', 'README.md');
+            const diagnosticsSection = '\n\n## Diagnostics & Feedback\n\n' +
+                '- **`troubleshoot`** — Run a health check when tools fail (checks auth, API connectivity, config, recent logs).\n' +
+                '- **`feedback`** — Submit a bug report or feature request with diagnostics auto-attached (files via GitHub CLI or browser).\n' +
+                '- **`help`** — Show this documentation.\n';
             try {
-                return await fs.readFile(readmePath, 'utf-8');
+                const readme = await fs.readFile(readmePath, 'utf-8');
+                return readme + diagnosticsSection;
             } catch {
-                return 'README not found. Visit https://www.npmjs.com/package/google-tools-mcp for documentation.';
+                return 'README not found. Visit https://www.npmjs.com/package/google-tools-mcp for documentation.' + diagnosticsSection;
             }
         },
     });
