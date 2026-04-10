@@ -4,7 +4,7 @@ import * as readline from 'readline';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
+import { exec, execSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -54,6 +54,24 @@ function getConfigDir() {
     const baseDir = path.join(base, 'google-tools-mcp');
     const profile = process.env.GOOGLE_MCP_PROFILE;
     return profile ? path.join(baseDir, profile) : baseDir;
+}
+
+function hasCli(name) {
+    try {
+        execSync(`${name} --version`, { stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function runCommand(cmd) {
+    return new Promise((resolve, reject) => {
+        exec(cmd, (err, stdout, stderr) => {
+            if (err) reject(new Error(stderr || err.message));
+            else resolve(stdout);
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +135,6 @@ export async function runSetup() {
     console.log('\nStep 4: Authenticate with Google');
     console.log('────────────────────────────────');
     console.log('Opening browser for OAuth consent...\n');
-    rl.close();
 
     // Set env vars so auth picks them up immediately
     process.env.GOOGLE_CLIENT_ID = clientId;
@@ -126,7 +143,37 @@ export async function runSetup() {
     const { runAuthFlow } = await import('./auth.js');
     await runAuthFlow();
 
-    console.log('\n✅ Setup complete! You\'re ready to use google-tools-mcp.');
-    console.log('\nAdd it to Claude Code:');
-    console.log('  claude mcp add -s user google -- npx -y google-tools-mcp\n');
+    // Step 6: Install into MCP client
+    console.log('\nStep 5: Install');
+    console.log('───────────────');
+
+    const hasClaude = hasCli('claude');
+    if (hasClaude) {
+        const answer = (await prompt(rl, 'Add to Claude Code as a user-scope MCP server? (Y/n) ')).trim().toLowerCase();
+        if (answer === '' || answer === 'y' || answer === 'yes') {
+            console.log('Running: claude mcp add -s user google -- npx -y google-tools-mcp');
+            try {
+                await runCommand('claude mcp add -s user google -- npx -y google-tools-mcp');
+                console.log('Added to Claude Code!');
+            } catch (err) {
+                console.error('Failed to add:', err.message);
+                console.log('You can add it manually:');
+                console.log('  claude mcp add -s user google -- npx -y google-tools-mcp');
+            }
+        } else {
+            console.log('\nTo add it later:');
+            console.log('  claude mcp add -s user google -- npx -y google-tools-mcp');
+        }
+    } else {
+        console.log('Add google-tools-mcp to your MCP client config:');
+        console.log('');
+        console.log('  Claude Code:');
+        console.log('    claude mcp add -s user google -- npx -y google-tools-mcp');
+        console.log('');
+        console.log('  Other clients (.mcp.json / claude_desktop_config.json):');
+        console.log('    { "mcpServers": { "google": { "command": "npx", "args": ["-y", "google-tools-mcp"] } } }');
+    }
+
+    rl.close();
+    console.log('\n✅ Setup complete! You\'re ready to use google-tools-mcp.\n');
 }

@@ -5,7 +5,7 @@ The **easiest way** to connect your AI agent to Google Workspace.
 **153 tools** for Drive, Docs, Sheets, Gmail, Calendar, and Forms — all in one package. One install, one auth, and you're done.
 
 ```bash
-claude mcp add -s user google -- npx -y google-tools-mcp
+npx -y google-tools-mcp setup
 ```
 
 ## Why google-tools-mcp?
