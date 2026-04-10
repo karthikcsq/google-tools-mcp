@@ -166,6 +166,23 @@ async function loadSavedCredentialsIfExist() {
         const tokenPath = getTokenPath();
         const content = await fs.readFile(tokenPath, 'utf8');
         const credentials = JSON.parse(content);
+
+        // Check that the saved token covers all current SCOPES.
+        // Tokens without a scopes field (pre-upgrade) or with missing scopes
+        // are stale — delete and force re-auth via browser automatically.
+        if (!Array.isArray(credentials.scopes)) {
+            logger.info('Saved token has no scopes record (pre-upgrade token). Re-authentication required for new scopes.');
+            try { await fs.unlink(tokenPath); } catch {}
+            return null;
+        }
+        const saved = new Set(credentials.scopes);
+        const missing = SCOPES.filter(s => !saved.has(s));
+        if (missing.length > 0) {
+            logger.info(`Saved token is missing scope(s): ${missing.join(', ')}. Re-authentication required.`);
+            try { await fs.unlink(tokenPath); } catch {}
+            return null;
+        }
+
         const { client_secret, client_id } = await loadClientSecrets();
         const client = new google.auth.OAuth2(client_id, client_secret);
         client.setCredentials(credentials);
@@ -185,6 +202,7 @@ async function saveCredentials(client) {
         client_id,
         client_secret,
         refresh_token: client.credentials.refresh_token,
+        scopes: SCOPES,
     }, null, 2);
     await fs.writeFile(tokenPath, payload);
     logger.info('Token stored to', tokenPath);
