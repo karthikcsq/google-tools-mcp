@@ -275,6 +275,64 @@ describe('convertMarkdownToRequests', () => {
         expect(allText).toContain('Item 2');
         expect(allText).toContain('Item 3');
     });
+
+    // --- Issue #14: default foreground color ---
+    it('adds base foreground color when defaultForegroundColor option is provided', () => {
+        const requests = convertMarkdownToRequests('Hello world', 1, undefined, {
+            defaultForegroundColor: { red: 0, green: 0, blue: 0 },
+        });
+        const colorRequests = requests.filter(r =>
+            r.updateTextStyle?.fields === 'foregroundColor'
+        );
+        expect(colorRequests.length).toBe(1);
+        expect(colorRequests[0].updateTextStyle.textStyle.foregroundColor.color.rgbColor).toEqual({
+            red: 0, green: 0, blue: 0,
+        });
+    });
+
+    it('base foreground color covers the full inserted range', () => {
+        const requests = convertMarkdownToRequests('Hello world', 5, undefined, {
+            defaultForegroundColor: { red: 0, green: 0, blue: 0 },
+        });
+        const colorReq = requests.find(r =>
+            r.updateTextStyle?.fields === 'foregroundColor'
+        );
+        expect(colorReq).toBeDefined();
+        expect(colorReq.updateTextStyle.range.startIndex).toBe(5);
+        // endIndex should be > startIndex (covers the inserted text)
+        expect(colorReq.updateTextStyle.range.endIndex).toBeGreaterThan(5);
+    });
+
+    it('does not add foreground color when option is not provided', () => {
+        const requests = convertMarkdownToRequests('Hello world', 1);
+        const colorRequests = requests.filter(r =>
+            r.updateTextStyle?.fields === 'foregroundColor'
+        );
+        expect(colorRequests.length).toBe(0);
+    });
+
+    it('includes tabId in foreground color request when tabId is provided', () => {
+        const requests = convertMarkdownToRequests('Hello', 1, 'tab-42', {
+            defaultForegroundColor: { red: 0, green: 0, blue: 0 },
+        });
+        const colorReq = requests.find(r =>
+            r.updateTextStyle?.fields === 'foregroundColor'
+        );
+        expect(colorReq).toBeDefined();
+        expect(colorReq.updateTextStyle.range.tabId).toBe('tab-42');
+    });
+
+    it('supports non-black default colors (e.g. document with dark theme)', () => {
+        const requests = convertMarkdownToRequests('Hello', 1, undefined, {
+            defaultForegroundColor: { red: 1, green: 1, blue: 1 },
+        });
+        const colorReq = requests.find(r =>
+            r.updateTextStyle?.fields === 'foregroundColor'
+        );
+        expect(colorReq.updateTextStyle.textStyle.foregroundColor.color.rgbColor).toEqual({
+            red: 1, green: 1, blue: 1,
+        });
+    });
 });
 
 // ---------------------------------------------------------------------------

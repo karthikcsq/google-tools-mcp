@@ -85,10 +85,30 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
     const overallStart = performance.now();
     const startIndex = options?.startIndex ?? 1;
     const tabId = options?.tabId;
+    // Fetch the document's default text style so we can explicitly set
+    // foreground color on inserted text (fixes issue #14 — text without
+    // explicit color shows "no color selected" in the Docs color picker).
+    let defaultForegroundColor;
+    try {
+        const styleRes = await docs.documents.get({
+            documentId,
+            fields: 'namedStyles',
+        });
+        const normalTextStyle = styleRes.data.namedStyles?.styles?.find(
+            (s) => s.namedStyleType === 'NORMAL_TEXT'
+        );
+        const fg = normalTextStyle?.textStyle?.foregroundColor?.color?.rgbColor;
+        if (fg) {
+            defaultForegroundColor = fg;
+        }
+    } catch {
+        // Non-fatal — if we can't read styles, proceed without explicit color
+    }
     const parseStart = performance.now();
-    const conversionOptions = options?.firstHeadingAsTitle
-        ? { firstHeadingAsTitle: true }
-        : undefined;
+    const conversionOptions = {
+        ...(options?.firstHeadingAsTitle && { firstHeadingAsTitle: true }),
+        ...(defaultForegroundColor && { defaultForegroundColor }),
+    };
     const requests = convertMarkdownToRequests(markdown, startIndex, tabId, conversionOptions);
     const parseElapsedMs = Math.round(performance.now() - parseStart);
     // Count requests by type

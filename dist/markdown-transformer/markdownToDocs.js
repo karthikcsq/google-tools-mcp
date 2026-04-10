@@ -70,6 +70,7 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
     const parser = createParser();
     const tokens = parser.parse(markdown, {});
     const context = {
+        startIndex,
         currentIndex: startIndex,
         insertRequests: [],
         formatRequests: [],
@@ -88,6 +89,7 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
         tabId,
         titleConsumed: false,
         firstHeadingAsTitle: options?.firstHeadingAsTitle ?? false,
+        defaultForegroundColor: options?.defaultForegroundColor ?? null,
     };
     try {
         for (const token of tokens) {
@@ -624,6 +626,29 @@ function popFormatting(context, type) {
 }
 // --- Finalization ---
 function finalizeFormatting(context) {
+    // Apply the document's default foreground color to the entire inserted range
+    // so text has an explicit color value in Google Docs (fixes issue #14).
+    // This goes first so intentional colors (code blocks, links) override it.
+    if (context.defaultForegroundColor && context.currentIndex > context.startIndex) {
+        const baseRange = {
+            startIndex: context.startIndex,
+            endIndex: context.currentIndex,
+        };
+        if (context.tabId) {
+            baseRange.tabId = context.tabId;
+        }
+        context.formatRequests.push({
+            updateTextStyle: {
+                range: baseRange,
+                textStyle: {
+                    foregroundColor: {
+                        color: { rgbColor: context.defaultForegroundColor },
+                    },
+                },
+                fields: 'foregroundColor',
+            },
+        });
+    }
     // Character-level formatting (bold, italic, strikethrough, code, links)
     for (const range of context.textRanges) {
         const rangeLocation = {
