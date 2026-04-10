@@ -172,6 +172,12 @@ const CATEGORIES = {
             registerFormsTools(server);
         },
     },
+    slides: {
+        async loader(server) {
+            const { registerSlidesTools } = await import('./slides/index.js');
+            registerSlidesTools(server);
+        },
+    },
 };
 
 // ---------------------------------------------------------------------------

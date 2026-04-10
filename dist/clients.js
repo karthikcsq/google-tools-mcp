@@ -13,6 +13,7 @@ let googleScript = null;
 let gmailClient = null;
 let calendarClient = null;
 let formsClient = null;
+let slidesClient = null;
 
 async function ensureAuth() {
     if (authClient) return;
@@ -44,6 +45,7 @@ async function reauthorize() {
     gmailClient = null;
     calendarClient = null;
     formsClient = null;
+    slidesClient = null;
     authClient = await authorize();
     logger.info('Re-authorization successful.');
 }
@@ -94,6 +96,14 @@ export async function initializeFormsClient() {
     return { authClient, formsClient };
 }
 
+// --- Slides client ---
+export async function initializeSlidesClient() {
+    if (slidesClient) return { authClient, slidesClient };
+    await ensureAuth();
+    if (!slidesClient) slidesClient = google.slides({ version: 'v1', auth: authClient });
+    return { authClient, slidesClient };
+}
+
 // --- Get auth client without triggering init (for diagnostics) ---
 export function getAuthClientIfReady() {
     return authClient;
@@ -109,6 +119,7 @@ export function resetClients() {
     gmailClient = null;
     calendarClient = null;
     formsClient = null;
+    slidesClient = null;
 }
 
 /**
@@ -176,4 +187,10 @@ export async function getFormsClient() {
     const { formsClient: forms } = await initializeFormsClient();
     if (!forms) throw new UserError('Google Forms client is not initialized.');
     return forms;
+}
+
+export async function getSlidesClient() {
+    const { slidesClient: slides } = await initializeSlidesClient();
+    if (!slides) throw new UserError('Google Slides client is not initialized.');
+    return slides;
 }
