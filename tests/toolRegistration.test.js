@@ -90,6 +90,7 @@ describe('Tool Registration', () => {
                 'copyFile',
                 'renameFile',
                 'downloadFile',
+                'uploadFile',
             ];
             for (const name of expectedTools) {
                 expect(tools.has(name)).toBe(true);
@@ -122,6 +123,23 @@ describe('Tool Registration', () => {
             for (const name of expectedTools) {
                 expect(tools.has(name)).toBe(true);
             }
+        });
+    });
+
+    // --- Extras tools ---
+    describe('Extras tools', () => {
+        let tools;
+        beforeAll(async () => {
+            const server = createMockServer();
+            const { registerExtrasTools } = await import('../dist/tools/extras/index.js');
+            registerExtrasTools(server);
+            tools = server.getTools();
+        });
+
+        it('registers expected extras tools', () => {
+            expect(tools.has('readFile')).toBe(true);
+            expect(tools.has('searchFileContents')).toBe(true);
+            expect(tools.has('readDriveFile')).toBe(true);
         });
     });
 

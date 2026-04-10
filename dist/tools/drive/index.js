@@ -14,6 +14,7 @@ import { register as listSharedDrives } from './listSharedDrives.js';
 import { register as listSharedWithMe } from './listSharedWithMe.js';
 import { register as downloadFile } from './downloadFile.js';
 import { register as getFilePath } from './getFilePath.js';
+import { register as uploadFile } from './uploadFile.js';
 export function registerDriveTools(server) {
     listDriveFiles(server);
     searchGoogleDocs(server);
@@ -31,4 +32,5 @@ export function registerDriveTools(server) {
     listSharedWithMe(server);
     downloadFile(server);
     getFilePath(server);
+    uploadFile(server);
 }
