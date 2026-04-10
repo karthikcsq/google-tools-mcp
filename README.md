@@ -22,7 +22,28 @@ claude mcp add -s user google -- npx -y google-tools-mcp
 
 You can be up and running in under 5 minutes.
 
-### Step 1: Create Google OAuth Credentials
+### Guided Setup (recommended)
+
+Run the setup wizard — it opens the right Google Cloud Console pages for you and saves your credentials automatically:
+
+```bash
+npx -y google-tools-mcp setup
+```
+
+The wizard walks you through:
+1. Enabling all required Google APIs (opens in your browser)
+2. Configuring the OAuth consent screen
+3. Creating OAuth credentials
+4. Authenticating with Google
+
+After setup, just add it to your MCP client (see [Step 3](#step-3-add-to-your-mcp-client) below).
+
+### Manual Setup
+
+<details>
+<summary>Click to expand manual setup instructions</summary>
+
+#### Step 1: Create Google OAuth Credentials
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project (or use an existing one)
@@ -32,7 +53,7 @@ You can be up and running in under 5 minutes.
 6. Select **Desktop application** as the application type
 7. Download the credentials or note your **Client ID** and **Client Secret**
 
-### Step 2: Provide Your Credentials
+#### Step 2: Provide Your Credentials
 
 Choose **one** of the following methods (whichever you prefer):
 
@@ -83,6 +104,8 @@ Add the credentials directly to your MCP configuration:
 ```
 
 > **Credential lookup order:** env vars → `~/.config/google-tools-mcp/.env` → project root `.env` → `~/.config/google-tools-mcp/credentials.json` → project root `credentials.json`
+
+</details>
 
 ### Step 3: Add to Your MCP Client
 

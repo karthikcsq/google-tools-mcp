@@ -7,9 +7,22 @@
 // Usage:
 //   google-tools-mcp          Start the MCP server (default)
 //   google-tools-mcp auth     Run the interactive OAuth flow
+//   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
 import { FastMCP } from 'fastmcp';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
+
+// --- Setup subcommand ---
+if (process.argv[2] === 'setup') {
+    const { runSetup } = await import('./setup.js');
+    try {
+        await runSetup();
+        process.exit(0);
+    } catch (error) {
+        console.error('\nSetup failed:', error.message || error);
+        process.exit(1);
+    }
+}
 
 // --- Auth subcommand ---
 if (process.argv[2] === 'auth') {
