@@ -1,6 +1,7 @@
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
+import { trackRead } from '../../readTracker.js';
 import mammoth from 'mammoth';
 
 function isDocx(mimeType, name) {
@@ -58,6 +59,7 @@ export function register(server) {
                 });
 
                 const { name, mimeType } = meta.data;
+                trackRead(fileId);
                 const buffer = await downloadBuffer(drive, fileId);
                 const text = await extractText(buffer, mimeType, name);
 
