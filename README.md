@@ -1,23 +1,26 @@
 # google-tools-mcp
 
-A unified MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, and Forms — with **153 tools** across 9 categories.
+The **easiest way** to connect your AI agent to Google Workspace.
 
-All tools are loaded at startup so they're immediately available to your AI agent. No discovery step needed.
+**153 tools** for Drive, Docs, Sheets, Gmail, Calendar, and Forms — all in one package. One install, one auth, and you're done.
 
-## Why This Exists
+```bash
+claude mcp add -s user google -- npx -y google-tools-mcp
+```
 
-Most Google MCP servers split functionality across separate packages. This server combines everything into one — single auth token, single process, single config.
+## Why google-tools-mcp?
 
-## Features
+- **One command to install.** No cloning repos, no building from source, no Docker. Just `npx -y google-tools-mcp` and it works.
+- **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, and Forms. No juggling multiple tokens or servers.
+- **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
+- **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
+- **153 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms — it's all there.
+- **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
+- **No telemetry. No tracking. Fully open source.**
 
-- **153 tools** across 9 categories, all available immediately
-- **Single auth token** — one OAuth flow covers Drive, Docs, Sheets, Gmail, Calendar, and Forms
-- **Lazy-loading auth** — no browser popup until your first tool call
-- **No lazy tool loading** — all 153 tools are registered eagerly at startup since most MCP clients (including Claude Code) don't support `notifications/tools/list_changed`
-- **Multi-profile support** — separate tokens per Google account
-- **No telemetry**
+## Quick Start
 
-## Getting Started
+You can be up and running in under 5 minutes.
 
 ### Step 1: Create Google OAuth Credentials
 
