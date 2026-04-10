@@ -1,6 +1,7 @@
 // Guided setup wizard for google-tools-mcp.
-// Opens the right Google Cloud Console URLs and saves credentials.
-import * as readline from 'readline';
+// Rich terminal UI using @clack/prompts.
+import * as p from '@clack/prompts';
+import chalk from 'chalk';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -44,10 +45,6 @@ function openBrowser(url) {
     exec(cmd, () => {});
 }
 
-function prompt(rl, question) {
-    return new Promise((resolve) => rl.question(question, resolve));
-}
-
 function getConfigDir() {
     const xdg = process.env.XDG_CONFIG_HOME;
     const base = xdg || path.join(os.homedir(), '.config');
@@ -74,106 +71,162 @@ function runCommand(cmd) {
     });
 }
 
+function cancelled() {
+    p.cancel('Setup cancelled.');
+    process.exit(0);
+}
+
 // ---------------------------------------------------------------------------
 // Setup flow
 // ---------------------------------------------------------------------------
 export async function runSetup() {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
+    console.clear();
+
+    p.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
+
+    // ── Step 1: Enable APIs ──────────────────────────────────────────────
+    p.log.step(chalk.cyan.bold('Step 1') + chalk.dim(' · ') + 'Enable Google APIs');
+    p.log.message([
+        'This will open Google Cloud Console to enable all required APIs.',
+        chalk.dim('If you don\'t have a project yet, it will ask you to create one.'),
+        '',
+        chalk.dim('APIs: ') + APIS.map(a => chalk.yellow(a.replace('.googleapis.com', ''))).join(chalk.dim(', ')),
+    ].join('\n'));
+
+    const ready1 = await p.confirm({
+        message: 'Ready? This will open your browser.',
+        active: 'open browser',
+        inactive: 'not yet',
     });
-
-    console.log('\n🔧 google-tools-mcp setup\n');
-
-    // Step 1: Enable APIs
-    console.log('Step 1: Enable Google APIs');
-    console.log('─────────────────────────');
-    console.log('Opening Google Cloud Console to enable all required APIs.');
-    console.log('If you don\'t have a project yet, it will ask you to create one.\n');
+    if (p.isCancel(ready1)) cancelled();
     openBrowser(ENABLE_APIS_URL);
-    await prompt(rl, 'Press Enter when done...');
 
-    // Step 2: OAuth consent screen
-    console.log('\nStep 2: Configure OAuth consent screen');
-    console.log('──────────────────────────────────────');
-    console.log('Opening the OAuth consent screen configuration.');
-    console.log('  • Choose "External" for the user type');
-    console.log('  • Fill in the app name (anything is fine, e.g. "MCP")');
-    console.log('  • Add your email as a test user\n');
+    const step1 = await p.confirm({
+        message: 'Done enabling APIs?',
+        active: 'yes, continue',
+        inactive: 'not yet',
+    });
+    if (p.isCancel(step1)) cancelled();
+
+    // ── Step 2: OAuth consent screen ─────────────────────────────────────
+    p.log.step(chalk.cyan.bold('Step 2') + chalk.dim(' · ') + 'Configure OAuth consent screen');
+    p.log.message([
+        `${chalk.white('›')} Choose ${chalk.bold('"External"')} for the user type`,
+        `${chalk.white('›')} Fill in the app name ${chalk.dim('(anything works, e.g. "MCP")')}`,
+        `${chalk.white('›')} Add your email as a ${chalk.bold('test user')}`,
+    ].join('\n'));
+
+    const ready2 = await p.confirm({
+        message: 'Ready? This will open your browser.',
+        active: 'open browser',
+        inactive: 'not yet',
+    });
+    if (p.isCancel(ready2)) cancelled();
     openBrowser(CONSENT_SCREEN_URL);
-    await prompt(rl, 'Press Enter when done...');
 
-    // Step 3: Create OAuth credentials
-    console.log('\nStep 3: Create OAuth Client ID');
-    console.log('──────────────────────────────');
-    console.log('Opening the credentials page.');
-    console.log('  • Select "Desktop application" as the type');
-    console.log('  • Click Create, then copy the Client ID and Client Secret\n');
+    const step2 = await p.confirm({
+        message: 'Done configuring consent screen?',
+        active: 'yes, continue',
+        inactive: 'not yet',
+    });
+    if (p.isCancel(step2)) cancelled();
+
+    // ── Step 3: Create OAuth credentials ─────────────────────────────────
+    p.log.step(chalk.cyan.bold('Step 3') + chalk.dim(' · ') + 'Create OAuth Client ID');
+    p.log.message([
+        `${chalk.white('›')} Select ${chalk.bold('"Desktop application"')} as the type`,
+        `${chalk.white('›')} Click ${chalk.bold('Create')}`,
+        `${chalk.white('›')} Copy the ${chalk.bold('Client ID')} and ${chalk.bold('Client Secret')}`,
+    ].join('\n'));
+
+    const ready3 = await p.confirm({
+        message: 'Ready? This will open your browser.',
+        active: 'open browser',
+        inactive: 'not yet',
+    });
+    if (p.isCancel(ready3)) cancelled();
     openBrowser(CREATE_CREDENTIALS_URL);
-    await prompt(rl, 'Press Enter when you have your Client ID and Secret...');
 
-    // Step 4: Collect credentials
-    console.log('');
-    const clientId = (await prompt(rl, 'Client ID: ')).trim();
-    const clientSecret = (await prompt(rl, 'Client Secret: ')).trim();
+    const credentials = await p.group({
+        clientId: () => p.text({
+            message: 'Client ID',
+            placeholder: 'xxxx.apps.googleusercontent.com',
+            validate: (v) => {
+                if (!v?.trim()) return 'Client ID is required';
+            },
+        }),
+        clientSecret: () => p.text({
+            message: 'Client Secret',
+            placeholder: 'GOCSPX-xxxx',
+            validate: (v) => {
+                if (!v?.trim()) return 'Client Secret is required';
+            },
+        }),
+    });
+    if (p.isCancel(credentials)) cancelled();
 
-    if (!clientId || !clientSecret) {
-        rl.close();
-        throw new Error('Client ID and Client Secret are required.');
-    }
+    const clientId = credentials.clientId.trim();
+    const clientSecret = credentials.clientSecret.trim();
 
-    // Save to config dir
+    // ── Save credentials ─────────────────────────────────────────────────
     const configDir = getConfigDir();
     await fs.mkdir(configDir, { recursive: true });
     const envPath = path.join(configDir, '.env');
     const envContent = `GOOGLE_CLIENT_ID=${clientId}\nGOOGLE_CLIENT_SECRET=${clientSecret}\n`;
     await fs.writeFile(envPath, envContent);
     const displayPath = envPath.replace(os.homedir(), '~');
-    console.log(`\nCredentials saved to ${displayPath}`);
+    p.log.success(`Credentials saved to ${chalk.dim(displayPath)}`);
 
-    // Step 5: Run OAuth flow
-    console.log('\nStep 4: Authenticate with Google');
-    console.log('────────────────────────────────');
-    console.log('Opening browser for OAuth consent...\n');
+    // ── Step 4: Authenticate ─────────────────────────────────────────────
+    p.log.step(chalk.cyan.bold('Step 4') + chalk.dim(' · ') + 'Authenticate with Google');
+    p.log.message('Opening browser for OAuth consent...');
 
-    // Set env vars so auth picks them up immediately
     process.env.GOOGLE_CLIENT_ID = clientId;
     process.env.GOOGLE_CLIENT_SECRET = clientSecret;
 
     const { runAuthFlow } = await import('./auth.js');
     await runAuthFlow();
 
-    // Step 6: Install into MCP client
-    console.log('\nStep 5: Install');
-    console.log('───────────────');
+    p.log.success('Authenticated with Google!');
+
+    // ── Step 5: Install ──────────────────────────────────────────────────
+    p.log.step(chalk.cyan.bold('Step 5') + chalk.dim(' · ') + 'Install MCP server');
 
     const hasClaude = hasCli('claude');
     if (hasClaude) {
-        const answer = (await prompt(rl, 'Add to Claude Code as a user-scope MCP server? (Y/n) ')).trim().toLowerCase();
-        if (answer === '' || answer === 'y' || answer === 'yes') {
-            console.log('Running: claude mcp add -s user google -- npx -y google-tools-mcp');
+        const install = await p.confirm({
+            message: 'Add to Claude Code as a user-scope MCP server?',
+            active: 'yes',
+            inactive: 'no',
+            initialValue: true,
+        });
+        if (p.isCancel(install)) cancelled();
+
+        if (install) {
+            const s = p.spinner();
+            s.start('Adding to Claude Code...');
             try {
                 await runCommand('claude mcp add -s user google -- npx -y google-tools-mcp');
-                console.log('Added to Claude Code!');
+                s.stop('Added to Claude Code!');
             } catch (err) {
-                console.error('Failed to add:', err.message);
-                console.log('You can add it manually:');
-                console.log('  claude mcp add -s user google -- npx -y google-tools-mcp');
+                s.stop('Failed to add automatically');
+                p.log.warn(`Error: ${err.message}`);
+                p.log.message(`Run manually:\n${chalk.cyan('claude mcp add -s user google -- npx -y google-tools-mcp')}`);
             }
         } else {
-            console.log('\nTo add it later:');
-            console.log('  claude mcp add -s user google -- npx -y google-tools-mcp');
+            p.log.message(`To add later:\n${chalk.cyan('claude mcp add -s user google -- npx -y google-tools-mcp')}`);
         }
     } else {
-        console.log('Add google-tools-mcp to your MCP client config:');
-        console.log('');
-        console.log('  Claude Code:');
-        console.log('    claude mcp add -s user google -- npx -y google-tools-mcp');
-        console.log('');
-        console.log('  Other clients (.mcp.json / claude_desktop_config.json):');
-        console.log('    { "mcpServers": { "google": { "command": "npx", "args": ["-y", "google-tools-mcp"] } } }');
+        p.log.message([
+            'Add to your MCP client:',
+            '',
+            chalk.dim('Claude Code:'),
+            chalk.cyan('  claude mcp add -s user google -- npx -y google-tools-mcp'),
+            '',
+            chalk.dim('Other clients') + chalk.dim(' (.mcp.json):'),
+            chalk.cyan('  { "mcpServers": { "google": { "command": "npx", "args": ["-y", "google-tools-mcp"] } } }'),
+        ].join('\n'));
     }
 
-    rl.close();
-    console.log('\n✅ Setup complete! You\'re ready to use google-tools-mcp.\n');
+    p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' You\'re ready to use google-tools-mcp.'));
 }
