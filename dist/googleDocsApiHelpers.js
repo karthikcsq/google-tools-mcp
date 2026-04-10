@@ -244,6 +244,54 @@ function mapFullTextPositionToDocIndex(posInFullText, segments) {
     return -1;
 }
 /**
+ * Character-level Unicode normalization rules.
+ * Maps typographic characters to their ASCII equivalents.
+ */
+const NORMALIZE_MAP = {
+    '\u2018': "'", '\u2019': "'", '\u201A': "'", '\u201B': "'", '\u2032': "'", '\u2035': "'",  // smart single quotes
+    '\u201C': '"', '\u201D': '"', '\u201E': '"', '\u201F': '"', '\u2033': '"', '\u2036': '"',  // smart double quotes
+    '\u2014': '--',  // em dash
+    '\u2013': '-',   // en dash
+    '\u2026': '...', // ellipsis
+    '\u00A0': ' ',   // non-breaking space
+    '\u000B': '\n',  // vertical tab (Google Docs soft return)
+};
+/**
+ * Normalizes a string for search, returning both the normalized text
+ * and a position map from normalized-index → original-index.
+ */
+function normalizeWithPositionMap(text) {
+    let normalized = '';
+    const posMap = []; // posMap[normalizedIdx] = originalIdx
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        const replacement = NORMALIZE_MAP[ch];
+        if (replacement) {
+            for (let j = 0; j < replacement.length; j++) {
+                posMap.push(i);
+                normalized += replacement[j];
+            }
+        } else {
+            posMap.push(i);
+            normalized += ch;
+        }
+    }
+    // Sentinel for end-of-string mapping
+    posMap.push(text.length);
+    return { normalized, posMap };
+}
+/**
+ * Simple normalization without position map (for normalizing the search query).
+ */
+function normalizeForSearch(text) {
+    let result = '';
+    for (let i = 0; i < text.length; i++) {
+        const replacement = NORMALIZE_MAP[text[i]];
+        result += replacement ?? text[i];
+    }
+    return result;
+}
+/**
  * Finds all occurrences of textToFind in the document and returns them with
  * surrounding context and mapped document indices.
  */
@@ -283,7 +331,40 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         }
         const { fullText, segments } = result;
         logger.debug(`Document ${documentId} contains ${segments.length} text segments and ${fullText.length} characters in total.`);
-        const allOccurrences = findAllOccurrences(fullText, segments, textToFind);
+        let allOccurrences = findAllOccurrences(fullText, segments, textToFind);
+        // Fallback: try normalized matching if exact match fails (issue #11)
+        if (allOccurrences.length === 0) {
+            const normalizedSearch = normalizeForSearch(textToFind);
+            const { normalized: normalizedFull, posMap } = normalizeWithPositionMap(fullText);
+            if (normalizedSearch !== textToFind || normalizedFull !== fullText) {
+                logger.debug(`Exact match failed, trying normalized match`);
+                // Find in normalized text, then map positions back to original
+                const CONTEXT_CHARS = 30;
+                let searchFrom = 0;
+                while (true) {
+                    const idx = normalizedFull.indexOf(normalizedSearch, searchFrom);
+                    if (idx === -1) break;
+                    // Map normalized positions back to original fullText positions
+                    const origStart = posMap[idx];
+                    const origEnd = posMap[idx + normalizedSearch.length];
+                    const docStart = mapFullTextPositionToDocIndex(origStart, segments);
+                    const docEnd = mapFullTextPositionToDocIndex(origEnd, segments);
+                    const contextStart = Math.max(0, origStart - CONTEXT_CHARS);
+                    const contextEnd = Math.min(fullText.length, origEnd + CONTEXT_CHARS);
+                    const before = fullText.slice(contextStart, origStart).replace(/\n/g, '\\n');
+                    const match = fullText.slice(origStart, origEnd).replace(/\n/g, '\\n');
+                    const after = fullText.slice(origEnd, contextEnd).replace(/\n/g, '\\n');
+                    const context = `${contextStart > 0 ? '...' : ''}${before}[${match}]${after}${contextEnd < fullText.length ? '...' : ''}`;
+                    allOccurrences.push({
+                        instance: allOccurrences.length + 1,
+                        startIndex: docStart,
+                        endIndex: docEnd,
+                        context,
+                    });
+                    searchFrom = idx + 1;
+                }
+            }
+        }
         if (allOccurrences.length === 0) {
             logger.warn(`Text "${textToFind}" not found in document ${documentId}`);
             return null;
