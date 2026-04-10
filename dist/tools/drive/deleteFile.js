@@ -1,6 +1,7 @@
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
+import { guardMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'deleteFile',
@@ -16,6 +17,7 @@ export function register(server) {
                 .describe('If true, permanently deletes the file instead of moving it to trash.'),
         }),
         execute: async (args, { log }) => {
+            await guardMutation(args.fileId, { skipExternalCheck: true });
             const drive = await getDriveClient();
             log.info(`Deleting file ${args.fileId} ${args.permanent ? '(permanent)' : '(to trash)'}`);
             try {

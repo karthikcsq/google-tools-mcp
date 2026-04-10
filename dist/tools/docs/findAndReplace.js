@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { guardMutation, trackMutation } from '../../readTracker.js';
 const FindAndReplaceParameters = DocumentIdParameter.extend({
     findText: z.string().min(1).describe('The text to search for in the document.'),
     replaceText: z
@@ -24,6 +25,7 @@ export function register(server) {
             'Returns the number of replacements made. Use an empty replaceText to delete all matches.',
         parameters: FindAndReplaceParameters,
         execute: async (args, { log }) => {
+            await guardMutation(args.documentId);
             const docs = await getDocsClient();
             log.info(`findAndReplace in doc ${args.documentId}: "${args.findText}" → "${args.replaceText}"` +
                 `${args.matchCase ? ' (case-sensitive)' : ''}` +
@@ -40,6 +42,7 @@ export function register(server) {
                     },
                 };
                 const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+                trackMutation(args.documentId);
                 const changed = response.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nReplaced ${changed} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;

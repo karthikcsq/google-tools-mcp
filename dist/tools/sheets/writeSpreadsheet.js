@@ -2,6 +2,7 @@ import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'writeSpreadsheet',
@@ -23,6 +24,7 @@ export function register(server) {
                 .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
         }),
         execute: async (args, { log }) => {
+            await guardMutation(args.spreadsheetId);
             const sheets = await getSheetsClient();
             log.info(`Writing to spreadsheet ${args.spreadsheetId}, range: ${args.range}`);
             try {

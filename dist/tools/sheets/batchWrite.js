@@ -1,6 +1,7 @@
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
+import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'batchWrite',
@@ -25,6 +26,7 @@ export function register(server) {
                 .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
         }),
         execute: async (args, { log }) => {
+            await guardMutation(args.spreadsheetId);
             const sheets = await getSheetsClient();
             const rangeNames = args.data.map((d) => d.range).join(', ');
             log.info(`Batch writing to ${args.data.length} range(s) in spreadsheet ${args.spreadsheetId}: ${rangeNames}`);

@@ -4,6 +4,7 @@ import { getDocsClient, getDriveClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
+import { trackRead } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'readDocument',
@@ -38,6 +39,7 @@ export function register(server) {
                     fields: needsTabsContent ? '*' : fields, // Get full document if using tabs
                 });
                 log.info(`Fetched doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
+                trackRead(args.documentId);
                 // If tabId is specified, find the specific tab
                 let contentSource;
                 if (args.tabId) {

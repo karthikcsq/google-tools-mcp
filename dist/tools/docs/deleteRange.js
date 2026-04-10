@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'deleteRange',
@@ -27,6 +28,7 @@ export function register(server) {
             path: ['endIndex'],
         }),
         execute: async (args, { log }) => {
+            await guardMutation(args.documentId);
             const docs = await getDocsClient();
             log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
             if (args.endIndex <= args.startIndex) {
@@ -59,6 +61,7 @@ export function register(server) {
                     deleteContentRange: { range },
                 };
                 await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+                trackMutation(args.documentId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }

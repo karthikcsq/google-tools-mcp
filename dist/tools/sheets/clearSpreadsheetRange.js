@@ -2,6 +2,7 @@ import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'clearRange',
@@ -13,6 +14,7 @@ export function register(server) {
             range: z.string().describe('A1 notation range to clear (e.g., "A1:B10" or "Sheet1!A1:B10").'),
         }),
         execute: async (args, { log }) => {
+            await guardMutation(args.spreadsheetId);
             const sheets = await getSheetsClient();
             log.info(`Clearing range ${args.range} in spreadsheet ${args.spreadsheetId}`);
             try {

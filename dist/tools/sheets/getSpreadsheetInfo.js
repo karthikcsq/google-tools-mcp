@@ -2,6 +2,7 @@ import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { trackRead } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'getSpreadsheetInfo',
@@ -16,6 +17,7 @@ export function register(server) {
             log.info(`Getting info for spreadsheet: ${args.spreadsheetId}`);
             try {
                 const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
+                trackRead(args.spreadsheetId);
                 const sheetList = metadata.sheets || [];
                 return JSON.stringify({
                     title: metadata.properties?.title || 'Untitled',

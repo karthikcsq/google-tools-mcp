@@ -2,6 +2,7 @@ import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { trackRead } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'readSpreadsheet',
@@ -22,6 +23,7 @@ export function register(server) {
             log.info(`Reading spreadsheet ${args.spreadsheetId}, range: ${args.range}`);
             try {
                 const response = await SheetsHelpers.readRange(sheets, args.spreadsheetId, args.range, args.valueRenderOption);
+                trackRead(args.spreadsheetId);
                 const values = response.values || [];
                 return JSON.stringify({ range: args.range, values }, null, 2);
             }
