@@ -129,4 +129,60 @@ describe('buildModifyTextRequests', () => {
         // No text, no endIndex means format range is 5-5 (empty), so no format request
         expect(requests).toEqual([]);
     });
+
+    // --- Issue #13: Empty string replacement = delete ---
+    it('generates delete-only when text is empty string (delete operation)', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            endIndex: 10,
+            text: '',
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toHaveProperty('deleteContentRange');
+        expect(requests[0].deleteContentRange.range).toEqual({ startIndex: 5, endIndex: 10 });
+    });
+
+    it('does not insert text when replacement is empty string', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            endIndex: 10,
+            text: '',
+        });
+        // Should NOT have an insertText request
+        const hasInsert = requests.some(r => 'insertText' in r);
+        expect(hasInsert).toBe(false);
+    });
+
+    it('returns empty when text is undefined and no style (unchanged behavior)', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            endIndex: 10,
+        });
+        expect(requests).toEqual([]);
+    });
+
+    it('handles empty string replacement with tabId', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            endIndex: 10,
+            text: '',
+            tabId: 'my-tab',
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0].deleteContentRange.range.tabId).toBe('my-tab');
+    });
+
+    it('handles empty string replacement with formatting applied to remaining range', () => {
+        // When text is '' but style is provided, we delete the text
+        // but there's no new text to format — so style should be skipped (0-length range)
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            endIndex: 10,
+            text: '',
+            style: { bold: true },
+        });
+        // Delete + no insert + no format (formatEnd = startIndex + 0 = startIndex)
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toHaveProperty('deleteContentRange');
+    });
 });

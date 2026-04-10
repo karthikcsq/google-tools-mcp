@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, TextFindParameter, TextStyleParameters, ParagraphStyleParameters } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { guardMutation, trackMutation } from '../../readTracker.js';
 const RangeTarget = z
     .object({
     startIndex: z.number().int().min(1).describe('Start of range (inclusive, 1-based).'),
@@ -42,17 +43,17 @@ const ModifyTextParameters = DocumentIdParameter.extend({
 export function buildModifyTextRequests(opts) {
     const { startIndex, endIndex, text, style, paragraphStyle, tabId } = opts;
     const requests = [];
-    if (!text && !style && !paragraphStyle)
+    if (text === undefined && !style && !paragraphStyle)
         return requests;
-    // 1. Delete existing content (only when replacing, not insert-only)
+    // 1. Delete existing content (when replacing or deleting)
     if (endIndex !== undefined && text !== undefined) {
         const range = { startIndex, endIndex };
         if (tabId)
             range.tabId = tabId;
         requests.push({ deleteContentRange: { range } });
     }
-    // 2. Insert new text
-    if (text !== undefined) {
+    // 2. Insert new text (skip if empty string — that means "delete only")
+    if (text !== undefined && text !== '') {
         const location = { index: startIndex };
         if (tabId)
             location.tabId = tabId;
@@ -93,14 +94,17 @@ export function buildModifyTextRequests(opts) {
 export function register(server) {
     server.addTool({
         name: 'modifyText',
-        description: 'Combines text replacement/insertion and formatting in one atomic operation. ' +
-            'Can insert text at a position, replace a range or found text, apply text styling (bold, italic, etc.), ' +
-            'apply paragraph styling (alignment, headings, spacing, etc.), or any combination. ' +
-            "Use readGoogleDoc with format='json' to determine indices. " +
+        description: 'Best for small, targeted, single-location changes within a line or paragraph. ' +
+            'Can insert text at a position, replace a range or found text, delete text (replace with empty string ""), ' +
+            'apply text styling (bold, italic, etc.), apply paragraph styling (alignment, headings, spacing, etc.), or any combination. ' +
+            "Use readDocument with format='json' to determine indices. " +
             'Supports \\n for line breaks and \\t for tabs in replacement text. ' +
-            'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance.',
+            'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance. ' +
+            'For multi-line or section-level rewrites, use replaceDocumentWithMarkdown instead. ' +
+            'To add content to the end of a doc, use appendMarkdown or appendText.',
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
+            await guardMutation(args.documentId);
             const docs = await getDocsClient();
             log.info(`modifyText on doc ${args.documentId}: target=${JSON.stringify(args.target)}` +
                 `${args.text !== undefined ? `, text="${args.text.substring(0, 50)}"` : ''}` +
@@ -163,9 +167,12 @@ export function register(server) {
                     return 'No operations to perform.';
                 }
                 await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+                trackMutation(args.documentId);
                 // Build descriptive result
                 const actions = [];
-                if (endIndex !== undefined && args.text !== undefined)
+                if (endIndex !== undefined && normalizedText === '')
+                    actions.push('deleted text');
+                else if (endIndex !== undefined && args.text !== undefined)
                     actions.push('replaced text');
                 else if (args.text !== undefined)
                     actions.push('inserted text');
