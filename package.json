@@ -1,7 +1,7 @@
 {
   "name": "google-tools-mcp",
-  "version": "1.1.1",
-  "description": "Combined Google Workspace MCP server (Drive, Docs, Sheets, Gmail) with lazy-loaded tool categories",
+  "version": "1.1.2",
+  "description": "The easiest MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, and Forms. 153 tools with one-click browser auth. Read Word docs, PDFs, and spreadsheets straight from Drive.",
   "type": "module",
   "bin": {
     "google-tools-mcp": "dist/index.js"
@@ -11,15 +11,54 @@
   ],
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "google",
+    "google-workspace",
+    "google-drive",
+    "google-docs",
+    "google-sheets",
+    "google-calendar",
+    "google-forms",
     "gdrive",
     "gmail",
+    "email",
+    "send-email",
+    "read-email",
+    "email-drafts",
+    "email-labels",
+    "email-filters",
     "sheets",
-    "docs"
+    "spreadsheet",
+    "docs",
+    "calendar",
+    "forms",
+    "drive",
+    "pdf",
+    "read-pdf",
+    "word",
+    "docx",
+    "read-docx",
+    "file-reader",
+    "oauth",
+    "easy-auth",
+    "browser-auth",
+    "claude",
+    "ai",
+    "llm",
+    "ai-tools"
   ],
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:ci": "node --experimental-vm-modules node_modules/jest/bin/jest.js --ci --coverage"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karthikcsq/google-tools-mcp.git"
+  },
+  "homepage": "https://github.com/karthikcsq/google-tools-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/karthikcsq/google-tools-mcp/issues"
   },
   "license": "MIT",
   "dependencies": {
