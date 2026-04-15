@@ -1,7 +1,7 @@
 // Gmail Message tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, wrapTextBody } from '../../helpers.js';
+import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody } from '../../helpers.js';
 
 export function register(server) {
     server.addTool({
@@ -117,6 +117,7 @@ export function register(server) {
             msgHeaders.push(`Subject: ${subject}`);
             if (messageIdHeader) msgHeaders.push(`In-Reply-To: ${messageIdHeader}`);
             if (references.length) msgHeaders.push(`References: ${references.join(' ')}`);
+            const htmlMode = isHtmlBody(params.body);
             let raw;
             if (params.attachments?.length) {
                 const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -125,7 +126,7 @@ export function register(server) {
                 const parts = [];
                 parts.push([
                     `--${boundary}`,
-                    'Content-Type: text/plain; charset="UTF-8"',
+                    `Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
                     'Content-Transfer-Encoding: base64',
                     '',
                     Buffer.from(fullBody).toString('base64'),
@@ -143,10 +144,10 @@ export function register(server) {
                 const rawStr = [msgHeaders.join('\r\n'), '', parts.join('\r\n'), `--${boundary}--`].join('\r\n');
                 raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
             } else {
-                msgHeaders.push('Content-Type: text/plain; charset="UTF-8"');
+                msgHeaders.push(`Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`);
                 msgHeaders.push('Content-Transfer-Encoding: quoted-printable');
                 msgHeaders.push('MIME-Version: 1.0');
-                const rawStr = [msgHeaders.join('\r\n'), '', wrapTextBody(fullBody)].join('\r\n');
+                const rawStr = [msgHeaders.join('\r\n'), '', htmlMode ? fullBody : wrapTextBody(fullBody)].join('\r\n');
                 raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
             }
             const { data } = await gmail.users.messages.send({
@@ -232,6 +233,7 @@ export function register(server) {
             if (params.cc?.length) msgHeaders.push(`Cc: ${params.cc.join(', ')}`);
             if (params.bcc?.length) msgHeaders.push(`Bcc: ${params.bcc.join(', ')}`);
             msgHeaders.push(`Subject: ${subject}`);
+            const fwdHtmlMode = params.body && isHtmlBody(params.body);
             let raw;
             if (attachmentParts.length) {
                 const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -240,7 +242,7 @@ export function register(server) {
                 const parts = [];
                 parts.push([
                     `--${boundary}`,
-                    'Content-Type: text/plain; charset="UTF-8"',
+                    `Content-Type: ${fwdHtmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
                     'Content-Transfer-Encoding: base64',
                     '',
                     Buffer.from(fullBody).toString('base64'),
@@ -258,10 +260,10 @@ export function register(server) {
                 const rawStr = [msgHeaders.join('\r\n'), '', parts.join('\r\n'), `--${boundary}--`].join('\r\n');
                 raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
             } else {
-                msgHeaders.push('Content-Type: text/plain; charset="UTF-8"');
+                msgHeaders.push(`Content-Type: ${fwdHtmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`);
                 msgHeaders.push('Content-Transfer-Encoding: quoted-printable');
                 msgHeaders.push('MIME-Version: 1.0');
-                const rawStr = [msgHeaders.join('\r\n'), '', wrapTextBody(fullBody)].join('\r\n');
+                const rawStr = [msgHeaders.join('\r\n'), '', fwdHtmlMode ? fullBody : wrapTextBody(fullBody)].join('\r\n');
                 raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
             }
             const { data } = await gmail.users.messages.send({
