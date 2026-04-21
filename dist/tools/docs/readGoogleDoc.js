@@ -1,14 +1,30 @@
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
+import { createPatch } from 'diff';
 import { getDocsClient, getDriveClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { trackRead } from '../../readTracker.js';
+import { trackRead, getLastReadContent } from '../../readTracker.js';
+
+async function fetchModifiedTime(documentId) {
+    try {
+        const drive = await getDriveClient();
+        const res = await drive.files.get({
+            fileId: documentId,
+            fields: 'modifiedTime',
+            supportsAllDrives: true,
+        });
+        return res.data.modifiedTime || null;
+    } catch {
+        return null;
+    }
+}
+
 export function register(server) {
     server.addTool({
         name: 'readDocument',
-        description: "Reads the content of a Google Document. Returns markdown by default (formatted content suitable for editing and re-uploading with replaceDocumentWithMarkdown). Use format='text' for plain text, or format='json' for the raw document structure.",
+        description: "Reads the content of a Google Document. Returns markdown by default (formatted content suitable for editing and re-uploading with replaceDocumentWithMarkdown). Use format='text' for plain text, or format='json' for the raw document structure. Set diffFromLastRead=true (markdown only) to get a unified diff from your previous read in this session instead of the full content.",
         parameters: DocumentIdParameter.extend({
             format: z
                 .enum(['text', 'json', 'markdown'])
@@ -23,6 +39,11 @@ export function register(server) {
                 .string()
                 .optional()
                 .describe('The ID of the specific tab to read. If not specified, reads the first tab (or legacy document.body for documents without tabs).'),
+            diffFromLastRead: z
+                .boolean()
+                .optional()
+                .default(false)
+                .describe('If true and this document has already been read in this session (with format=markdown), returns a unified diff from the previous read to the current document instead of the full content. Ignored on first read or when format is not markdown.'),
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -39,7 +60,7 @@ export function register(server) {
                     fields: needsTabsContent ? '*' : fields, // Get full document if using tabs
                 });
                 log.info(`Fetched doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
-                trackRead(args.documentId);
+                const modifiedTime = await fetchModifiedTime(args.documentId);
                 // If tabId is specified, find the specific tab
                 let contentSource;
                 if (args.tabId) {
@@ -58,6 +79,10 @@ export function register(server) {
                     contentSource = res.data;
                 }
                 if (args.format === 'json') {
+                    if (args.diffFromLastRead) {
+                        log.info('diffFromLastRead ignored: only supported for format=markdown');
+                    }
+                    trackRead(args.documentId, modifiedTime);
                     const jsonContent = JSON.stringify(contentSource, null, 2);
                     // Apply length limit to JSON if specified
                     if (args.maxLength && jsonContent.length > args.maxLength) {
@@ -70,6 +95,23 @@ export function register(server) {
                     const markdownContent = docsJsonToMarkdown(contentSource);
                     const totalLength = markdownContent.length;
                     log.info(`Generated markdown: ${totalLength} characters`);
+                    if (args.diffFromLastRead) {
+                        const previous = getLastReadContent(args.documentId);
+                        if (previous !== null) {
+                            const patch = createPatch(
+                                args.documentId,
+                                previous,
+                                markdownContent,
+                                'last read',
+                                'current',
+                                { context: 3 }
+                            );
+                            trackRead(args.documentId, modifiedTime, markdownContent);
+                            return patch;
+                        }
+                        log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
+                    }
+                    trackRead(args.documentId, modifiedTime, markdownContent);
                     // Apply length limit to markdown if specified
                     if (args.maxLength && totalLength > args.maxLength) {
                         const truncatedContent = markdownContent.substring(0, args.maxLength);
@@ -78,6 +120,9 @@ export function register(server) {
                     return markdownContent;
                 }
                 // Default: Text format - extract all text content
+                if (args.diffFromLastRead) {
+                    log.info('diffFromLastRead ignored: only supported for format=markdown');
+                }
                 let textContent = '';
                 let elementCount = 0;
                 // Process all content elements from contentSource
@@ -106,6 +151,7 @@ export function register(server) {
                         });
                     }
                 });
+                trackRead(args.documentId, modifiedTime);
                 if (!textContent.trim())
                     return 'Document found, but appears empty.';
                 const totalLength = textContent.length;

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, TextFindParameter, TextStyleParameters, ParagraphStyleParameters } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
 const RangeTarget = z
     .object({
@@ -104,8 +105,13 @@ export function register(server) {
             'To add content to the end of a doc, use appendMarkdown or appendText.',
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
-            await guardMutation(args.documentId);
             const docs = await getDocsClient();
+            await guardMutation(args.documentId, {
+                contentFetcher: async () => {
+                    const current = await docs.documents.get({ documentId: args.documentId });
+                    return docsJsonToMarkdown(current.data);
+                },
+            });
             log.info(`modifyText on doc ${args.documentId}: target=${JSON.stringify(args.target)}` +
                 `${args.text !== undefined ? `, text="${args.text.substring(0, 50)}"` : ''}` +
                 `${args.style ? `, style=${JSON.stringify(args.style)}` : ''}` +

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
@@ -28,8 +29,13 @@ export function register(server) {
             path: ['endIndex'],
         }),
         execute: async (args, { log }) => {
-            await guardMutation(args.documentId);
             const docs = await getDocsClient();
+            await guardMutation(args.documentId, {
+                contentFetcher: async () => {
+                    const current = await docs.documents.get({ documentId: args.documentId });
+                    return docsJsonToMarkdown(current.data);
+                },
+            });
             log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
             if (args.endIndex <= args.startIndex) {
                 throw new UserError('End index must be greater than start index for deletion.');

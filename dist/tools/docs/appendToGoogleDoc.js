@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
@@ -24,8 +25,13 @@ export function register(server) {
                 .describe('The ID of the specific tab to append to. If not specified, appends to the first tab (or legacy document.body for documents without tabs).'),
         }),
         execute: async (args, { log }) => {
-            await guardMutation(args.documentId);
             const docs = await getDocsClient();
+            await guardMutation(args.documentId, {
+                contentFetcher: async () => {
+                    const current = await docs.documents.get({ documentId: args.documentId });
+                    return docsJsonToMarkdown(current.data);
+                },
+            });
             // Resolve text content from filePath or inline parameter
             let text = args.text;
             if (args.filePath) {

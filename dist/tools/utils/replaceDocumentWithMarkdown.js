@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { insertMarkdown, formatInsertResult } from '../../markdown-transformer/index.js';
+import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
@@ -33,8 +33,13 @@ export function register(server) {
                 .describe('If true (default), the first H1 heading (# ...) in the markdown is styled as a Google Docs TITLE instead of Heading 1. Useful when the markdown represents a full document whose first line is the document title. Set to false if the first H1 should remain a Heading 1.'),
         }),
         execute: async (args, { log }) => {
-            await guardMutation(args.documentId);
             const docs = await getDocsClient();
+            await guardMutation(args.documentId, {
+                contentFetcher: async () => {
+                    const current = await docs.documents.get({ documentId: args.documentId });
+                    return docsJsonToMarkdown(current.data);
+                },
+            });
             // Resolve markdown content from filePath or inline parameter
             let markdown = args.markdown;
             if (args.filePath) {
