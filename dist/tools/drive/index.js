@@ -15,6 +15,10 @@ import { register as listSharedWithMe } from './listSharedWithMe.js';
 import { register as downloadFile } from './downloadFile.js';
 import { register as getFilePath } from './getFilePath.js';
 import { register as uploadFile } from './uploadFile.js';
+import { register as listPermissions } from './listPermissions.js';
+import { register as addPermission } from './addPermission.js';
+import { register as removePermission } from './removePermission.js';
+import { register as updatePermission } from './updatePermission.js';
 export function registerDriveTools(server) {
     listDriveFiles(server);
     searchGoogleDocs(server);
@@ -33,4 +37,8 @@ export function registerDriveTools(server) {
     downloadFile(server);
     getFilePath(server);
     uploadFile(server);
+    listPermissions(server);
+    addPermission(server);
+    removePermission(server);
+    updatePermission(server);
 }
