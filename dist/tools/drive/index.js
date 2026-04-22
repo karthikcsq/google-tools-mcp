@@ -19,6 +19,9 @@ import { register as listPermissions } from './listPermissions.js';
 import { register as addPermission } from './addPermission.js';
 import { register as removePermission } from './removePermission.js';
 import { register as updatePermission } from './updatePermission.js';
+import { register as listRevisions } from './listRevisions.js';
+import { register as getRevision } from './getRevision.js';
+import { register as updateRevision } from './updateRevision.js';
 export function registerDriveTools(server) {
     listDriveFiles(server);
     searchGoogleDocs(server);
@@ -41,4 +44,7 @@ export function registerDriveTools(server) {
     addPermission(server);
     removePermission(server);
     updatePermission(server);
+    listRevisions(server);
+    getRevision(server);
+    updateRevision(server);
 }
