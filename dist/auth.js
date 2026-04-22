@@ -54,6 +54,8 @@ const SCOPES = [
     'https://www.googleapis.com/auth/forms.responses.readonly',
     // Slides
     'https://www.googleapis.com/auth/presentations',
+    // Tasks
+    'https://www.googleapis.com/auth/tasks',
 ];
 
 // ---------------------------------------------------------------------------

@@ -178,6 +178,12 @@ const CATEGORIES = {
             registerSlidesTools(server);
         },
     },
+    tasks: {
+        async loader(server) {
+            const { registerTasksTools } = await import('./tasks/index.js');
+            registerTasksTools(server);
+        },
+    },
 };
 
 // ---------------------------------------------------------------------------

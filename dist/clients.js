@@ -14,6 +14,7 @@ let gmailClient = null;
 let calendarClient = null;
 let formsClient = null;
 let slidesClient = null;
+let tasksClient = null;
 
 async function ensureAuth() {
     if (authClient) return;
@@ -46,6 +47,7 @@ async function reauthorize() {
     calendarClient = null;
     formsClient = null;
     slidesClient = null;
+    tasksClient = null;
     authClient = await authorize();
     logger.info('Re-authorization successful.');
 }
@@ -120,6 +122,7 @@ export function resetClients() {
     calendarClient = null;
     formsClient = null;
     slidesClient = null;
+    tasksClient = null;
 }
 
 /**
@@ -193,4 +196,18 @@ export async function getSlidesClient() {
     const { slidesClient: slides } = await initializeSlidesClient();
     if (!slides) throw new UserError('Google Slides client is not initialized.');
     return slides;
+}
+
+// --- Tasks client ---
+export async function initializeTasksClient() {
+    if (tasksClient) return { authClient, tasksClient };
+    await ensureAuth();
+    if (!tasksClient) tasksClient = google.tasks({ version: 'v1', auth: authClient });
+    return { authClient, tasksClient };
+}
+
+export async function getTasksClient() {
+    const { tasksClient: tasks } = await initializeTasksClient();
+    if (!tasks) throw new UserError('Google Tasks client is not initialized.');
+    return tasks;
 }
