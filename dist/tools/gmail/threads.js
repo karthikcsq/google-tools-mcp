@@ -1,24 +1,26 @@
 // Gmail Thread tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart } from '../../helpers.js';
+import { processMessagePart, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
 
 export function register(server) {
     server.addTool({
         name: 'get_thread',
-        description: 'Get a specific thread by ID',
+        description: 'Get a specific thread by ID. format="clean" (default) returns each message as from/to/subject/date/body. format="metadata" returns headers only. format="full" returns raw MIME trees.',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to retrieve"),
-            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+            format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format for each message: clean (default), metadata (headers only), or full (raw MIME tree)"),
+            maxBodyChars: z.number().optional().default(3000).describe("Max body characters per message in clean mode. 0 = unlimited."),
+            includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
             const { data } = await gmail.users.threads.get({ userId: 'me', id: params.id, format: 'full' });
             if (data.messages) {
                 data.messages = data.messages.map(message => {
-                    if (message.payload) {
-                        message.payload = processMessagePart(message.payload, params.includeBodyHtml);
-                    }
+                    if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars);
+                    if (params.format === 'metadata') return formatMessageMetadata(message);
+                    if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml);
                     return message;
                 });
             }
@@ -28,30 +30,46 @@ export function register(server) {
 
     server.addTool({
         name: 'list_threads',
-        description: 'List threads in the user\'s mailbox',
+        description: 'List threads in the user\'s mailbox. format="metadata" (default) auto-fetches thread details with headers only. format="clean" includes message bodies. format="full" returns raw MIME data. Omit format to get bare thread stubs (id/snippet only).',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of threads to return"),
             pageToken: z.string().optional().describe("Page token to retrieve a specific page of results"),
             q: z.string().optional().describe("Only return threads matching the specified query"),
             labelIds: z.array(z.string()).optional().describe("Only return threads with labels that match all specified label IDs"),
             includeSpamTrash: z.boolean().optional().describe("Include threads from SPAM and TRASH"),
-            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+            format: z.enum(['full', 'clean', 'metadata']).optional().describe("When set, auto-fetches full thread details. metadata=headers only (default when set), clean=with bodies, full=raw MIME tree."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max body characters per message in clean mode. 0 = unlimited."),
+            includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
-            const { data } = await gmail.users.threads.list({ userId: 'me', ...params });
-            if (data.threads) {
-                data.threads = data.threads.map(thread => {
-                    if (thread.messages) {
-                        thread.messages = thread.messages.map(message => {
-                            if (message.payload) {
-                                message.payload = processMessagePart(message.payload, params.includeBodyHtml);
+            const { data } = await gmail.users.threads.list({
+                userId: 'me',
+                maxResults: params.maxResults,
+                pageToken: params.pageToken,
+                q: params.q,
+                labelIds: params.labelIds,
+                includeSpamTrash: params.includeSpamTrash,
+            });
+            if (params.format && data.threads?.length) {
+                data.threads = await Promise.all(
+                    data.threads.map(async ({ id }) => {
+                        try {
+                            const { data: thread } = await gmail.users.threads.get({ userId: 'me', id, format: 'full' });
+                            if (thread.messages) {
+                                thread.messages = thread.messages.map(message => {
+                                    if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars);
+                                    if (params.format === 'metadata') return formatMessageMetadata(message);
+                                    if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml);
+                                    return message;
+                                });
                             }
-                            return message;
-                        });
-                    }
-                    return thread;
-                });
+                            return thread;
+                        } catch (e) {
+                            return { id, error: e.message || 'Failed to retrieve thread' };
+                        }
+                    })
+                );
             }
             return JSON.stringify(data);
         },
@@ -62,7 +80,9 @@ export function register(server) {
         description: 'Get multiple threads by ID in parallel. More efficient than calling get_thread multiple times.',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the threads to retrieve"),
-            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+            format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format for each message: clean (default), metadata (headers only), or full (raw MIME tree)"),
+            maxBodyChars: z.number().optional().default(3000).describe("Max body characters per message in clean mode. 0 = unlimited."),
+            includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
@@ -72,9 +92,9 @@ export function register(server) {
                         const { data } = await gmail.users.threads.get({ userId: 'me', id, format: 'full' });
                         if (data.messages) {
                             data.messages = data.messages.map(message => {
-                                if (message.payload) {
-                                    message.payload = processMessagePart(message.payload, params.includeBodyHtml);
-                                }
+                                if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars);
+                                if (params.format === 'metadata') return formatMessageMetadata(message);
+                                if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml);
                                 return message;
                             });
                         }
@@ -119,26 +139,15 @@ export function register(server) {
 
     server.addTool({
         name: 'trash_thread',
-        description: 'Move a thread to the trash',
+        description: 'Move a thread to the trash or restore it. Use action="trash" to move to trash, action="untrash" to restore.',
         parameters: z.object({
-            id: z.string().describe("The ID of the thread to move to trash"),
+            id: z.string().describe("The ID of the thread"),
+            action: z.enum(['trash', 'untrash']).describe("'trash' to move to trash, 'untrash' to restore"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
-            const { data } = await gmail.users.threads.trash({ userId: 'me', id: params.id });
-            return JSON.stringify(data);
-        },
-    });
-
-    server.addTool({
-        name: 'untrash_thread',
-        description: 'Remove a thread from the trash',
-        parameters: z.object({
-            id: z.string().describe("The ID of the thread to remove from trash"),
-        }),
-        execute: async (params) => {
-            const gmail = await getGmailClient();
-            const { data } = await gmail.users.threads.untrash({ userId: 'me', id: params.id });
+            const fn = params.action === 'untrash' ? 'untrash' : 'trash';
+            const { data } = await gmail.users.threads[fn]({ userId: 'me', id: params.id });
             return JSON.stringify(data);
         },
     });

@@ -212,3 +212,41 @@ export const getPlainTextBody = (messagePart) => {
     }
     return '';
 };
+
+export const formatMessageClean = (message, maxBodyChars = 3000) => {
+    const headers = message.payload?.headers || [];
+    const get = (name) => findHeader(headers, name);
+    let body = getPlainTextBody(message.payload) || '';
+    const totalChars = body.length;
+    const truncated = maxBodyChars > 0 && body.length > maxBodyChars;
+    if (truncated) body = body.slice(0, maxBodyChars);
+    return {
+        id: message.id,
+        threadId: message.threadId,
+        labelIds: message.labelIds,
+        snippet: message.snippet,
+        from: get('from'),
+        to: get('to'),
+        cc: get('cc'),
+        subject: get('subject'),
+        date: get('date'),
+        body,
+        ...(truncated ? { bodyTruncated: true, totalChars } : {}),
+    };
+};
+
+export const formatMessageMetadata = (message) => {
+    const headers = message.payload?.headers || [];
+    const get = (name) => findHeader(headers, name);
+    return {
+        id: message.id,
+        threadId: message.threadId,
+        labelIds: message.labelIds,
+        snippet: message.snippet,
+        from: get('from'),
+        to: get('to'),
+        cc: get('cc'),
+        subject: get('subject'),
+        date: get('date'),
+    };
+};

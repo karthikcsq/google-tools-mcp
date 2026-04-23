@@ -80,24 +80,4 @@ export function register(server) {
         },
     });
 
-    server.addTool({
-        name: 'update_label',
-        description: 'Update an existing label',
-        parameters: z.object({
-            id: z.string().describe("The ID of the label to update"),
-            name: z.string().optional().describe("The display name of the label"),
-            messageListVisibility: z.enum(['show', 'hide']).optional().describe("Visibility of messages with this label"),
-            labelListVisibility: z.enum(['labelShow', 'labelShowIfUnread', 'labelHide']).optional().describe("Visibility of the label in the label list"),
-            color: z.object({
-                textColor: z.string().describe("The text color as hex string"),
-                backgroundColor: z.string().describe("The background color as hex string"),
-            }).optional().describe("The color settings for the label"),
-        }),
-        execute: async (params) => {
-            const { id, ...labelData } = params;
-            const gmail = await getGmailClient();
-            const { data } = await gmail.users.labels.update({ userId: 'me', id, requestBody: labelData });
-            return JSON.stringify(data);
-        },
-    });
 }

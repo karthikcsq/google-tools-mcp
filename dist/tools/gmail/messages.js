@@ -1,7 +1,7 @@
 // Gmail Message tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody } from '../../helpers.js';
+import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
 
 export function register(server) {
     server.addTool({
@@ -279,42 +279,60 @@ export function register(server) {
 
     server.addTool({
         name: 'get_message',
-        description: 'Get a specific message by ID with format options',
+        description: 'Get a specific message by ID. format="clean" (default) returns from/to/subject/date/body as a flat object. format="metadata" returns headers only, no body. format="full" returns the raw MIME tree (current legacy behavior).',
         parameters: z.object({
             id: z.string().describe("The ID of the message to retrieve"),
-            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+            format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format: clean (default), metadata (headers only), or full (raw MIME tree)"),
+            maxBodyChars: z.number().optional().default(3000).describe("Max body characters in clean mode. 0 = unlimited. Truncated responses include bodyTruncated: true."),
+            includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
             const { data } = await gmail.users.messages.get({ userId: 'me', id: params.id, format: 'full' });
-            if (data.payload) {
-                data.payload = processMessagePart(data.payload, params.includeBodyHtml);
-            }
+            if (params.format === 'clean') return JSON.stringify(formatMessageClean(data, params.maxBodyChars));
+            if (params.format === 'metadata') return JSON.stringify(formatMessageMetadata(data));
+            if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml);
             return JSON.stringify(data);
         },
     });
 
     server.addTool({
         name: 'list_messages',
-        description: 'List messages in the user\'s mailbox with optional filtering',
+        description: 'List messages in the user\'s mailbox with optional filtering. format="metadata" (default) auto-fetches message details for each result. format="clean" includes the message body. format="full" returns raw MIME data. Omit format to get bare IDs only.',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of messages to return (1-500)"),
             pageToken: z.string().optional().describe("Page token to retrieve a specific page of results"),
             q: z.string().optional().describe("Only return messages matching the specified query (same format as Gmail search box)"),
             labelIds: z.array(z.string()).optional().describe("Only return messages with labels that match all specified label IDs"),
             includeSpamTrash: z.boolean().optional().describe("Include messages from SPAM and TRASH"),
-            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+            format: z.enum(['full', 'clean', 'metadata']).optional().describe("When set, auto-fetches full message details. metadata=headers only (default when set), clean=with body, full=raw MIME tree."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max body characters in clean mode. 0 = unlimited."),
+            includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
-            const { data } = await gmail.users.messages.list({ userId: 'me', ...params });
-            if (data.messages) {
-                data.messages = data.messages.map(message => {
-                    if (message.payload) {
-                        message.payload = processMessagePart(message.payload, params.includeBodyHtml);
-                    }
-                    return message;
-                });
+            const { data } = await gmail.users.messages.list({
+                userId: 'me',
+                maxResults: params.maxResults,
+                pageToken: params.pageToken,
+                q: params.q,
+                labelIds: params.labelIds,
+                includeSpamTrash: params.includeSpamTrash,
+            });
+            if (params.format && data.messages?.length) {
+                data.messages = await Promise.all(
+                    data.messages.map(async ({ id }) => {
+                        try {
+                            const { data: msg } = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+                            if (params.format === 'clean') return formatMessageClean(msg, params.maxBodyChars);
+                            if (params.format === 'metadata') return formatMessageMetadata(msg);
+                            if (msg.payload) msg.payload = processMessagePart(msg.payload, params.includeBodyHtml);
+                            return msg;
+                        } catch (e) {
+                            return { id, error: e.message || 'Failed to retrieve message' };
+                        }
+                    })
+                );
             }
             return JSON.stringify(data);
         },
@@ -322,98 +340,61 @@ export function register(server) {
 
     server.addTool({
         name: 'modify_message',
-        description: 'Modify the labels on a message',
+        description: 'Modify the labels on one or more messages. Pass a single id or an array of ids.',
         parameters: z.object({
-            id: z.string().describe("The ID of the message to modify"),
+            ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs to modify"),
             addLabelIds: z.array(z.string()).optional().describe("Label IDs to add"),
             removeLabelIds: z.array(z.string()).optional().describe("Label IDs to remove"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
-            const { data } = await gmail.users.messages.modify({
-                userId: 'me', id: params.id,
-                requestBody: { addLabelIds: params.addLabelIds, removeLabelIds: params.removeLabelIds }
+            const ids = Array.isArray(params.ids) ? params.ids : [params.ids];
+            const { data } = await gmail.users.messages.batchModify({
+                userId: 'me',
+                requestBody: { ids, addLabelIds: params.addLabelIds, removeLabelIds: params.removeLabelIds },
             });
-            return JSON.stringify(data);
+            return JSON.stringify(data || { success: true });
         },
     });
 
     server.addTool({
         name: 'delete_message',
-        description: 'Immediately and permanently delete a message',
+        description: 'Immediately and permanently delete one or more messages. Pass a single id or an array of ids.',
         parameters: z.object({
-            id: z.string().describe("The ID of the message to delete"),
+            ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs to delete"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
-            const { data } = await gmail.users.messages.delete({ userId: 'me', id: params.id });
+            const ids = Array.isArray(params.ids) ? params.ids : [params.ids];
+            const { data } = await gmail.users.messages.batchDelete({ userId: 'me', requestBody: { ids } });
             return JSON.stringify(data || { success: true });
         },
     });
 
     server.addTool({
         name: 'trash_message',
-        description: 'Move a message to the trash',
+        description: 'Move a message to the trash or restore it. Use action="trash" to move to trash, action="untrash" to restore.',
         parameters: z.object({
-            id: z.string().describe("The ID of the message to move to trash"),
+            id: z.string().describe("The ID of the message"),
+            action: z.enum(['trash', 'untrash']).describe("'trash' to move to trash, 'untrash' to restore"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
-            const { data } = await gmail.users.messages.trash({ userId: 'me', id: params.id });
+            const fn = params.action === 'untrash' ? 'untrash' : 'trash';
+            const { data } = await gmail.users.messages[fn]({ userId: 'me', id: params.id });
             return JSON.stringify(data);
         },
     });
 
-    server.addTool({
-        name: 'untrash_message',
-        description: 'Remove a message from the trash',
-        parameters: z.object({
-            id: z.string().describe("The ID of the message to remove from trash"),
-        }),
-        execute: async (params) => {
-            const gmail = await getGmailClient();
-            const { data } = await gmail.users.messages.untrash({ userId: 'me', id: params.id });
-            return JSON.stringify(data);
-        },
-    });
-
-    server.addTool({
-        name: 'batch_delete_messages',
-        description: 'Delete multiple messages',
-        parameters: z.object({
-            ids: z.array(z.string()).describe("The IDs of the messages to delete"),
-        }),
-        execute: async (params) => {
-            const gmail = await getGmailClient();
-            const { data } = await gmail.users.messages.batchDelete({ userId: 'me', requestBody: { ids: params.ids } });
-            return JSON.stringify(data || { success: true });
-        },
-    });
-
-    server.addTool({
-        name: 'batch_modify_messages',
-        description: 'Modify the labels on multiple messages',
-        parameters: z.object({
-            ids: z.array(z.string()).describe("The IDs of the messages to modify"),
-            addLabelIds: z.array(z.string()).optional().describe("Label IDs to add"),
-            removeLabelIds: z.array(z.string()).optional().describe("Label IDs to remove"),
-        }),
-        execute: async (params) => {
-            const gmail = await getGmailClient();
-            const { data } = await gmail.users.messages.batchModify({
-                userId: 'me',
-                requestBody: { ids: params.ids, addLabelIds: params.addLabelIds, removeLabelIds: params.removeLabelIds }
-            });
-            return JSON.stringify(data || { success: true });
-        },
-    });
 
     server.addTool({
         name: 'batch_get_messages',
         description: 'Get multiple messages by ID in parallel. More efficient than calling get_message multiple times.',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the messages to retrieve"),
-            includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
+            format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format: clean (default), metadata (headers only), or full (raw MIME tree)"),
+            maxBodyChars: z.number().optional().default(3000).describe("Max body characters in clean mode. 0 = unlimited."),
+            includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
@@ -421,9 +402,9 @@ export function register(server) {
                 params.ids.map(async (id) => {
                     try {
                         const { data } = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
-                        if (data.payload) {
-                            data.payload = processMessagePart(data.payload, params.includeBodyHtml);
-                        }
+                        if (params.format === 'clean') return formatMessageClean(data, params.maxBodyChars);
+                        if (params.format === 'metadata') return formatMessageMetadata(data);
+                        if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml);
                         return data;
                     } catch (error) {
                         return { id, error: error.message || 'Failed to retrieve message' };
