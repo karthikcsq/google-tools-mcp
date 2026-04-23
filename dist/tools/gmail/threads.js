@@ -139,16 +139,26 @@ export function register(server) {
 
     server.addTool({
         name: 'trash_thread',
-        description: 'Move a thread to the trash or restore it. Use action="trash" to move to trash, action="untrash" to restore.',
+        description: 'Move one or more threads to the trash or restore them. Pass a single id or an array of ids.',
         parameters: z.object({
-            id: z.string().describe("The ID of the thread"),
+            ids: z.union([z.string(), z.array(z.string())]).describe("Thread ID or array of thread IDs"),
             action: z.enum(['trash', 'untrash']).describe("'trash' to move to trash, 'untrash' to restore"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
+            const ids = Array.isArray(params.ids) ? params.ids : [params.ids];
             const fn = params.action === 'untrash' ? 'untrash' : 'trash';
-            const { data } = await gmail.users.threads[fn]({ userId: 'me', id: params.id });
-            return JSON.stringify(data);
+            const results = await Promise.all(
+                ids.map(async (id) => {
+                    try {
+                        const { data } = await gmail.users.threads[fn]({ userId: 'me', id });
+                        return data;
+                    } catch (e) {
+                        return { id, error: e.message || `Failed to ${fn} thread` };
+                    }
+                })
+            );
+            return JSON.stringify(ids.length === 1 ? results[0] : results);
         },
     });
 }
