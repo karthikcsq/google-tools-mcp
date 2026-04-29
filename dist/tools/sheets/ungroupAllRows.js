@@ -39,8 +39,9 @@ export function register(server) {
                 };
                 // deleteDimensionGroup removes one level at a time; call repeatedly until no groups remain
                 let removed = 0;
-                // eslint-disable-next-line no-constant-condition
-                while (true) {
+                const MAX_UNGROUP_ITERATIONS = 500;
+                let iteration = 0;
+                while (iteration++ < MAX_UNGROUP_ITERATIONS) {
                     try {
                         await sheets.spreadsheets.batchUpdate({
                             spreadsheetId: args.spreadsheetId,
@@ -52,6 +53,9 @@ export function register(server) {
                         // When no groups remain the API returns an error — treat as done
                         break;
                     }
+                }
+                if (iteration >= MAX_UNGROUP_ITERATIONS) {
+                    logger.warn(`ungroupAllRows: hit safety cap of ${MAX_UNGROUP_ITERATIONS} iterations — some groups may remain.`);
                 }
                 const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
                 return `${sheetUrl}\nSuccessfully removed all row groups (${removed} level(s) cleared).`;

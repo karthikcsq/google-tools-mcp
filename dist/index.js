@@ -52,6 +52,17 @@ process.on('SIGTERM', () => {
     logger.info('Received SIGTERM — shutting down.');
     process.exit(0);
 });
+// Exit when the MCP client closes the stdio pipe.
+// This is the primary shutdown path for stdio MCP servers — SIGTERM is not
+// reliably delivered on Windows when a parent process exits.
+process.stdin.on('close', () => {
+    logger.info('stdin closed — MCP client disconnected. Shutting down.');
+    process.exit(0);
+});
+process.stdin.on('end', () => {
+    logger.info('stdin ended — MCP client disconnected. Shutting down.');
+    process.exit(0);
+});
 process.on('exit', (code) => {
     logger.info(`Process exiting with code ${code}.`);
 });
