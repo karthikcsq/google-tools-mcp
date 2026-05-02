@@ -247,24 +247,39 @@ async function authenticate() {
     logger.info('Opening browser for Google authorization...');
     logger.info('If the browser does not open, visit this URL:', authorizeUrl);
     openBrowser(authorizeUrl);
+    const OAUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
     const code = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            server.close();
+            reject(new Error(
+                'OAuth flow timed out after 5 minutes. ' +
+                'Please re-run `google-tools-mcp auth` or call the `troubleshoot` tool.'
+            ));
+        }, OAUTH_TIMEOUT_MS);
         server.on('request', (req, res) => {
             const url = new URL(req.url, `http://localhost:${port}`);
             const authCode = url.searchParams.get('code');
             const error = url.searchParams.get('error');
             if (error) {
+                clearTimeout(timeout);
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end('<h1>Authorization failed</h1><p>You can close this tab.</p>');
-                reject(new Error(`Authorization error: ${error}`));
                 server.close();
+                reject(new Error(`Authorization error: ${error}`));
                 return;
             }
             if (authCode) {
+                clearTimeout(timeout);
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end('<h1>Google authorization successful!</h1><p>You can close this tab.</p>');
-                resolve(authCode);
                 server.close();
+                resolve(authCode);
+                return;
             }
+            // Unrecognized request (favicon, prefetch, etc.) — respond so the
+            // browser does not hang, but do not settle the Promise.
+            res.writeHead(404);
+            res.end();
         });
     });
     const { tokens } = await oAuth2Client.getToken(code);
