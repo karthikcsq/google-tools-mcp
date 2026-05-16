@@ -29,6 +29,7 @@ import { register as updateTableRange } from './updateTableRange.js';
 import { register as appendTableRows } from './appendTableRows.js';
 import { register as insertChart } from './insertChart.js';
 import { register as deleteChart } from './deleteChart.js';
+import { register as deleteColumns } from './deleteColumns.js';
 export function registerSheetsTools(server) {
     readSpreadsheet(server);
     writeSpreadsheet(server);
@@ -61,4 +62,5 @@ export function registerSheetsTools(server) {
     appendTableRows(server);
     insertChart(server);
     deleteChart(server);
+    deleteColumns(server);
 }
