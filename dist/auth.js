@@ -56,6 +56,9 @@ const SCOPES = [
     'https://www.googleapis.com/auth/presentations',
     // Tasks
     'https://www.googleapis.com/auth/tasks',
+    // Service Usage — lets the setup wizard programmatically enable the APIs above
+    // in the user's own project (Service Usage API itself is enabled by default).
+    'https://www.googleapis.com/auth/service.management',
 ];
 
 // ---------------------------------------------------------------------------
@@ -336,5 +339,5 @@ export async function authorize() {
 }
 
 export async function runAuthFlow() {
-    await authenticate();
+    return await authenticate();
 }
