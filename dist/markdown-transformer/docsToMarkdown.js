@@ -4,6 +4,65 @@
  * When these are detected on a text run, we render backtick code in markdown.
  */
 const CODE_FONT_FAMILIES = new Set(['Roboto Mono', 'Courier New', 'Consolas', 'monospace']);
+/**
+ * Inspects a Google Docs JSON structure for content that docsJsonToMarkdown
+ * cannot represent. Returns an array of human-readable warning strings (empty
+ * if the document converts losslessly). Call before replaceDocumentWithMarkdown
+ * to give the AI a heads-up about what will be permanently lost.
+ *
+ * Checked: images, headers/footers, footnotes, custom text/highlight colors,
+ * non-default paragraph alignment (CENTER, RIGHT, JUSTIFIED).
+ */
+export function checkMarkdownFidelity(docData) {
+    const warnings = [];
+    // Images
+    const imageCount = docData.inlineObjects ? Object.keys(docData.inlineObjects).length : 0;
+    if (imageCount > 0) {
+        warnings.push(`${imageCount} image(s) — will be removed`);
+    }
+    // Headers / footers
+    if (docData.headers && Object.keys(docData.headers).length > 0) {
+        warnings.push('Document headers — will be removed');
+    }
+    if (docData.footers && Object.keys(docData.footers).length > 0) {
+        warnings.push('Document footers — will be removed');
+    }
+    // Footnotes
+    const footnoteCount = docData.footnotes ? Object.keys(docData.footnotes).length : 0;
+    if (footnoteCount > 0) {
+        warnings.push(`${footnoteCount} footnote(s) — will be removed`);
+    }
+    // Scan body paragraphs for custom colors and non-default alignment
+    let hasCustomColors = false;
+    let hasNonDefaultAlignment = false;
+    const content = docData.body?.content ?? [];
+    for (const element of content) {
+        if (!element.paragraph) continue;
+        const alignment = element.paragraph.paragraphStyle?.alignment;
+        if (alignment && alignment !== 'START' && alignment !== 'UNSPECIFIED') {
+            hasNonDefaultAlignment = true;
+        }
+        for (const pe of (element.paragraph.elements ?? [])) {
+            const style = pe.textRun?.textStyle;
+            if (!style) continue;
+            const fgRgb = style.foregroundColor?.color?.rgbColor;
+            if (fgRgb && ((fgRgb.red ?? 0) > 0 || (fgRgb.green ?? 0) > 0 || (fgRgb.blue ?? 0) > 0)) {
+                hasCustomColors = true;
+            }
+            const bgRgb = style.backgroundColor?.color?.rgbColor;
+            if (bgRgb && ((bgRgb.red ?? 0) > 0 || (bgRgb.green ?? 0) > 0 || (bgRgb.blue ?? 0) > 0)) {
+                hasCustomColors = true;
+            }
+        }
+    }
+    if (hasCustomColors) {
+        warnings.push('Custom text/highlight colors — will be lost');
+    }
+    if (hasNonDefaultAlignment) {
+        warnings.push('Non-default paragraph alignment (center/right/justified) — will be lost');
+    }
+    return warnings;
+}
 // --- Main Conversion ---
 /**
  * Converts Google Docs JSON structure to a markdown string.

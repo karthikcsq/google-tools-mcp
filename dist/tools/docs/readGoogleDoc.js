@@ -4,7 +4,7 @@ import { createPatch } from 'diff';
 import { getDocsClient, getDriveClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
+import { docsJsonToMarkdown, checkMarkdownFidelity } from '../../markdown-transformer/index.js';
 import { trackRead, getLastReadContent } from '../../readTracker.js';
 
 async function fetchModifiedTime(documentId) {
@@ -95,6 +95,10 @@ export function register(server) {
                     const markdownContent = docsJsonToMarkdown(contentSource);
                     const totalLength = markdownContent.length;
                     log.info(`Generated markdown: ${totalLength} characters`);
+                    // Run fidelity check on the full doc JSON (not the tab-scoped subset)
+                    // so we catch headers/footers/footnotes/inlineObjects stored at doc root.
+                    const fidelitySource = args.tabId ? res.data : contentSource;
+                    const fidelityWarnings = checkMarkdownFidelity(fidelitySource);
                     if (args.diffFromLastRead) {
                         const previous = getLastReadContent(args.documentId);
                         if (previous !== null) {
@@ -111,13 +115,24 @@ export function register(server) {
                         }
                         log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
                     }
+                    // Store clean markdown (without warning) for future diffs and guardMutation
                     trackRead(args.documentId, modifiedTime, markdownContent);
                     // Apply length limit to markdown if specified
+                    let output;
                     if (args.maxLength && totalLength > args.maxLength) {
                         const truncatedContent = markdownContent.substring(0, args.maxLength);
-                        return `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`;
+                        output = `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`;
+                    } else {
+                        output = markdownContent;
                     }
-                    return markdownContent;
+                    // Append fidelity warning after the markdown so the AI knows what
+                    // replaceDocumentWithMarkdown would permanently destroy.
+                    if (fidelityWarnings.length > 0) {
+                        output += '\n\n---\n⚠️ FORMATTING LOSS WARNING: This document contains content that cannot be represented in markdown. Calling replaceDocumentWithMarkdown will permanently lose:\n' +
+                            fidelityWarnings.map(w => `  • ${w}`).join('\n') +
+                            '\nConsider using modifyText or appendMarkdown for targeted edits instead.\n---';
+                    }
+                    return output;
                 }
                 // Default: Text format - extract all text content
                 if (args.diffFromLastRead) {

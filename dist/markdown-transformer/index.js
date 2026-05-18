@@ -12,7 +12,7 @@
 import { docsJsonToMarkdown } from './docsToMarkdown.js';
 import { convertMarkdownToRequests } from './markdownToDocs.js';
 import { executeBatchUpdateWithSplitting, findTabById } from '../googleDocsApiHelpers.js';
-export { docsJsonToMarkdown } from './docsToMarkdown.js';
+export { docsJsonToMarkdown, checkMarkdownFidelity } from './docsToMarkdown.js';
 /** Formats InsertMarkdownResult into a concise human-readable debug summary. */
 export function formatInsertResult(result) {
     const lines = [];
