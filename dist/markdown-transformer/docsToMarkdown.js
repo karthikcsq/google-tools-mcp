@@ -13,7 +13,7 @@ const CODE_FONT_FAMILIES = new Set(['Roboto Mono', 'Courier New', 'Consolas', 'm
  * Checked: images, headers/footers, footnotes, custom text/highlight colors,
  * non-default paragraph alignment (CENTER, RIGHT, JUSTIFIED).
  */
-export function checkMarkdownFidelity(docData) {
+export function checkMarkdownFidelity(docData, scanContent = null) {
     const warnings = [];
     // Images
     const imageCount = docData.inlineObjects ? Object.keys(docData.inlineObjects).length : 0;
@@ -32,17 +32,12 @@ export function checkMarkdownFidelity(docData) {
     if (footnoteCount > 0) {
         warnings.push(`${footnoteCount} footnote(s) — will be removed`);
     }
-    // Scan body paragraphs for custom colors and non-default alignment
+    // Scan for custom colors and non-default alignment.
+    // scanContent overrides the body to scan (used in tab mode to target the active tab).
     let hasCustomColors = false;
     let hasNonDefaultAlignment = false;
-    const content = docData.body?.content ?? [];
-    for (const element of content) {
-        if (!element.paragraph) continue;
-        const alignment = element.paragraph.paragraphStyle?.alignment;
-        if (alignment && alignment !== 'START' && alignment !== 'UNSPECIFIED') {
-            hasNonDefaultAlignment = true;
-        }
-        for (const pe of (element.paragraph.elements ?? [])) {
+    function scanParagraphElements(elements) {
+        for (const pe of elements) {
             const style = pe.textRun?.textStyle;
             if (!style) continue;
             const fgRgb = style.foregroundColor?.color?.rgbColor;
@@ -55,6 +50,24 @@ export function checkMarkdownFidelity(docData) {
             }
         }
     }
+    function scanBodyContent(bodyContent) {
+        for (const element of bodyContent) {
+            if (element.paragraph) {
+                const alignment = element.paragraph.paragraphStyle?.alignment;
+                if (alignment && alignment !== 'START' && alignment !== 'UNSPECIFIED') {
+                    hasNonDefaultAlignment = true;
+                }
+                scanParagraphElements(element.paragraph.elements ?? []);
+            } else if (element.table) {
+                for (const row of (element.table.tableRows ?? [])) {
+                    for (const cell of (row.tableCells ?? [])) {
+                        scanBodyContent(cell.content ?? []);
+                    }
+                }
+            }
+        }
+    }
+    scanBodyContent(scanContent ?? docData.body?.content ?? []);
     if (hasCustomColors) {
         warnings.push('Custom text/highlight colors — will be lost');
     }
