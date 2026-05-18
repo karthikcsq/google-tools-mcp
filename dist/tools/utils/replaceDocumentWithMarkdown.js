@@ -1,4 +1,6 @@
 import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
@@ -6,17 +8,23 @@ import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
+
+function getWorkspacePath(documentId) {
+    return path.join(os.tmpdir(), 'google-tools-mcp', `${documentId}.md`);
+}
 export function register(server) {
     server.addTool({
         name: 'replaceDocumentWithMarkdown',
         description: "Best for rewriting entire sections or full documents. Replaces the entire document body with content parsed from markdown. " +
             "Supports headings, bold, italic, strikethrough, links, and bullet/numbered lists. " +
-            "Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes. " +
+            "PREFERRED WORKFLOW: (1) call readDocument first — it saves the content to a local temp file and returns the path, " +
+            "(2) edit that file locally with your changes, (3) call this tool with filePath pointing to it. " +
+            "Prefer filePath over the inline markdown parameter — it avoids content truncation and lets you review edits before pushing. " +
             "For small single-location edits (one line or paragraph), use modifyText instead. " +
             "To add content without rewriting, use appendMarkdown.",
         parameters: DocumentIdParameter.extend({
-            markdown: z.string().optional().describe('The markdown content to apply to the document. For content longer than ~2000 characters, prefer writing to a local file first and passing filePath instead.'),
-            filePath: z.string().optional().describe('Path to a local markdown file to use as content. Takes precedence over the markdown parameter. Use this for large documents to avoid truncation.'),
+            markdown: z.string().optional().describe('Inline markdown content. Prefer filePath instead — use this only for short content under ~2000 characters where writing a file first is impractical.'),
+            filePath: z.string().optional().describe('Path to a local markdown file. PREFERRED over inline markdown — use the path returned by readDocument, edit that file, then pass it here.'),
             preserveTitle: z
                 .boolean()
                 .optional()
@@ -52,6 +60,18 @@ export function register(server) {
             }
             if (!markdown || markdown.length === 0) {
                 throw new UserError('Either markdown or filePath must be provided with non-empty content.');
+            }
+            // When inline markdown is given (not filePath), persist it to the temp workspace so
+            // there is always a local copy of what was pushed.
+            if (!args.filePath && markdown) {
+                try {
+                    const workspacePath = getWorkspacePath(args.documentId);
+                    await fs.mkdir(path.dirname(workspacePath), { recursive: true });
+                    await fs.writeFile(workspacePath, markdown, 'utf-8');
+                    log.info(`Saved working copy to ${workspacePath}`);
+                } catch (e) {
+                    log.info(`Could not save working copy: ${e.message}`);
+                }
             }
             log.info(`Replacing doc ${args.documentId} with markdown (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
