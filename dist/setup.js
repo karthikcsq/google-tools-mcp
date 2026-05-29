@@ -382,7 +382,33 @@ export async function runSetup() {
     // ── Step 5: Install ──────────────────────────────────────────────────
     p.log.step(chalk.cyan.bold('Step 5') + chalk.dim(' · ') + 'Install MCP server');
 
+    const hasCodex = hasCli('codex');
     const hasClaude = hasCli('claude');
+    if (hasCodex) {
+        const install = await p.confirm({
+            message: 'Add to Codex as an MCP server?',
+            active: 'yes',
+            inactive: 'no',
+            initialValue: true,
+        });
+        if (p.isCancel(install)) cancelled();
+
+        if (install) {
+            const s = p.spinner();
+            s.start('Adding to Codex...');
+            try {
+                await runCommand('codex mcp add google -- npx -y google-tools-mcp');
+                s.stop('Added to Codex!');
+            } catch (err) {
+                s.stop('Failed to add automatically');
+                p.log.warn(`Error: ${err.message}`);
+                p.log.message(`Run manually:\n${chalk.cyan('codex mcp add google -- npx -y google-tools-mcp')}`);
+            }
+        } else {
+            p.log.message(`To add later:\n${chalk.cyan('codex mcp add google -- npx -y google-tools-mcp')}`);
+        }
+    }
+
     if (hasClaude) {
         const install = await p.confirm({
             message: 'Add to Claude Code as a user-scope MCP server?',
@@ -406,9 +432,14 @@ export async function runSetup() {
         } else {
             p.log.message(`To add later:\n${chalk.cyan('claude mcp add -s user google -- npx -y google-tools-mcp')}`);
         }
-    } else {
+    }
+
+    if (!hasCodex && !hasClaude) {
         p.log.message([
             'Add to your MCP client:',
+            '',
+            chalk.dim('Codex:'),
+            chalk.cyan('  codex mcp add google -- npx -y google-tools-mcp'),
             '',
             chalk.dim('Claude Code:'),
             chalk.cyan('  claude mcp add -s user google -- npx -y google-tools-mcp'),

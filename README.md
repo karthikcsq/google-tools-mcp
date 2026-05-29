@@ -36,7 +36,7 @@ The wizard walks you through:
 3. Creating OAuth credentials
 4. Authenticating with Google
 
-After setup, just add it to your MCP client (see [Step 3](#step-3-add-to-your-mcp-client) below).
+The setup wizard can add the MCP server to Codex or Claude Code automatically when their CLIs are installed. You can also add it manually later (see [Step 3](#step-3-add-to-your-mcp-client) below).
 
 ### Manual Setup
 
@@ -109,7 +109,22 @@ Add the credentials directly to your MCP configuration:
 
 ### Step 3: Add to Your MCP Client
 
-#### Claude Code (recommended)
+#### Codex
+
+```bash
+codex mcp add google -- npx -y google-tools-mcp
+```
+
+With env vars (Option C):
+
+```bash
+codex mcp add google \
+  --env GOOGLE_CLIENT_ID=your-client-id \
+  --env GOOGLE_CLIENT_SECRET=your-client-secret \
+  -- npx -y google-tools-mcp
+```
+
+#### Claude Code
 
 **User-scope** (available in all projects):
 
