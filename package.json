@@ -54,7 +54,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/karthikcsq/google-tools-mcp.git"
+    "url": "git+https://github.com/karthikcsq/google-tools-mcp.git"
   },
   "homepage": "https://github.com/karthikcsq/google-tools-mcp#readme",
   "bugs": {
