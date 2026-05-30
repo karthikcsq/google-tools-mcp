@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildModifyTextRequests } from './modifyText.js';
+import { stripMarkdownListMarkersForSearch } from '../../googleDocsApiHelpers.js';
 
 describe('buildModifyTextRequests', () => {
   it('generates deleteContentRange + insertText for a replacement', () => {
@@ -86,5 +87,22 @@ describe('escape sequence normalization (issue #9)', () => {
 
   it('returns undefined for undefined input', () => {
     assert.equal(normalize(undefined), undefined);
+  });
+});
+
+describe('markdown list marker search normalization', () => {
+  it('strips unordered markdown list markers copied from readDocument markdown', () => {
+    const input = '- Existing Google Docs bullet text';
+    assert.equal(stripMarkdownListMarkersForSearch(input), 'Existing Google Docs bullet text');
+  });
+
+  it('strips ordered markdown list markers copied from readDocument markdown', () => {
+    const input = '1. Existing Google Docs numbered item';
+    assert.equal(stripMarkdownListMarkersForSearch(input), 'Existing Google Docs numbered item');
+  });
+
+  it('preserves indentation when stripping nested list markers', () => {
+    const input = '  - Nested item';
+    assert.equal(stripMarkdownListMarkersForSearch(input), '  Nested item');
   });
 });

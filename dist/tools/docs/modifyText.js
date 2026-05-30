@@ -101,6 +101,7 @@ export function register(server) {
             "Use readDocument with format='json' to determine indices. " +
             'Supports \\n for line breaks and \\t for tabs in replacement text. ' +
             'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance. ' +
+            "textToFind tolerates markdown list markers copied from readDocument(format='markdown'), because Google Docs stores bullets outside text runs. " +
             'For multi-line or section-level rewrites, use replaceDocumentWithMarkdown instead. ' +
             'To add content to the end of a doc, use appendMarkdown or appendText.',
         parameters: ModifyTextParameters,

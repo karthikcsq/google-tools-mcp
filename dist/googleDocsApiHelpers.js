@@ -292,6 +292,18 @@ function normalizeForSearch(text) {
     return result;
 }
 /**
+ * readDocument(format='markdown') includes markdown list markers ("- ",
+ * "1. ", etc.), but Google Docs text runs do not include list glyphs. When a
+ * caller copies a bullet line from markdown into textToFind, retry without
+ * those line-start markers.
+ */
+export function stripMarkdownListMarkersForSearch(text) {
+    return text
+        .split('\n')
+        .map((line) => line.replace(/^(\s*)(?:[-*+]\s+|\d+[.)]\s+)/, '$1'))
+        .join('\n');
+}
+/**
  * Finds all occurrences of textToFind in the document and returns them with
  * surrounding context and mapped document indices.
  */
@@ -332,6 +344,15 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         const { fullText, segments } = result;
         logger.debug(`Document ${documentId} contains ${segments.length} text segments and ${fullText.length} characters in total.`);
         let allOccurrences = findAllOccurrences(fullText, segments, textToFind);
+        // Fallback: markdown exports include list markers that are absent from
+        // Docs API text runs. Retry after stripping line-start markdown markers.
+        if (allOccurrences.length === 0) {
+            const listMarkerStrippedSearch = stripMarkdownListMarkersForSearch(textToFind);
+            if (listMarkerStrippedSearch !== textToFind) {
+                logger.debug(`Exact match failed, trying match without markdown list markers`);
+                allOccurrences = findAllOccurrences(fullText, segments, listMarkerStrippedSearch);
+            }
+        }
         // Fallback: try normalized matching if exact match fails (issue #11)
         if (allOccurrences.length === 0) {
             const normalizedSearch = normalizeForSearch(textToFind);
@@ -345,6 +366,39 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
                     const idx = normalizedFull.indexOf(normalizedSearch, searchFrom);
                     if (idx === -1) break;
                     // Map normalized positions back to original fullText positions
+                    const origStart = posMap[idx];
+                    const origEnd = posMap[idx + normalizedSearch.length];
+                    const docStart = mapFullTextPositionToDocIndex(origStart, segments);
+                    const docEnd = mapFullTextPositionToDocIndex(origEnd, segments);
+                    const contextStart = Math.max(0, origStart - CONTEXT_CHARS);
+                    const contextEnd = Math.min(fullText.length, origEnd + CONTEXT_CHARS);
+                    const before = fullText.slice(contextStart, origStart).replace(/\n/g, '\\n');
+                    const match = fullText.slice(origStart, origEnd).replace(/\n/g, '\\n');
+                    const after = fullText.slice(origEnd, contextEnd).replace(/\n/g, '\\n');
+                    const context = `${contextStart > 0 ? '...' : ''}${before}[${match}]${after}${contextEnd < fullText.length ? '...' : ''}`;
+                    allOccurrences.push({
+                        instance: allOccurrences.length + 1,
+                        startIndex: docStart,
+                        endIndex: docEnd,
+                        context,
+                    });
+                    searchFrom = idx + 1;
+                }
+            }
+        }
+        // Fallback: combine both approaches for copied markdown bullets that
+        // also contain smart quotes, non-breaking spaces, or typographic dashes.
+        if (allOccurrences.length === 0) {
+            const listMarkerStrippedSearch = stripMarkdownListMarkersForSearch(textToFind);
+            const normalizedSearch = normalizeForSearch(listMarkerStrippedSearch);
+            const { normalized: normalizedFull, posMap } = normalizeWithPositionMap(fullText);
+            if (normalizedSearch !== textToFind || normalizedFull !== fullText) {
+                logger.debug(`Exact match failed, trying normalized match without markdown list markers`);
+                const CONTEXT_CHARS = 30;
+                let searchFrom = 0;
+                while (true) {
+                    const idx = normalizedFull.indexOf(normalizedSearch, searchFrom);
+                    if (idx === -1) break;
                     const origStart = posMap[idx];
                     const origEnd = posMap[idx + normalizedSearch.length];
                     const docStart = mapFullTextPositionToDocIndex(origStart, segments);
