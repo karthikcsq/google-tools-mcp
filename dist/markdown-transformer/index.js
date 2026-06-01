@@ -61,12 +61,12 @@ export async function extractMarkdown(docs, documentId, options) {
         return docsJsonToMarkdown({
             body: targetTab.documentTab.body,
             lists: targetTab.documentTab.lists,
-        });
+        }, options);
     }
     return docsJsonToMarkdown({
         body: res.data.body,
         lists: res.data.lists,
-    });
+    }, options);
 }
 // --- insertMarkdown ---
 /**

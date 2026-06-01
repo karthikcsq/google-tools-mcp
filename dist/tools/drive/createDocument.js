@@ -15,7 +15,7 @@ export function register(server) {
             initialContent: z
                 .string()
                 .optional()
-                .describe('Initial content to add to the document. By default, markdown syntax is converted to formatted Google Docs content (headings, bold, italic, links, lists, etc.).'),
+                .describe('Initial content to add to the document. By default, markdown syntax is converted to formatted Google Docs content (headings, bold, italic, links, tables, lists, and rich markdown HTML extensions).'),
             contentFormat: z
                 .enum(['markdown', 'raw'])
                 .optional()

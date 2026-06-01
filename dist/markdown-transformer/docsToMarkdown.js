@@ -15,34 +15,43 @@ const CODE_FONT_FAMILIES = new Set(['Roboto Mono', 'Courier New', 'Consolas', 'm
  * underline, links, code), ordered & unordered lists with nesting, tables,
  * and section breaks.
  */
-export function docsJsonToMarkdown(docData) {
+export function docsJsonToMarkdown(docData, options = {}) {
     const body = docData.body;
     if (!body?.content) {
         return '';
     }
     const lists = docData.lists ?? {};
+    const conversionOptions = {
+        richMarkdown: options.plainMarkdown ? false : options.richMarkdown ?? true,
+    };
     let markdown = '';
     for (const element of body.content) {
         if (element.paragraph) {
-            markdown += convertParagraph(element.paragraph, lists);
+            markdown += convertParagraph(element.paragraph, lists, conversionOptions);
         }
         else if (element.table) {
-            markdown += convertTable(element.table);
+            markdown += convertTable(element.table, conversionOptions);
         }
         else if (element.sectionBreak) {
+            if (isInitialDocumentSectionBreak(element)) {
+                continue;
+            }
             markdown += '\n---\n\n';
         }
     }
     return markdown.trim();
 }
+function isInitialDocumentSectionBreak(element) {
+    return element.endIndex === 1 && element.startIndex === undefined;
+}
 // --- Paragraph Conversion ---
-function convertParagraph(paragraph, lists) {
+function convertParagraph(paragraph, lists, options) {
     // 1. Determine paragraph type
     const headingLevel = getHeadingLevel(paragraph);
     const listInfo = getListInfo(paragraph, lists);
     // 2. Extract text content with inline formatting
     const elements = paragraph.elements ?? [];
-    const text = extractFormattedText(elements);
+    const text = extractFormattedText(elements, options);
     // 3. Format based on type
     if (headingLevel && text.trim()) {
         const hashes = '#'.repeat(Math.min(headingLevel, 6));
@@ -54,7 +63,15 @@ function convertParagraph(paragraph, lists) {
         return `${indent}${marker} ${text.trim()}\n`;
     }
     if (text.trim()) {
-        return `${text.trim()}\n\n`;
+        const trimmed = text.trim();
+        if (options.richMarkdown && isBlockquoteParagraph(paragraph)) {
+            return `<blockquote>${trimmed}</blockquote>\n\n`;
+        }
+        const alignment = paragraphAlignmentToHtml(paragraph.paragraphStyle?.alignment);
+        if (options.richMarkdown && alignment) {
+            return `<p align="${alignment}">${trimmed}</p>\n\n`;
+        }
+        return `${trimmed}\n\n`;
     }
     return '\n';
 }
@@ -91,16 +108,16 @@ function getListInfo(paragraph, lists) {
     return { ordered, nestingLevel };
 }
 // --- Text Run Conversion ---
-function extractFormattedText(elements) {
+function extractFormattedText(elements, options) {
     let result = '';
     for (const element of elements) {
         if (element.textRun) {
-            result += convertTextRun(element.textRun);
+            result += convertTextRun(element.textRun, options);
         }
     }
     return result;
 }
-function convertTextRun(textRun) {
+function convertTextRun(textRun, options) {
     let text = textRun.content ?? '';
     const style = textRun.textStyle;
     if (!style)
@@ -134,20 +151,72 @@ function convertTextRun(textRun) {
     if (style.strikethrough) {
         formatted = `~~${formatted}~~`;
     }
-    if (style.underline && !style.link) {
+    if (options.richMarkdown && style.underline && !style.link) {
         formatted = `<u>${formatted}</u>`;
+    }
+    if (options.richMarkdown) {
+        formatted = applyRichTextStyle(formatted, style);
     }
     if (style.link?.url) {
         formatted = `[${formatted}](${style.link.url})`;
     }
     return formatted + (trailingNewline ? '\n' : '');
 }
+function applyRichTextStyle(text, style) {
+    const styles = [];
+    const fg = rgbColorToHex(style.foregroundColor?.color?.rgbColor);
+    const bg = rgbColorToHex(style.backgroundColor?.color?.rgbColor);
+    const fontSize = style.fontSize?.magnitude;
+    const fontFamily = style.weightedFontFamily?.fontFamily;
+    if (fg)
+        styles.push(`color:${fg}`);
+    if (bg)
+        styles.push(`background-color:${bg}`);
+    if (typeof fontSize === 'number')
+        styles.push(`font-size:${fontSize}pt`);
+    if (fontFamily && !CODE_FONT_FAMILIES.has(fontFamily))
+        styles.push(`font-family:${escapeHtmlAttr(fontFamily)}`);
+    if (styles.length === 0)
+        return text;
+    return `<span style="${styles.join(';')}">${text}</span>`;
+}
 function isCodeStyled(style) {
     const fontFamily = style.weightedFontFamily?.fontFamily;
     return typeof fontFamily === 'string' && CODE_FONT_FAMILIES.has(fontFamily);
 }
+function isBlockquoteParagraph(paragraph) {
+    const style = paragraph.paragraphStyle;
+    return Boolean(style?.borderLeft ||
+        style?.indentStart?.magnitude >= 30 ||
+        style?.indentFirstLine?.magnitude >= 30);
+}
+function paragraphAlignmentToHtml(alignment) {
+    switch (alignment) {
+        case 'CENTER':
+            return 'center';
+        case 'END':
+        case 'RIGHT':
+            return 'right';
+        case 'JUSTIFIED':
+            return 'justify';
+        default:
+            return null;
+    }
+}
+function rgbColorToHex(rgb) {
+    if (!rgb)
+        return null;
+    const toHex = (value) => {
+        const normalized = Math.max(0, Math.min(255, Math.round((value ?? 0) * 255)));
+        return normalized.toString(16).padStart(2, '0');
+    };
+    return `#${toHex(rgb.red)}${toHex(rgb.green)}${toHex(rgb.blue)}`;
+}
+function escapeHtmlAttr(value) {
+    return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
 // --- Table Conversion ---
-function convertTable(table) {
+function convertTable(table, options) {
     if (!table.tableRows || table.tableRows.length === 0) {
         return '';
     }
@@ -162,15 +231,15 @@ function convertTable(table) {
             continue;
         let rowText = '|';
         for (const cell of row.tableCells) {
-            const cellText = extractCellText(cell);
+            const cellText = extractCellText(cell, options);
             rowText += ` ${cellText} |`;
         }
         markdown += rowText + '\n';
         // Add header separator after the first row
         if (isFirstRow) {
             let separator = '|';
-            for (let i = 0; i < row.tableCells.length; i++) {
-                separator += ' --- |';
+            for (const cell of row.tableCells) {
+                separator += ` ${tableAlignmentMarker(cell)} |`;
             }
             markdown += separator + '\n';
             isFirstRow = false;
@@ -242,18 +311,22 @@ function convertCodeBlockTable(table) {
     }
     return '\n```\n' + codeText + '\n```\n\n';
 }
-function extractCellText(cell) {
+function tableAlignmentMarker(cell) {
+    const alignment = paragraphAlignmentToHtml(cell.content?.[0]?.paragraph?.paragraphStyle?.alignment);
+    if (alignment === 'center')
+        return ':---:';
+    if (alignment === 'right')
+        return '---:';
+    return '---';
+}
+function extractCellText(cell, options) {
     let text = '';
     if (!cell.content)
         return text;
     for (const element of cell.content) {
         if (element.paragraph?.elements) {
-            for (const pe of element.paragraph.elements) {
-                if (pe.textRun?.content) {
-                    text += pe.textRun.content.replace(/\n/g, ' ').trim();
-                }
-            }
+            text += extractFormattedText(element.paragraph.elements, options).replace(/\n/g, ' ');
         }
     }
-    return text;
+    return text.trim().replace(/\|/g, '\\|');
 }

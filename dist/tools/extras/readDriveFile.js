@@ -53,7 +53,12 @@ export function register(server) {
                 .enum(['text', 'json', 'markdown'])
                 .optional()
                 .default('markdown')
-                .describe("Output format for Google Docs: 'markdown' (default), 'text' (plain text), 'json' (raw structure). Ignored for non-Doc files."),
+                .describe("Output format for Google Docs: 'markdown' (default, preserves rich text/paragraph formatting with a small HTML allowlist), 'text' (plain text), 'json' (raw structure). Ignored for non-Doc files."),
+            plainMarkdown: z
+                .boolean()
+                .optional()
+                .default(false)
+                .describe('For Google Docs markdown output only. If true, suppresses rich HTML-style formatting extensions and returns cleaner portable markdown.'),
             range: z
                 .string()
                 .optional()
@@ -118,7 +123,7 @@ async function readGoogleDoc(args, fileMeta, log) {
     if (args.format === 'json') {
         content = JSON.stringify(res.data, null, 2);
     } else if (args.format === 'markdown') {
-        content = docsJsonToMarkdown(res.data);
+        content = docsJsonToMarkdown(res.data, { plainMarkdown: args.plainMarkdown });
     } else {
         // text
         let textContent = '';

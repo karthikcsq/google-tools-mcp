@@ -4,7 +4,7 @@ import { MarkdownConversionError } from '../types.js';
 // --- Markdown-it Setup ---
 function createParser() {
     return new MarkdownIt({
-        html: false,
+        html: true,
         linkify: true,
         typographer: false,
         breaks: false,
@@ -22,6 +22,79 @@ function getHeadingLevel(token) {
         return null;
     const match = token.tag.match(/h(\d)/);
     return match ? parseInt(match[1], 10) : null;
+}
+function getAttr(token, name) {
+    return token.attrs?.find((attr) => attr[0].toLowerCase() === name.toLowerCase())?.[1] ?? null;
+}
+function parseAlignmentFromStyle(style) {
+    const match = style?.match(/(?:^|;)\s*text-align\s*:\s*(left|center|right|justify)\s*(?:;|$)/i);
+    if (!match)
+        return null;
+    return alignmentToDocs(match[1]);
+}
+function alignmentToDocs(value) {
+    switch (value.toLowerCase()) {
+        case 'center':
+            return 'CENTER';
+        case 'right':
+            return 'END';
+        case 'justify':
+        case 'justified':
+            return 'JUSTIFIED';
+        case 'left':
+            return 'START';
+        default:
+            return null;
+    }
+}
+function parseStyleDeclarations(style) {
+    const formatting = {};
+    if (!style)
+        return formatting;
+    for (const declaration of style.split(';')) {
+        const [rawName, ...rawValueParts] = declaration.split(':');
+        if (!rawName || rawValueParts.length === 0)
+            continue;
+        const name = rawName.trim().toLowerCase();
+        const value = rawValueParts.join(':').trim();
+        if ((name === 'color' || name === 'foreground-color') && /^#[0-9a-f]{6}$/i.test(value)) {
+            formatting.foregroundColor = value;
+        }
+        else if ((name === 'background-color' || name === 'background') && /^#[0-9a-f]{6}$/i.test(value)) {
+            formatting.backgroundColor = value;
+        }
+        else if (name === 'font-size') {
+            const match = value.match(/^(\d+(?:\.\d+)?)pt$/i);
+            if (match)
+                formatting.fontSize = Number(match[1]);
+        }
+        else if (name === 'font-family') {
+            const family = value.split(',')[0]?.trim().replace(/^['"]|['"]$/g, '');
+            if (family && /^[\w .-]+$/.test(family))
+                formatting.fontFamily = family;
+        }
+    }
+    return formatting;
+}
+function parseRichHtmlTag(rawHtml) {
+    const trimmed = rawHtml.trim();
+    const match = trimmed.match(/^<\/?\s*([a-z0-9]+)([^>]*)\/?>$/i);
+    if (!match)
+        return null;
+    const tag = match[1].toLowerCase();
+    const attrs = match[2] ?? '';
+    const closing = /^<\s*\//.test(trimmed);
+    const selfClosing = /\/\s*>$/.test(trimmed);
+    return { tag, attrs, closing, selfClosing };
+}
+function parseAttrs(rawAttrs) {
+    const attrs = {};
+    const attrRegex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+    let match;
+    while ((match = attrRegex.exec(rawAttrs)) !== null) {
+        attrs[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4] ?? '';
+    }
+    return attrs;
 }
 const CODE_FONT_FAMILY = 'Roboto Mono';
 const CODE_TEXT_HEX = '#188038';
@@ -86,6 +159,8 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
         codeBlockRanges: [],
         tableState: undefined,
         inTableCell: false,
+        paragraphFormattingStack: [],
+        htmlParagraphPushStack: [],
         tabId,
         titleConsumed: false,
         firstHeadingAsTitle: options?.firstHeadingAsTitle ?? false,
@@ -231,10 +306,12 @@ function processToken(token, context) {
         case 'th_open':
         case 'td_open': {
             if (context.tableState) {
+                const alignment = parseAlignmentFromStyle(getAttr(token, 'style'));
                 context.tableState.currentCell = {
                     text: '',
                     isHeader: context.tableState.inHeader || token.type === 'th_open',
                     textRanges: [],
+                    alignment,
                 };
                 context.inTableCell = true;
             }
@@ -264,9 +341,20 @@ function processToken(token, context) {
         case 'hr':
             handleHorizontalRule(context);
             break;
-        // Blockquotes (skip for now)
         case 'blockquote_open':
+            context.paragraphFormattingStack.push({
+                indentStart: 36,
+                borderLeft: true,
+            });
+            break;
         case 'blockquote_close':
+            context.paragraphFormattingStack.pop();
+            break;
+        case 'html_inline':
+            handleHtmlInlineToken(token, context);
+            break;
+        case 'html_block':
+            handleHtmlBlockToken(token, context);
             break;
         default:
             break;
@@ -306,6 +394,106 @@ function handleHorizontalRule(context) {
     insertText('\n', context);
     context.hrRanges.push({ startIndex: start, endIndex: context.currentIndex });
 }
+function handleHtmlInlineToken(token, context) {
+    const parsed = parseRichHtmlTag(token.content);
+    if (!parsed)
+        return;
+    const attrs = parseAttrs(parsed.attrs);
+    if (parsed.selfClosing && parsed.tag !== 'br')
+        return;
+    if (parsed.closing) {
+        switch (parsed.tag) {
+            case 'u':
+                popFormatting(context, 'underline');
+                break;
+            case 'mark':
+                popFormatting(context, 'backgroundColor');
+                break;
+            case 'span':
+                popFormatting(context, 'richSpan');
+                break;
+            case 'p':
+            case 'div': {
+                const pushed = context.htmlParagraphPushStack.pop();
+                if (pushed)
+                    context.paragraphFormattingStack.pop();
+                break;
+            }
+            case 'blockquote':
+                context.paragraphFormattingStack.pop();
+                break;
+        }
+        return;
+    }
+    switch (parsed.tag) {
+        case 'u':
+            context.formattingStack.push({ underline: true });
+            break;
+        case 'mark':
+            context.formattingStack.push({ backgroundColor: '#FFF2CC' });
+            break;
+        case 'span': {
+            const formatting = parseStyleDeclarations(attrs.style);
+            if (hasFormatting(formatting)) {
+                formatting.richSpan = true;
+                context.formattingStack.push(formatting);
+            }
+            break;
+        }
+        case 'p':
+        case 'div': {
+            const alignment = alignmentToDocs(attrs.align ?? '') ?? parseAlignmentFromStyle(attrs.style);
+            if (alignment) {
+                context.paragraphFormattingStack.push({ alignment });
+                context.htmlParagraphPushStack.push(true);
+            }
+            else {
+                context.htmlParagraphPushStack.push(false);
+            }
+            break;
+        }
+        case 'blockquote':
+            context.paragraphFormattingStack.push({
+                indentStart: 36,
+                borderLeft: true,
+            });
+            break;
+        case 'br':
+            insertText('\n', context);
+            break;
+    }
+}
+function handleHtmlBlockToken(token, context) {
+    const content = token.content.trim();
+    const match = content.match(/^<\s*(p|div|blockquote)\b([^>]*)>([\s\S]*)<\/\s*\1\s*>$/i);
+    if (!match)
+        return;
+    const tag = match[1].toLowerCase();
+    const attrs = parseAttrs(match[2]);
+    const inner = match[3];
+    let pushedParagraphFormatting = false;
+    if (tag === 'blockquote') {
+        context.paragraphFormattingStack.push({
+            indentStart: 36,
+            borderLeft: true,
+        });
+        pushedParagraphFormatting = true;
+    }
+    else {
+        const alignment = alignmentToDocs(attrs.align ?? '') ?? parseAlignmentFromStyle(attrs.style);
+        if (alignment) {
+            context.paragraphFormattingStack.push({ alignment });
+            pushedParagraphFormatting = true;
+        }
+    }
+    const parser = createParser();
+    for (const child of parser.parse(inner, {})) {
+        processToken(child, context);
+    }
+    if (pushedParagraphFormatting) {
+        context.paragraphFormattingStack.pop();
+    }
+}
 // --- Paragraph Handlers ---
 function handleParagraphOpen(context) {
     if (context.listStack.length === 0) {
@@ -329,10 +517,15 @@ function handleParagraphClose(context) {
     }
     // Record the range for normal paragraphs (not list items) so we can apply spacing later
     if (paragraphStart !== undefined && context.listStack.length === 0) {
-        context.normalParagraphRanges.push({
+        const paragraphRange = {
             startIndex: paragraphStart,
             endIndex: context.currentIndex,
-        });
+        };
+        const paragraphFormatting = mergeParagraphFormattingStack(context.paragraphFormattingStack);
+        if (hasParagraphFormatting(paragraphFormatting)) {
+            paragraphRange.formatting = paragraphFormatting;
+        }
+        context.normalParagraphRanges.push(paragraphRange);
     }
     context.currentParagraphStart = undefined;
 }
@@ -548,15 +741,13 @@ function handleTableClose(tableState, context) {
                 if (range.formatting.bold ||
                     range.formatting.italic ||
                     range.formatting.strikethrough ||
-                    range.formatting.code) {
-                    const styleReq = buildUpdateTextStyleRequest(absStart, absEnd, {
-                        bold: range.formatting.bold,
-                        italic: range.formatting.italic,
-                        strikethrough: range.formatting.strikethrough,
-                        fontFamily: range.formatting.code ? CODE_FONT_FAMILY : undefined,
-                        foregroundColor: range.formatting.code ? CODE_TEXT_HEX : undefined,
-                        backgroundColor: range.formatting.code ? CODE_BACKGROUND_HEX : undefined,
-                    }, context.tabId);
+                    range.formatting.code ||
+                    range.formatting.underline ||
+                    range.formatting.foregroundColor ||
+                    range.formatting.backgroundColor ||
+                    range.formatting.fontSize ||
+                    range.formatting.fontFamily) {
+                    const styleReq = buildUpdateTextStyleRequest(absStart, absEnd, formattingToTextStyle(range.formatting), context.tabId);
                     if (styleReq)
                         context.formatRequests.push(styleReq.request);
                 }
@@ -571,6 +762,11 @@ function handleTableClose(tableState, context) {
                 const headerStyleReq = buildUpdateTextStyleRequest(adjustedIndex, adjustedIndex + cell.text.length, { bold: true }, context.tabId);
                 if (headerStyleReq)
                     context.formatRequests.push(headerStyleReq.request);
+            }
+            if (cell.alignment) {
+                const alignmentReq = buildUpdateParagraphStyleRequest(adjustedIndex, adjustedIndex + cell.text.length, { alignment: cell.alignment }, context.tabId);
+                if (alignmentReq)
+                    context.formatRequests.push(alignmentReq.request);
             }
             cumulativeTextLength += cell.text.length;
         }
@@ -606,6 +802,18 @@ function mergeFormattingStack(stack) {
             merged.code = state.code;
         if (state.link !== undefined)
             merged.link = state.link;
+        if (state.underline !== undefined)
+            merged.underline = state.underline;
+        if (state.foregroundColor !== undefined)
+            merged.foregroundColor = state.foregroundColor;
+        if (state.backgroundColor !== undefined)
+            merged.backgroundColor = state.backgroundColor;
+        if (state.fontSize !== undefined)
+            merged.fontSize = state.fontSize;
+        if (state.fontFamily !== undefined)
+            merged.fontFamily = state.fontFamily;
+        if (state.richSpan !== undefined)
+            merged.richSpan = state.richSpan;
     }
     return merged;
 }
@@ -614,7 +822,41 @@ function hasFormatting(formatting) {
         formatting.italic === true ||
         formatting.strikethrough === true ||
         formatting.code === true ||
-        formatting.link !== undefined);
+        formatting.link !== undefined ||
+        formatting.underline === true ||
+        formatting.foregroundColor !== undefined ||
+        formatting.backgroundColor !== undefined ||
+        formatting.fontSize !== undefined ||
+        formatting.fontFamily !== undefined);
+}
+function formattingToTextStyle(formatting) {
+    return {
+        bold: formatting.bold,
+        italic: formatting.italic,
+        underline: formatting.underline,
+        strikethrough: formatting.strikethrough,
+        fontFamily: formatting.code ? CODE_FONT_FAMILY : formatting.fontFamily,
+        fontSize: formatting.fontSize,
+        foregroundColor: formatting.code ? CODE_TEXT_HEX : formatting.foregroundColor,
+        backgroundColor: formatting.code ? CODE_BACKGROUND_HEX : formatting.backgroundColor,
+    };
+}
+function mergeParagraphFormattingStack(stack) {
+    const merged = {};
+    for (const state of stack) {
+        if (state.alignment !== undefined)
+            merged.alignment = state.alignment;
+        if (state.indentStart !== undefined)
+            merged.indentStart = state.indentStart;
+        if (state.borderLeft !== undefined)
+            merged.borderLeft = state.borderLeft;
+    }
+    return merged;
+}
+function hasParagraphFormatting(formatting) {
+    return (formatting.alignment !== undefined ||
+        formatting.indentStart !== undefined ||
+        formatting.borderLeft === true);
 }
 function popFormatting(context, type) {
     for (let i = context.formattingStack.length - 1; i >= 0; i--) {
@@ -661,15 +903,13 @@ function finalizeFormatting(context) {
         if (range.formatting.bold ||
             range.formatting.italic ||
             range.formatting.strikethrough ||
-            range.formatting.code) {
-            const styleRequest = buildUpdateTextStyleRequest(range.startIndex, range.endIndex, {
-                bold: range.formatting.bold,
-                italic: range.formatting.italic,
-                strikethrough: range.formatting.strikethrough,
-                fontFamily: range.formatting.code ? CODE_FONT_FAMILY : undefined,
-                foregroundColor: range.formatting.code ? CODE_TEXT_HEX : undefined,
-                backgroundColor: range.formatting.code ? CODE_BACKGROUND_HEX : undefined,
-            }, context.tabId);
+            range.formatting.code ||
+            range.formatting.underline ||
+            range.formatting.foregroundColor ||
+            range.formatting.backgroundColor ||
+            range.formatting.fontSize ||
+            range.formatting.fontFamily) {
+            const styleRequest = buildUpdateTextStyleRequest(range.startIndex, range.endIndex, formattingToTextStyle(range.formatting), context.tabId);
             if (styleRequest) {
                 context.formatRequests.push(styleRequest.request);
             }
@@ -711,6 +951,38 @@ function finalizeFormatting(context) {
                 fields: 'spaceBelow',
             },
         });
+        if (normalRange.formatting) {
+            const paraStyle = {};
+            const fields = [];
+            if (normalRange.formatting.alignment) {
+                paraStyle.alignment = normalRange.formatting.alignment;
+                fields.push('alignment');
+            }
+            if (normalRange.formatting.indentStart !== undefined) {
+                paraStyle.indentStart = { magnitude: normalRange.formatting.indentStart, unit: 'PT' };
+                fields.push('indentStart');
+            }
+            if (normalRange.formatting.borderLeft) {
+                paraStyle.borderLeft = {
+                    color: {
+                        color: { rgbColor: { red: 0.75, green: 0.75, blue: 0.75 } },
+                    },
+                    width: { magnitude: 2, unit: 'PT' },
+                    padding: { magnitude: 6, unit: 'PT' },
+                    dashStyle: 'SOLID',
+                };
+                fields.push('borderLeft');
+            }
+            if (fields.length > 0) {
+                context.formatRequests.push({
+                    updateParagraphStyle: {
+                        range,
+                        paragraphStyle: paraStyle,
+                        fields: fields.join(','),
+                    },
+                });
+            }
+        }
     }
     // List trailing spacing: apply spaceBelow to the last paragraph of each
     // top-level list so there is a visible gap between the list and the content

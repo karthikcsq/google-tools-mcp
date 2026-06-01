@@ -181,6 +181,23 @@ describe('docsJsonToMarkdown', () => {
         expect(docsJsonToMarkdown({ body: { content: [] } })).toBe('');
     });
 
+    it('ignores the boilerplate initial document section break', () => {
+        const docData = {
+            body: {
+                content: [
+                    { endIndex: 1, sectionBreak: {} },
+                    {
+                        paragraph: {
+                            elements: [{ textRun: { content: 'First paragraph\n' } }],
+                        },
+                    },
+                ],
+            },
+        };
+        const md = docsJsonToMarkdown(docData);
+        expect(md).toBe('First paragraph');
+    });
+
     it('converts section breaks to horizontal rules', () => {
         const docData = {
             body: {
@@ -201,6 +218,110 @@ describe('docsJsonToMarkdown', () => {
         };
         const md = docsJsonToMarkdown(docData);
         expect(md).toContain('---');
+    });
+
+    it('emits rich markdown by default for Docs-only text styles', () => {
+        const docData = {
+            body: {
+                content: [
+                    {
+                        paragraph: {
+                            paragraphStyle: { alignment: 'CENTER' },
+                            elements: [
+                                {
+                                    textRun: {
+                                        content: 'Styled',
+                                        textStyle: {
+                                            underline: true,
+                                            foregroundColor: { color: { rgbColor: { red: 1, green: 0, blue: 0 } } },
+                                            backgroundColor: { color: { rgbColor: { red: 1, green: 1, blue: 0 } } },
+                                            fontSize: { magnitude: 14, unit: 'PT' },
+                                            weightedFontFamily: { fontFamily: 'Arial' },
+                                        },
+                                    },
+                                },
+                                { textRun: { content: '\n' } },
+                            ],
+                        },
+                    },
+                ],
+            },
+        };
+        const md = docsJsonToMarkdown(docData);
+        expect(md).toContain('<p align="center">');
+        expect(md).toContain('<u>');
+        expect(md).toContain('color:#ff0000');
+        expect(md).toContain('background-color:#ffff00');
+        expect(md).toContain('font-size:14pt');
+        expect(md).toContain('font-family:Arial');
+    });
+
+    it('can opt out of rich markdown extensions', () => {
+        const docData = {
+            body: {
+                content: [
+                    {
+                        paragraph: {
+                            paragraphStyle: { alignment: 'CENTER' },
+                            elements: [
+                                {
+                                    textRun: {
+                                        content: 'Styled\n',
+                                        textStyle: {
+                                            underline: true,
+                                            foregroundColor: { color: { rgbColor: { red: 1, green: 0, blue: 0 } } },
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        };
+        const md = docsJsonToMarkdown(docData, { plainMarkdown: true });
+        expect(md).toBe('Styled');
+    });
+
+    it('emits markdown table alignment from Google Docs table cells', () => {
+        const docData = {
+            body: {
+                content: [
+                    {
+                        table: {
+                            tableRows: [
+                                {
+                                    tableCells: [
+                                        {
+                                            content: [
+                                                {
+                                                    paragraph: {
+                                                        paragraphStyle: { alignment: 'CENTER' },
+                                                        elements: [{ textRun: { content: 'Name\n' } }],
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                        {
+                                            content: [
+                                                {
+                                                    paragraph: {
+                                                        paragraphStyle: { alignment: 'END' },
+                                                        elements: [{ textRun: { content: 'Value\n' } }],
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        };
+        const md = docsJsonToMarkdown(docData);
+        expect(md).toContain('| :---: | ---: |');
     });
 });
 
@@ -274,6 +395,43 @@ describe('convertMarkdownToRequests', () => {
         expect(allText).toContain('Item 1');
         expect(allText).toContain('Item 2');
         expect(allText).toContain('Item 3');
+    });
+
+    it('parses rich inline HTML formatting into text style requests', () => {
+        const requests = convertMarkdownToRequests('<u><span style="color:#ff0000; background-color:#ffff00; font-size:14pt; font-family:Arial">Styled</span></u>', 1);
+        const richRequest = requests.find(r =>
+            r.updateTextStyle?.textStyle?.underline === true &&
+            r.updateTextStyle?.textStyle?.foregroundColor?.color?.rgbColor?.red === 1 &&
+            r.updateTextStyle?.textStyle?.backgroundColor?.color?.rgbColor?.red === 1 &&
+            r.updateTextStyle?.textStyle?.fontSize?.magnitude === 14 &&
+            r.updateTextStyle?.textStyle?.weightedFontFamily?.fontFamily === 'Arial'
+        );
+        expect(richRequest).toBeDefined();
+    });
+
+    it('parses paragraph alignment wrappers', () => {
+        const requests = convertMarkdownToRequests('<p align="center">Centered text</p>', 1);
+        const alignmentRequest = requests.find(r =>
+            r.updateParagraphStyle?.paragraphStyle?.alignment === 'CENTER'
+        );
+        expect(alignmentRequest).toBeDefined();
+    });
+
+    it('styles markdown blockquotes instead of dropping them', () => {
+        const requests = convertMarkdownToRequests('> Quoted text', 1);
+        const quoteRequest = requests.find(r =>
+            r.updateParagraphStyle?.paragraphStyle?.indentStart?.magnitude === 36 &&
+            r.updateParagraphStyle?.paragraphStyle?.borderLeft
+        );
+        expect(quoteRequest).toBeDefined();
+    });
+
+    it('applies markdown table alignment to table cell paragraphs', () => {
+        const requests = convertMarkdownToRequests('| Left | Right |\n| --- | ---: |\n| a | b |', 1);
+        const alignmentRequest = requests.find(r =>
+            r.updateParagraphStyle?.paragraphStyle?.alignment === 'END'
+        );
+        expect(alignmentRequest).toBeDefined();
     });
 
     // --- Issue #14: default foreground color ---
