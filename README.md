@@ -109,6 +109,24 @@ Add the credentials directly to your MCP configuration:
 
 ### Step 3: Add to Your MCP Client
 
+#### Local unpublished checkout
+
+To call a local tool directly without publishing or using MCP transport, use
+`local:tool`. This loads the unpublished checkout, registers the real tools in
+memory, validates the arguments, and calls the tool's `execute` function:
+
+```bash
+npm run local:tool -- list
+npm run local:tool -- help
+npm run local:tool -- readDocument documentId=... format=markdown
+```
+
+For larger arguments, put JSON in a file and pass it with `@`:
+
+```bash
+npm run local:tool -- replaceDocumentWithMarkdown @args.json
+```
+
 #### Codex
 
 ```bash
