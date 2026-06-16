@@ -1051,7 +1051,18 @@ function finalizeFormatting(context) {
             },
         });
     }
-    // Horizontal rule styling (bottom border on empty paragraphs)
+    // Horizontal rule styling (bottom border on empty paragraphs).
+    //
+    // The Google Docs REST API cannot insert a true native horizontal rule
+    // (the `horizontalRule` ParagraphElement produced by Insert > Horizontal
+    // line); that remains an open API limitation
+    // (https://issuetracker.google.com/issues/152996327). A bottom border on
+    // an empty paragraph is the closest achievable emulation.
+    //
+    // Color/weight are matched to Google's native rule, which renders at
+    // #878787 (rgb 135/255) and 1pt thick — measured by rasterizing a PDF
+    // export of a doc containing native rules. The previous value (0.75 grey,
+    // #bfbfbf) rendered noticeably lighter than the real thing.
     for (const hrRange of context.hrRanges) {
         const range = {
             startIndex: hrRange.startIndex,
@@ -1066,7 +1077,7 @@ function finalizeFormatting(context) {
                 paragraphStyle: {
                     borderBottom: {
                         color: {
-                            color: { rgbColor: { red: 0.75, green: 0.75, blue: 0.75 } },
+                            color: { rgbColor: { red: 0.5294117647, green: 0.5294117647, blue: 0.5294117647 } },
                         },
                         width: { magnitude: 1, unit: 'PT' },
                         padding: { magnitude: 6, unit: 'PT' },
