@@ -293,12 +293,47 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_CLIENT_ID` | No* | OAuth 2.0 Client ID |
 | `GOOGLE_CLIENT_SECRET` | No* | OAuth 2.0 Client Secret |
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
+| `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients)) |
+| `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
+| `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
 
 \* Not required as env vars if you provide credentials via `.env` file or `credentials.json` (see [Step 2](#step-2-provide-your-credentials)).
+
+## Shared HTTP mode (one server for many clients)
+
+By default the server uses **stdio** transport: each MCP client spawns its own
+`google-tools-mcp` process. If you run several clients at once (e.g. many editor
+or agent sessions), that's one Node process per session, each holding memory.
+
+Set `GOOGLE_MCP_TRANSPORT=http` to instead run a **single long-lived server**
+that every client shares over a localhost URL — one process regardless of how
+many clients connect:
+
+```bash
+# start one shared server (keep it running; e.g. a login item or service)
+GOOGLE_MCP_TRANSPORT=http GOOGLE_MCP_PORT=3939 google-tools-mcp
+```
+
+Then point each client at the URL instead of a spawn command:
+
+```json
+{
+  "mcpServers": {
+    "google": { "type": "http", "url": "http://localhost:3939/mcp" }
+  }
+}
+```
+
+Notes:
+- The shared server does **not** start or stop with your clients — you manage
+  its lifecycle (start it at login / run it as a service).
+- All clients share one OAuth/token state and one process. FastMCP's HTTP-stream
+  transport tracks a separate session per client, so concurrent use is fine.
+- Auth (`google-tools-mcp auth` / `setup`) is unchanged and still uses stdio.
 
 ## Migrating from gdrive-tools-mcp / gmail-tools-mcp
 

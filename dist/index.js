@@ -37,6 +37,16 @@ if (process.argv[2] === 'auth') {
     }
 }
 
+// --- Transport selection ---
+// Default is stdio (one server spawned per MCP client, the classic model).
+// Set GOOGLE_MCP_TRANSPORT=http to run a single long-lived HTTP server that
+// many clients share over a localhost URL — one process instead of one per
+// session. Accepts "http" or "httpStream" (both map to FastMCP httpStream).
+const transportEnv = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase();
+const useHttp = transportEnv === 'http' || transportEnv === 'httpstream';
+const httpPort = Number(process.env.GOOGLE_MCP_PORT) || 3939;
+const httpEndpoint = process.env.GOOGLE_MCP_ENDPOINT || '/mcp';
+
 // --- Process lifecycle logging ---
 process.on('uncaughtException', (error) => {
     logger.error('Uncaught Exception:', error);
@@ -55,14 +65,20 @@ process.on('SIGTERM', () => {
 // Exit when the MCP client closes the stdio pipe.
 // This is the primary shutdown path for stdio MCP servers — SIGTERM is not
 // reliably delivered on Windows when a parent process exits.
-process.stdin.on('close', () => {
-    logger.info('stdin closed — MCP client disconnected. Shutting down.');
-    process.exit(0);
-});
-process.stdin.on('end', () => {
-    logger.info('stdin ended — MCP client disconnected. Shutting down.');
-    process.exit(0);
-});
+//
+// IMPORTANT: only wire these in stdio mode. In HTTP mode the server is a
+// detached daemon whose stdin ends/closes immediately at launch — attaching
+// these there would make the daemon exit the instant it starts.
+if (!useHttp) {
+    process.stdin.on('close', () => {
+        logger.info('stdin closed — MCP client disconnected. Shutting down.');
+        process.exit(0);
+    });
+    process.stdin.on('end', () => {
+        logger.info('stdin ended — MCP client disconnected. Shutting down.');
+        process.exit(0);
+    });
+}
 process.on('exit', (code) => {
     logger.info(`Process exiting with code ${code}.`);
 });
@@ -77,8 +93,17 @@ await registerAllTools(server);
 
 try {
     logger.info('Starting google-tools-mcp server...');
-    await server.start({ transportType: 'stdio' });
-    logger.info('MCP Server running using stdio. Awaiting client connection...');
+    if (useHttp) {
+        await server.start({
+            transportType: 'httpStream',
+            httpStream: { port: httpPort, endpoint: httpEndpoint },
+        });
+        logger.info(`MCP Server running over HTTP at http://localhost:${httpPort}${httpEndpoint}`);
+        logger.info('Shared mode: point every client at this URL instead of spawning per-session stdio servers.');
+    } else {
+        await server.start({ transportType: 'stdio' });
+        logger.info('MCP Server running using stdio. Awaiting client connection...');
+    }
     logger.info('Google auth will run automatically on first tool call.');
 } catch (startError) {
     logger.error('FATAL: Server failed to start:', startError.message || startError);
