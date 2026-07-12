@@ -256,30 +256,32 @@ Google Sheets operations.
 
 `readSpreadsheet`, `writeSpreadsheet`, `batchWrite`, `appendRows`, `clearRange`, `createSpreadsheet`, `getSpreadsheetInfo`, `addSheet`, `deleteSheet`, `duplicateSheet`, `renameSheet`, `formatCells`, `readCellFormat`, `autoResizeColumns`, `freezeRowsAndColumns`, `setColumnWidths`, `addConditionalFormatting`, `copyFormatting`, `setDropdownValidation`, `createTable`, `deleteTable`, `getTable`, `listTables`, `appendTableRows`, `updateTableRange`, `insertChart`, `deleteChart`, `groupRows`, `ungroupAllRows`
 
-### `email` (19 tools)
-Gmail messages and drafts.
+### `email` (10 tools)
+Gmail messages and drafts (hot-path tools stay granular).
 
-`send_message`, `reply_message`, `forward_message`, `get_message`, `list_messages`, `modify_message`, `delete_message`, `trash_message`, `untrash_message`, `batch_delete_messages`, `batch_modify_messages`, `batch_get_messages`, `get_attachment`, `create_draft`, `update_draft`, `delete_draft`, `get_draft`, `list_drafts`, `send_draft`
+`sendMessage`, `replyMessage`, `forwardMessage`, `getMessage`, `listMessages`, `modifyMessage`, `deleteMessage`, `trashMessage`, `batchGetMessages`, `getAttachment`, `createDraft`, `updateDraft`, `deleteDraft`, `getDraft`, `listDrafts`, `sendDraft`
 
-### `email_threads` (7 tools)
+### `email_threads` (6 tools)
 Gmail thread-level operations.
 
-`get_thread`, `list_threads`, `batch_get_threads`, `modify_thread`, `delete_thread`, `trash_thread`, `untrash_thread`
+`getThread`, `listThreads`, `batchGetThreads`, `modifyThread`, `deleteThread`, `trashThread`
 
-### `email_labels` (6 tools)
-Gmail label management.
+### `email_labels` (1 tool)
+Gmail label management, consolidated into one dispatch tool.
 
-`create_label`, `delete_label`, `get_label`, `list_labels`, `patch_label`, `update_label`
+`manageLabel` (action: `create` | `patch` | `delete` | `get` | `list`)
 
-### `email_settings` (37 tools)
-Gmail admin and configuration.
+### `email_settings` (6 tools)
+Gmail admin and configuration, consolidated into dispatch tools.
 
-`get_auto_forwarding`, `update_auto_forwarding`, `get_imap`, `update_imap`, `get_language`, `update_language`, `get_pop`, `update_pop`, `get_vacation`, `update_vacation`, `add_delegate`, `remove_delegate`, `get_delegate`, `list_delegates`, `create_filter`, `delete_filter`, `get_filter`, `list_filters`, `create_forwarding_address`, `delete_forwarding_address`, `get_forwarding_address`, `list_forwarding_addresses`, `create_send_as`, `delete_send_as`, `get_send_as`, `list_send_as`, `patch_send_as`, `update_send_as`, `verify_send_as`, `delete_smime_info`, `get_smime_info`, `insert_smime_info`, `list_smime_info`, `set_default_smime_info`, `get_profile`, `watch_mailbox`, `stop_mail_watch`
+`manageGmailSettings` (resource: `imap` | `pop` | `vacation` | `language` | `autoForwarding` | `forwardingAddress` | `delegate` | `sendAs`), `manageSmime`, `manageFilter`, `getProfile`, `watchMailbox`, `stopMailWatch`
 
 ### `calendar` (8 tools)
 Google Calendar — events, availability, and calendar management.
 
-`list_calendars`, `get_events`, `manage_event`, `get_busy`, `get_free`, `move_event`, `list_recurring_event_instances`, `manage_calendar`
+`listCalendars`, `getEvents`, `manageEvent`, `getBusy`, `getFree`, `moveEvent`, `listRecurringEventInstances`, `manageCalendar`
+
+> **Backward compatibility:** every former snake_case tool name (`get_imap`, `list_messages`, `manage_event`, …) is still registered as a deprecated alias that forwards to its new implementation. See [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase). Set `GOOGLE_MCP_DISABLE_LEGACY_ALIASES=true` to hide the aliases.
 
 ### `forms` (6 tools)
 Google Forms — create/read forms, manage responses, and publish settings.
@@ -295,6 +297,7 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
+| `GOOGLE_MCP_DISABLE_LEGACY_ALIASES` | No | Set to `true` to stop registering the deprecated snake_case tool aliases (see [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase)) |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
 
@@ -307,6 +310,68 @@ This package replaces both [`gdrive-tools-mcp`](https://www.npmjs.com/package/gd
 1. Replace both MCP server entries with a single `google-tools-mcp` entry
 2. Re-authenticate (the combined server uses its own config dir at `~/.config/google-tools-mcp/`)
 3. All tools are available immediately — no discovery step needed
+
+## Gmail tool migration (snake_case → camelCase)
+
+Gmail and Calendar tools were unified to camelCase, and the rarely-used Gmail
+account-config tools were consolidated into dispatch tools. **Every old name
+still works** as a deprecated alias that forwards to the new implementation, so
+existing configs keep running. Set `GOOGLE_MCP_DISABLE_LEGACY_ALIASES=true` to
+turn the aliases off once you've migrated.
+
+### Renamed (behavior and parameters unchanged)
+
+| Old name | New name |
+|---|---|
+| `send_message` | `sendMessage` |
+| `reply_message` | `replyMessage` |
+| `forward_message` | `forwardMessage` |
+| `get_message` | `getMessage` |
+| `list_messages` | `listMessages` |
+| `modify_message` | `modifyMessage` |
+| `delete_message` | `deleteMessage` |
+| `trash_message` | `trashMessage` |
+| `batch_get_messages` | `batchGetMessages` |
+| `get_attachment` | `getAttachment` |
+| `create_draft` | `createDraft` |
+| `update_draft` | `updateDraft` |
+| `delete_draft` | `deleteDraft` |
+| `get_draft` | `getDraft` |
+| `list_drafts` | `listDrafts` |
+| `send_draft` | `sendDraft` |
+| `get_thread` | `getThread` |
+| `list_threads` | `listThreads` |
+| `batch_get_threads` | `batchGetThreads` |
+| `modify_thread` | `modifyThread` |
+| `delete_thread` | `deleteThread` |
+| `trash_thread` | `trashThread` |
+| `get_profile` | `getProfile` |
+| `watch_mailbox` | `watchMailbox` |
+| `stop_mail_watch` | `stopMailWatch` |
+| `list_calendars` | `listCalendars` |
+| `get_events` | `getEvents` |
+| `manage_event` | `manageEvent` |
+| `get_busy` | `getBusy` |
+| `get_free` | `getFree` |
+| `move_event` | `moveEvent` |
+| `list_recurring_event_instances` | `listRecurringEventInstances` |
+| `manage_calendar` | `manageCalendar` |
+
+### Consolidated into dispatch tools
+
+| Old name(s) | New dispatch call |
+|---|---|
+| `get_imap` / `update_imap` | `manageGmailSettings` resource=`imap` action=`get`/`update` |
+| `get_pop` / `update_pop` | `manageGmailSettings` resource=`pop` action=`get`/`update` |
+| `get_vacation` / `update_vacation` | `manageGmailSettings` resource=`vacation` action=`get`/`update` |
+| `get_language` / `update_language` | `manageGmailSettings` resource=`language` action=`get`/`update` |
+| `get_auto_forwarding` / `update_auto_forwarding` | `manageGmailSettings` resource=`autoForwarding` action=`get`/`update` |
+| `list_forwarding_addresses` / `get_forwarding_address` / `create_forwarding_address` / `delete_forwarding_address` | `manageGmailSettings` resource=`forwardingAddress` action=`list`/`get`/`create`/`delete` |
+| `list_delegates` / `get_delegate` / `add_delegate` / `remove_delegate` | `manageGmailSettings` resource=`delegate` action=`list`/`get`/`create`/`delete` |
+| `list_send_as` / `get_send_as` / `create_send_as` / `patch_send_as` / `update_send_as` / `delete_send_as` / `verify_send_as` | `manageGmailSettings` resource=`sendAs` action=`list`/`get`/`create`/`patch`/`update`/`delete`/`verify` |
+| `list_smime_info` / `get_smime_info` / `insert_smime_info` / `delete_smime_info` / `set_default_smime_info` | `manageSmime` action=`list`/`get`/`insert`/`delete`/`setDefault` |
+| `list_filters` / `get_filter` / `create_filter` / `delete_filter` | `manageFilter` action=`list`/`get`/`create`/`delete` |
+| `list_labels` / `get_label` / `create_label` / `patch_label` / `delete_label` | `manageLabel` action=`list`/`get`/`create`/`patch`/`delete` |
 
 ## License
 

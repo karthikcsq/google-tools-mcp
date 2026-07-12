@@ -194,10 +194,9 @@ describe('Tool Registration', () => {
 // Tool count verification
 // ---------------------------------------------------------------------------
 describe('Total tool count', () => {
-    it('all categories together register 140+ tools', async () => {
-        const server = createMockServer();
-
-        // Load all categories
+    // Register all base (new camelCase + dispatch) tools for the categories the
+    // server loads, optionally layering on the legacy snake_case aliases.
+    async function registerBase(server) {
         const { registerDocsTools } = await import('../dist/tools/docs/index.js');
         const { registerUtilsTools } = await import('../dist/tools/utils/index.js');
         const { registerDriveTools } = await import('../dist/tools/drive/index.js');
@@ -225,10 +224,22 @@ describe('Total tool count', () => {
         registerThreads(server);
         registerLabels(server);
         registerSettings(server);
+    }
 
-        const tools = server.getTools();
-        // README says 153 tools across 9 categories, minus the 4 standalone
-        // (help, logout, troubleshoot, feedback). The number may vary slightly.
-        expect(tools.size).toBeGreaterThanOrEqual(140);
+    it('registers the consolidated base surface (100+ tools)', async () => {
+        const server = createMockServer();
+        await registerBase(server);
+        // Gmail settings/labels were consolidated from ~42 granular tools into a
+        // handful of dispatch tools, so the base surface is smaller than before.
+        expect(server.getTools().size).toBeGreaterThanOrEqual(100);
+    });
+
+    it('with legacy aliases enabled, still exposes 140+ tools for backward compat', async () => {
+        const server = createMockServer();
+        await registerBase(server);
+        const { registerLegacyAliases } = await import('../dist/tools/legacyAliases.js');
+        registerLegacyAliases(server, server.getTools());
+        // Base categories + 72 snake_case aliases keep the public surface large.
+        expect(server.getTools().size).toBeGreaterThanOrEqual(140);
     });
 });

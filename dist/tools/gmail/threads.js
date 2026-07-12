@@ -5,7 +5,7 @@ import { processMessagePart, formatMessageClean, formatMessageMetadata } from '.
 
 export function register(server) {
     server.addTool({
-        name: 'get_thread',
+        name: 'getThread',
         description: 'Get a specific thread by ID. format="clean" (default) returns each message as from/to/subject/date/body. format="metadata" returns headers only. format="full" returns raw MIME trees.',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to retrieve"),
@@ -29,7 +29,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'list_threads',
+        name: 'listThreads',
         description: 'List threads in the user\'s mailbox. format="metadata" (default) auto-fetches thread details with headers only. format="clean" includes message bodies. format="full" returns raw MIME data. Omit format to get bare thread stubs (id/snippet only).',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of threads to return"),
@@ -76,8 +76,8 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'batch_get_threads',
-        description: 'Get multiple threads by ID in parallel. More efficient than calling get_thread multiple times.',
+        name: 'batchGetThreads',
+        description: 'Get multiple threads by ID in parallel. More efficient than calling getThread multiple times.',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the threads to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format for each message: clean (default), metadata (headers only), or full (raw MIME tree)"),
@@ -109,7 +109,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'modify_thread',
+        name: 'modifyThread',
         description: 'Modify the labels applied to a thread',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to modify"),
@@ -125,7 +125,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'delete_thread',
+        name: 'deleteThread',
         description: 'Delete a thread',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to delete"),
@@ -138,7 +138,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'trash_thread',
+        name: 'trashThread',
         description: 'Move one or more threads to the trash or restore them. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Thread ID or array of thread IDs"),

@@ -5,7 +5,7 @@ import { processMessagePart, constructRawMessage, constructRawMessageWithAttachm
 
 export function register(server) {
     server.addTool({
-        name: 'send_message',
+        name: 'sendMessage',
         description: 'Send an email message to specified recipients. Note the mechanics of the raw parameter.',
         parameters: z.object({
             raw: z.string().optional().describe("The entire email message in base64url encoded RFC 2822 format, ignores to, cc, bcc, subject, body if provided"),
@@ -45,7 +45,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'reply_message',
+        name: 'replyMessage',
         description: 'Reply to a message. Automatically handles To/Cc recipients, subject prefix, threading headers, and quoted content. Use replyAll to include all original recipients.',
         parameters: z.object({
             messageId: z.string().describe("The ID of the message to reply to"),
@@ -162,7 +162,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'forward_message',
+        name: 'forwardMessage',
         description: 'Forward a message to new recipients. Includes the original message body as quoted content and re-attaches any original attachments.',
         parameters: z.object({
             messageId: z.string().describe("The ID of the message to forward"),
@@ -278,7 +278,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'get_message',
+        name: 'getMessage',
         description: 'Get a specific message by ID. format="clean" (default) returns from/to/subject/date/body as a flat object. format="metadata" returns headers only, no body. format="full" returns the raw MIME tree (current legacy behavior).',
         parameters: z.object({
             id: z.string().describe("The ID of the message to retrieve"),
@@ -297,7 +297,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'list_messages',
+        name: 'listMessages',
         description: 'List messages in the user\'s mailbox with optional filtering. format="metadata" (default) auto-fetches message details for each result. format="clean" includes the message body. format="full" returns raw MIME data. Omit format to get bare IDs only.',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of messages to return (1-500)"),
@@ -339,7 +339,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'modify_message',
+        name: 'modifyMessage',
         description: 'Modify the labels on one or more messages. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs to modify"),
@@ -358,7 +358,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'delete_message',
+        name: 'deleteMessage',
         description: 'Immediately and permanently delete one or more messages. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs to delete"),
@@ -372,7 +372,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'trash_message',
+        name: 'trashMessage',
         description: 'Move one or more messages to the trash or restore them. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs"),
@@ -398,8 +398,8 @@ export function register(server) {
 
 
     server.addTool({
-        name: 'batch_get_messages',
-        description: 'Get multiple messages by ID in parallel. More efficient than calling get_message multiple times.',
+        name: 'batchGetMessages',
+        description: 'Get multiple messages by ID in parallel. More efficient than calling getMessage multiple times.',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the messages to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format: clean (default), metadata (headers only), or full (raw MIME tree)"),
@@ -426,7 +426,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'get_attachment',
+        name: 'getAttachment',
         description: 'Get a message attachment',
         parameters: z.object({
             messageId: z.string().describe("ID of the message containing the attachment"),

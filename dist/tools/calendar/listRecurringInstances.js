@@ -4,11 +4,11 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'list_recurring_event_instances',
+        name: 'listRecurringEventInstances',
         description:
             'Lists individual occurrences of a recurring event. Use this to find specific instances ' +
             'you want to modify or cancel (e.g. "cancel next Tuesday\'s standup"). ' +
-            'Each instance has its own event ID that you can pass to manage_event. ' +
+            'Each instance has its own event ID that you can pass to manageEvent. ' +
             'By default only returns future instances (time_min defaults to now). To retrieve past instances, set time_min to a past date. ' +
             'Note: all parameters use snake_case (event_id, time_min, time_max), not camelCase.',
         parameters: z.object({

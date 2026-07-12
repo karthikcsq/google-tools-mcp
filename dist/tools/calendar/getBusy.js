@@ -4,7 +4,7 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'get_busy',
+        name: 'getBusy',
         description:
             'Returns busy time blocks for one or more people in a given time range. ' +
             'Works across your Google Workspace org without needing calendar sharing — you see when people are busy but not event details. ' +

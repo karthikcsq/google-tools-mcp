@@ -12,6 +12,7 @@ import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
 import { google } from 'googleapis';
+import { registerLegacyAliases } from './legacyAliases.js';
 
 const execAsync = promisify(exec);
 
@@ -193,11 +194,24 @@ export async function registerAllTools(server) {
     // Wrap server so every tool auto-retries on invalid_grant (expired refresh token)
     const wrappedServer = wrapServerWithAuthRetry(server);
 
+    // Capture each registered tool so the legacy alias layer can look up the
+    // new tools' implementations to forward to.
+    const registeredTools = new Map();
+    const wrappedAddTool = wrappedServer.addTool.bind(wrappedServer);
+    wrappedServer.addTool = function (toolDef) {
+        registeredTools.set(toolDef.name, toolDef);
+        return wrappedAddTool(toolDef);
+    };
+
     // Load every category
     for (const [name, { loader }] of Object.entries(CATEGORIES)) {
         await loader(wrappedServer);
     }
     logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories at startup.`);
+
+    // Register backward-compatible snake_case aliases for the renamed/consolidated
+    // tools (unless disabled via GOOGLE_MCP_DISABLE_LEGACY_ALIASES=true).
+    registerLegacyAliases(wrappedServer, registeredTools);
 
     // --- Help tool (always available) ---
     server.addTool({
