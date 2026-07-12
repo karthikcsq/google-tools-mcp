@@ -109,6 +109,30 @@ export const wrapTextBody = (text) => text.split('\n').map(line => {
     return chunks.join('=\n');
 }).join('\n');
 
+export const foldHeader = (name, value) => {
+    const prefix = `${name}: `;
+    const normalizedValue = String(value).replace(/\r?\n[ \t]*/g, ' ');
+    const unfolded = prefix + normalizedValue;
+    if (unfolded.length <= 78) return unfolded;
+
+    const lines = [];
+    let line = prefix;
+    const tokens = normalizedValue.match(/\S+(?:[ \t]+|$)/g) || [];
+    for (const token of tokens) {
+        if (line.length > (line === prefix ? prefix.length : 1) && line.length + token.length > 78) {
+            lines.push(line.trimEnd());
+            line = ' ';
+        }
+        line += token;
+        while (line.length > 998) {
+            lines.push(line.slice(0, 998));
+            line = ' ' + line.slice(998);
+        }
+    }
+    lines.push(line.trimEnd());
+    return lines.join('\r\n');
+};
+
 export const isHtmlBody = (text) => /<\/?[a-z][\s\S]*?>/i.test(text);
 
 export const constructRawMessage = async (gmail, params) => {
@@ -118,13 +142,16 @@ export const constructRawMessage = async (gmail, params) => {
         thread = data;
     }
     const message = [];
-    if (params.to?.length) message.push(`To: ${wrapTextBody(params.to.join(', '))}`);
-    if (params.cc?.length) message.push(`Cc: ${wrapTextBody(params.cc.join(', '))}`);
-    if (params.bcc?.length) message.push(`Bcc: ${wrapTextBody(params.bcc.join(', '))}`);
+    if (params.to?.length) message.push(foldHeader('To', params.to.join(', ')));
+    if (params.cc?.length) message.push(foldHeader('Cc', params.cc.join(', ')));
+    if (params.bcc?.length) message.push(foldHeader('Bcc', params.bcc.join(', ')));
     if (thread) {
-        message.push(...getThreadHeaders(thread).map(header => wrapTextBody(header)));
+        message.push(...getThreadHeaders(thread).map(header => {
+            const separator = header.indexOf(':');
+            return foldHeader(header.slice(0, separator), header.slice(separator + 2));
+        }));
     } else if (params.subject) {
-        message.push(`Subject: ${wrapTextBody(params.subject)}`);
+        message.push(foldHeader('Subject', params.subject));
     } else {
         message.push('Subject: (No Subject)');
     }
@@ -152,13 +179,16 @@ export const constructRawMessageWithAttachments = async (gmail, params) => {
     }
     const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const headers = [];
-    if (params.to?.length) headers.push(`To: ${params.to.join(', ')}`);
-    if (params.cc?.length) headers.push(`Cc: ${params.cc.join(', ')}`);
-    if (params.bcc?.length) headers.push(`Bcc: ${params.bcc.join(', ')}`);
+    if (params.to?.length) headers.push(foldHeader('To', params.to.join(', ')));
+    if (params.cc?.length) headers.push(foldHeader('Cc', params.cc.join(', ')));
+    if (params.bcc?.length) headers.push(foldHeader('Bcc', params.bcc.join(', ')));
     if (thread) {
-        headers.push(...getThreadHeaders(thread));
+        headers.push(...getThreadHeaders(thread).map(header => {
+            const separator = header.indexOf(':');
+            return foldHeader(header.slice(0, separator), header.slice(separator + 2));
+        }));
     } else if (params.subject) {
-        headers.push(`Subject: ${params.subject}`);
+        headers.push(foldHeader('Subject', params.subject));
     } else {
         headers.push('Subject: (No Subject)');
     }
