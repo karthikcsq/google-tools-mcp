@@ -239,6 +239,41 @@ Set the `GOOGLE_MCP_PROFILE` env var to use separate tokens per profile:
 
 This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default directory.
 
+## Development / Contributing
+
+`dist/` is the hand-edited source for this repository. It contains plain JavaScript; there is no TypeScript, bundler, or build step.
+
+Run the server directly from a clone:
+
+```bash
+npm install
+npm start
+# Equivalent: node dist/index.js
+```
+
+To make an MCP client run the clone instead of the published package, use an absolute path in its configuration:
+
+```json
+{
+  "mcpServers": {
+    "google": {
+      "command": "node",
+      "args": ["/absolute/path/to/google-tools-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+Alternatively, link the clone into npm's global executable directory, then configure the client with `"command": "google-tools-mcp"`:
+
+```bash
+cd /absolute/path/to/google-tools-mcp
+npm install
+npm link
+```
+
+Watch for source/runtime drift: editing a clone has no effect while the MCP client still launches `npx google-tools-mcp` or a separately installed global copy. Check the client's configured command and arguments, then use `command -v google-tools-mcp` (macOS/Linux) or `where google-tools-mcp` (Windows) to see which executable is selected. Restart the MCP client after changing its configuration or relinking.
+
 ## Tool Categories
 
 ### `files` (18 tools)
