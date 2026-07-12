@@ -138,7 +138,7 @@ const EMPTY_1x1_TABLE_SIZE = 6;
  */
 export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, options) {
     if (!markdown || markdown.trim().length === 0) {
-        return [];
+        return withWarnings([], []);
     }
     const parser = createParser();
     const tokens = parser.parse(markdown, {});
@@ -161,6 +161,8 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
         inTableCell: false,
         paragraphFormattingStack: [],
         htmlParagraphPushStack: [],
+        warnings: [],
+        warningSet: new Set(),
         tabId,
         titleConsumed: false,
         firstHeadingAsTitle: options?.firstHeadingAsTitle ?? false,
@@ -171,7 +173,7 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
             processToken(token, context);
         }
         finalizeFormatting(context);
-        return [...context.insertRequests, ...context.formatRequests];
+        return withWarnings([...context.insertRequests, ...context.formatRequests], context.warnings);
     }
     catch (error) {
         if (error instanceof MarkdownConversionError) {
@@ -204,6 +206,12 @@ function processToken(token, context) {
         case 'code_inline':
             handleCodeInlineToken(token, context);
             break;
+        case 'image': {
+            const alt = token.content || getAttr(token, 'alt') || 'image';
+            const src = getAttr(token, 'src') || 'unknown URL';
+            addWarning(context, `Dropped image "${alt}" (${src}) — the Docs API path does not support inline images from markdown; use the insertImage tool instead.`);
+            break;
+        }
         // Inline formatting
         case 'strong_open':
             context.formattingStack.push({ bold: true });
@@ -357,6 +365,9 @@ function processToken(token, context) {
             handleHtmlBlockToken(token, context);
             break;
         default:
+            if (token.content?.trim()) {
+                addWarning(context, `Dropped unsupported markdown token "${token.type}" containing "${summarizeContent(token.content)}".`);
+            }
             break;
     }
 }
@@ -396,11 +407,15 @@ function handleHorizontalRule(context) {
 }
 function handleHtmlInlineToken(token, context) {
     const parsed = parseRichHtmlTag(token.content);
-    if (!parsed)
+    if (!parsed) {
+        addWarning(context, `Dropped unsupported inline HTML "${summarizeContent(token.content)}".`);
         return;
+    }
     const attrs = parseAttrs(parsed.attrs);
-    if (parsed.selfClosing && parsed.tag !== 'br')
+    if (parsed.selfClosing && parsed.tag !== 'br') {
+        addWarning(context, `Dropped unsupported inline HTML <${parsed.tag}>.`);
         return;
+    }
     if (parsed.closing) {
         switch (parsed.tag) {
             case 'u':
@@ -422,6 +437,8 @@ function handleHtmlInlineToken(token, context) {
             case 'blockquote':
                 context.paragraphFormattingStack.pop();
                 break;
+            default:
+                addWarning(context, `Ignored unsupported inline HTML tag </${parsed.tag}>; its text content was preserved where possible.`);
         }
         return;
     }
@@ -461,13 +478,18 @@ function handleHtmlInlineToken(token, context) {
         case 'br':
             insertText('\n', context);
             break;
+        default:
+            addWarning(context, `Ignored unsupported inline HTML tag <${parsed.tag}>; its text content was preserved where possible.`);
     }
 }
 function handleHtmlBlockToken(token, context) {
     const content = token.content.trim();
     const match = content.match(/^<\s*(p|div|blockquote)\b([^>]*)>([\s\S]*)<\/\s*\1\s*>$/i);
-    if (!match)
+    if (!match) {
+        const tag = content.match(/^<\s*([a-z0-9]+)/i)?.[1]?.toLowerCase();
+        addWarning(context, `Dropped unsupported HTML block${tag ? ` <${tag}>` : ''} containing "${summarizeContent(content)}".`);
         return;
+    }
     const tag = match[1].toLowerCase();
     const attrs = parseAttrs(match[2]);
     const inner = match[3];
@@ -493,6 +515,20 @@ function handleHtmlBlockToken(token, context) {
     if (pushedParagraphFormatting) {
         context.paragraphFormattingStack.pop();
     }
+}
+function addWarning(context, warning) {
+    if (!context.warningSet.has(warning)) {
+        context.warningSet.add(warning);
+        context.warnings.push(warning);
+    }
+}
+function summarizeContent(content) {
+    const normalized = content.replace(/\s+/g, ' ').trim();
+    return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
+}
+function withWarnings(requests, warnings) {
+    Object.defineProperty(requests, 'warnings', { value: warnings, enumerable: false });
+    return requests;
 }
 // --- Paragraph Handlers ---
 function handleParagraphOpen(context) {

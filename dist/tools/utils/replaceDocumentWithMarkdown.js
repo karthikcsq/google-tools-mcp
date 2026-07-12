@@ -11,6 +11,7 @@ export function register(server) {
         name: 'replaceDocumentWithMarkdown',
         description: "Best for rewriting entire sections or full documents. Replaces the entire document body with content parsed from markdown. " +
             "Supports headings, bold, italic, strikethrough, links, tables, bullet/numbered lists, and rich markdown HTML extensions for underline, color, highlight, font, alignment, and blockquotes. " +
+            "Does not support markdown images or raw HTML outside those listed extensions; unsupported content is omitted and reported as warnings in the result. Use insertImage for images. " +
             "Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes. " +
             "For small single-location edits (one line or paragraph), use modifyText instead. " +
             "To add content without rewriting, use appendMarkdown.",

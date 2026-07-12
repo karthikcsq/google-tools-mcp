@@ -491,12 +491,53 @@ describe('convertMarkdownToRequests', () => {
             red: 1, green: 1, blue: 1,
         });
     });
+
+    it('warns when a markdown image is dropped', () => {
+        const requests = convertMarkdownToRequests('Before ![architecture diagram](https://example.com/diagram.png) after');
+        expect(requests.warnings).toHaveLength(1);
+        expect(requests.warnings[0]).toContain('architecture diagram');
+        expect(requests.warnings[0]).toContain('https://example.com/diagram.png');
+    });
+
+    it('warns when unsupported HTML block content is dropped', () => {
+        const requests = convertMarkdownToRequests('<details><summary>Notes</summary>Hidden details</details>');
+        expect(requests.warnings).toHaveLength(1);
+        expect(requests.warnings[0]).toContain('<details>');
+        expect(requests.warnings[0]).toContain('Hidden details');
+    });
+
+    it('returns zero warnings for supported markdown constructs', () => {
+        const markdown = '# Heading\n\n- item\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n---\n\n```js\nconst ok = true;\n```';
+        const requests = convertMarkdownToRequests(markdown);
+        expect(requests.warnings).toEqual([]);
+    });
 });
 
 // ---------------------------------------------------------------------------
 // formatInsertResult
 // ---------------------------------------------------------------------------
 describe('formatInsertResult', () => {
+    it('puts content-drop warnings before the success summary', () => {
+        const output = formatInsertResult({
+            warnings: ['Dropped image "diagram" (https://example.com/image.png).'],
+            totalElapsedMs: 1,
+            parseElapsedMs: 1,
+            totalRequests: 0,
+            requestsByType: {},
+            batchUpdate: {
+                totalApiCalls: 0,
+                totalElapsedMs: 0,
+                phases: {
+                    delete: { requests: 0, apiCalls: 0, elapsedMs: 0 },
+                    insert: { requests: 0, apiCalls: 0, elapsedMs: 0 },
+                    format: { requests: 0, apiCalls: 0, elapsedMs: 0 },
+                },
+            },
+        });
+        expect(output).toMatch(/^WARNINGS \(content dropped\):/);
+        expect(output).toContain('Dropped image "diagram"');
+    });
+
     it('formats a complete result', () => {
         const result = {
             totalElapsedMs: 150,

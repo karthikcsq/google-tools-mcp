@@ -16,6 +16,13 @@ export { docsJsonToMarkdown } from './docsToMarkdown.js';
 /** Formats InsertMarkdownResult into a concise human-readable debug summary. */
 export function formatInsertResult(result) {
     const lines = [];
+    if (result.warnings?.length) {
+        lines.push('WARNINGS (content dropped):');
+        for (const warning of result.warnings) {
+            lines.push(`  - ${warning}`);
+        }
+        lines.push('');
+    }
     lines.push(`Markdown insert completed in ${result.totalElapsedMs}ms`);
     lines.push(`  Parse: ${result.parseElapsedMs}ms`);
     lines.push(`  Requests: ${result.totalRequests} total (${Object.entries(result.requestsByType)
@@ -110,6 +117,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
         ...(defaultForegroundColor && { defaultForegroundColor }),
     };
     const requests = convertMarkdownToRequests(markdown, startIndex, tabId, conversionOptions);
+    const warnings = requests.warnings ?? [];
     const parseElapsedMs = Math.round(performance.now() - parseStart);
     // Count requests by type
     const requestsByType = {};
@@ -119,6 +127,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
     }
     if (requests.length === 0) {
         return {
+            warnings,
             totalRequests: 0,
             requestsByType,
             parseElapsedMs,
@@ -137,6 +146,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
     }
     const batchUpdate = await executeBatchUpdateWithSplitting(docs, documentId, requests);
     return {
+        warnings,
         totalRequests: requests.length,
         requestsByType,
         parseElapsedMs,
