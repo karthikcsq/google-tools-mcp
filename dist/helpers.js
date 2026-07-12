@@ -11,22 +11,36 @@ const RESPONSE_HEADERS_LIST = [
     'References'
 ];
 
-const decodedBody = (body) => {
+const decodedBody = (body, maxBodyChars = 0) => {
     if (!body?.data) return body;
     const decodedData = Buffer.from(body.data, 'base64').toString('utf-8');
+    const truncated = maxBodyChars > 0 && decodedData.length > maxBodyChars;
     return {
-        data: decodedData,
+        data: truncated ? decodedData.slice(0, maxBodyChars) : decodedData,
         size: body.data.length,
-        attachmentId: body.attachmentId
+        attachmentId: body.attachmentId,
+        ...(truncated ? { bodyTruncated: true, totalChars: decodedData.length } : {}),
     };
 };
 
-export const processMessagePart = (messagePart, includeBodyHtml = false) => {
+export const processMessagePart = (messagePart, includeBodyHtml = false, maxBodyChars = 0) => {
     if ((messagePart.mimeType !== 'text/html' || includeBodyHtml) && messagePart.body) {
-        messagePart.body = decodedBody(messagePart.body);
+        const bodyLimit = messagePart.mimeType?.startsWith('text/') ? maxBodyChars : 0;
+        messagePart.body = decodedBody(messagePart.body, bodyLimit);
+    } else if (messagePart.body?.data && maxBodyChars > 0 && messagePart.body.data.length > maxBodyChars) {
+        // Parts left undecoded (e.g. text/html without includeBodyHtml) still
+        // carry their full base64 payload — the main size offender in full
+        // mode. Cap those too so maxBodyChars actually bounds the response.
+        messagePart.body = {
+            data: messagePart.body.data.slice(0, maxBodyChars),
+            size: messagePart.body.data.length,
+            attachmentId: messagePart.body.attachmentId,
+            bodyTruncated: true,
+            totalChars: messagePart.body.data.length,
+        };
     }
     if (messagePart.parts) {
-        messagePart.parts = messagePart.parts.map(part => processMessagePart(part, includeBodyHtml));
+        messagePart.parts = messagePart.parts.map(part => processMessagePart(part, includeBodyHtml, maxBodyChars));
     }
     if (messagePart.headers) {
         messagePart.headers = messagePart.headers.filter(header => RESPONSE_HEADERS_LIST.includes(header.name || ''));
@@ -277,10 +291,51 @@ export const getPlainTextBody = (messagePart) => {
     return '';
 };
 
-export const formatMessageClean = (message, maxBodyChars = 3000) => {
+export const stripQuotedHistory = (text) => {
+    if (!text) return text;
+    const lines = text.split(/\r?\n/);
+    let stripFrom = -1;
+    for (let i = 0; i < lines.length; i++) {
+        if (/^\s*>/.test(lines[i]) || /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i.test(lines[i])) {
+            stripFrom = i;
+            break;
+        }
+        if (/^\s*On .+ wrote:\s*$/i.test(lines[i])) {
+            let next = i + 1;
+            while (next < lines.length && /^\s*$/.test(lines[next])) next++;
+            if (next < lines.length && /^\s*>/.test(lines[next])) {
+                stripFrom = i;
+                break;
+            }
+        }
+        if (/^\s*From:\s*.+/i.test(lines[i])) {
+            let next = i + 1;
+            while (next < lines.length && /^\s*$/.test(lines[next])) next++;
+            if (next < lines.length && /^\s*Sent:\s*.+/i.test(lines[next])) {
+                stripFrom = i;
+                break;
+            }
+        }
+    }
+    if (stripFrom === -1) return text;
+    // Only strip when everything after the marker is quoted/attribution/blank.
+    // Inline repliers and bottom-posters put real content below or between
+    // quoted blocks; stripping those lines would silently lose it.
+    const attributionLine = /^\s*(On .+ wrote:|-{2,}\s*Original Message\s*-{2,}|(From|Sent|To|Cc|Subject|Date):\s.*)\s*$/i;
+    for (let i = stripFrom; i < lines.length; i++) {
+        if (/^\s*$/.test(lines[i]) || /^\s*>/.test(lines[i]) || attributionLine.test(lines[i])) continue;
+        return text;
+    }
+    return lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
+};
+
+export const formatMessageClean = (message, maxBodyChars = 3000, includeQuoted = false) => {
     const headers = message.payload?.headers || [];
     const get = (name) => findHeader(headers, name);
     let body = getPlainTextBody(message.payload) || '';
+    const strippedBody = includeQuoted ? body : stripQuotedHistory(body);
+    const quotedHistoryStripped = strippedBody !== body;
+    body = strippedBody;
     const totalChars = body.length;
     const truncated = maxBodyChars > 0 && body.length > maxBodyChars;
     if (truncated) body = body.slice(0, maxBodyChars);
@@ -295,6 +350,7 @@ export const formatMessageClean = (message, maxBodyChars = 3000) => {
         subject: get('subject'),
         date: get('date'),
         body,
+        ...(quotedHistoryStripped ? { quotedHistoryStripped: true } : {}),
         ...(truncated ? { bodyTruncated: true, totalChars } : {}),
     };
 };

@@ -10,6 +10,8 @@ import {
     constructRawMessage,
     getPlainTextBody,
     getNestedHistory,
+    stripQuotedHistory,
+    formatMessageClean,
 } from '../dist/helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -361,6 +363,82 @@ describe('processMessagePart', () => {
         };
         const result = processMessagePart(part);
         expect(result.parts[0].body.data).toBe('Text');
+    });
+
+    it('truncates decoded text bodies in full mode with original size metadata', () => {
+        const part = {
+            mimeType: 'text/plain',
+            body: { data: Buffer.from('abcdefghij').toString('base64') },
+        };
+        const result = processMessagePart(part, false, 4);
+        expect(result.body).toMatchObject({
+            data: 'abcd',
+            bodyTruncated: true,
+            totalChars: 10,
+        });
+    });
+
+    it('caps undecoded html base64 payloads in full mode', () => {
+        const rawBase64 = Buffer.from('<html>' + 'x'.repeat(500) + '</html>').toString('base64');
+        const part = {
+            mimeType: 'text/html',
+            body: { data: rawBase64 },
+        };
+        const result = processMessagePart(part, false, 100);
+        expect(result.body.data).toHaveLength(100);
+        expect(result.body).toMatchObject({
+            bodyTruncated: true,
+            totalChars: rawBase64.length,
+        });
+    });
+
+    it('leaves undecoded html payloads alone when maxBodyChars is 0', () => {
+        const rawBase64 = Buffer.from('<html>hello</html>').toString('base64');
+        const part = { mimeType: 'text/html', body: { data: rawBase64 } };
+        const result = processMessagePart(part, false, 0);
+        expect(result.body.data).toBe(rawBase64);
+    });
+});
+
+describe('quoted history stripping', () => {
+    const message = (body) => ({
+        id: 'm1',
+        threadId: 't1',
+        payload: {
+            mimeType: 'text/plain',
+            headers: [],
+            body: { data: Buffer.from(body).toString('base64') },
+        },
+    });
+
+    it('strips Gmail On ... wrote attribution and quoted lines', () => {
+        const body = 'Current reply\n\nOn Mon, Jul 1, 2024 at 9:00 AM Alice <a@example.com> wrote:\n> Earlier message';
+        expect(stripQuotedHistory(body)).toBe('Current reply');
+        expect(formatMessageClean(message(body))).toMatchObject({
+            body: 'Current reply',
+            quotedHistoryStripped: true,
+        });
+    });
+
+    it('strips a block beginning with prefixed quote lines', () => {
+        expect(stripQuotedHistory('Answer\n\n   > quoted one\n> quoted two')).toBe('Answer');
+    });
+
+    it('keeps inline replies written between quoted blocks', () => {
+        const body = '> question one\nAnswer one\n> question two\nAnswer two';
+        expect(stripQuotedHistory(body)).toBe(body);
+    });
+
+    it('keeps bottom-posted replies below a quoted block', () => {
+        const body = 'On Mon, Jul 1, 2024 at 9:00 AM Alice <a@example.com> wrote:\n> Earlier message\n\nMy reply comes after the quote';
+        expect(stripQuotedHistory(body)).toBe(body);
+    });
+
+    it('keeps quoted history when includeQuoted is true', () => {
+        const body = 'Answer\n> quoted';
+        const result = formatMessageClean(message(body), 3000, true);
+        expect(result.body).toBe(body);
+        expect(result.quotedHistoryStripped).toBeUndefined();
     });
 });
 
