@@ -230,9 +230,12 @@ export const getPlainTextBody = (messagePart) => {
 export const stripQuotedHistory = (text) => {
     if (!text) return text;
     const lines = text.split(/\r?\n/);
+    // A bare ">" line is deliberately NOT a marker: senders legitimately author
+    // ">"-prefixed excerpts (pasted shell output, manual quotes). Only a real
+    // attribution marker opens a strip.
     let stripFrom = -1;
     for (let i = 0; i < lines.length; i++) {
-        if (/^\s*>/.test(lines[i]) || /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i.test(lines[i])) {
+        if (/^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i.test(lines[i])) {
             stripFrom = i;
             break;
         }
@@ -254,14 +257,22 @@ export const stripQuotedHistory = (text) => {
         }
     }
     if (stripFrom === -1) return text;
-    // Only strip when everything after the marker is quoted/attribution/blank.
-    // Inline repliers and bottom-posters put real content below or between
-    // quoted blocks; stripping those lines would silently lose it.
+    // Only strip when everything after the marker is quoted/attribution/blank
+    // AND at least one line is actually ">"-quoted. Inline repliers and
+    // bottom-posters put real content below or between quoted blocks, and a
+    // trailing block of bare header-like lines (a pasted invite, a signature)
+    // is not reply history — stripping either would silently lose content.
     const attributionLine = /^\s*(On .+ wrote:|-{2,}\s*Original Message\s*-{2,}|(From|Sent|To|Cc|Subject|Date):\s.*)\s*$/i;
+    let sawQuotedLine = false;
     for (let i = stripFrom; i < lines.length; i++) {
-        if (/^\s*$/.test(lines[i]) || /^\s*>/.test(lines[i]) || attributionLine.test(lines[i])) continue;
+        if (/^\s*>/.test(lines[i])) {
+            sawQuotedLine = true;
+            continue;
+        }
+        if (/^\s*$/.test(lines[i]) || attributionLine.test(lines[i])) continue;
         return text;
     }
+    if (!sawQuotedLine) return text;
     return lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
 };
 

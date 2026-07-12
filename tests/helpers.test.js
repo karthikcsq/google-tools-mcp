@@ -272,8 +272,31 @@ describe('quoted history stripping', () => {
         });
     });
 
-    it('strips a block beginning with prefixed quote lines', () => {
-        expect(stripQuotedHistory('Answer\n\n   > quoted one\n> quoted two')).toBe('Answer');
+    it('keeps a trailing ">" block the sender authored (no attribution marker)', () => {
+        const body = 'Here is a quote I like:\n> To be or not to be';
+        expect(stripQuotedHistory(body)).toBe(body);
+    });
+
+    it('keeps a trailing block of bare header-like lines (pasted invite)', () => {
+        const body = "Let's meet. Details below:\nFrom: Conf Room A\nSent: Projector\nTo: All staff\nSubject: Q3\nDate: Tuesday";
+        expect(stripQuotedHistory(body)).toBe(body);
+    });
+
+    it('does not strip when a quote block is not preceded by an attribution', () => {
+        const body = '> old quoted\nFrom: Me\nTo: Team\nSubject: Weekly Update';
+        expect(stripQuotedHistory(body)).toBe(body);
+    });
+
+    it('keeps a wrapped attribution whose quote it cannot safely attribute', () => {
+        const body = 'Thanks!\nOn Mon, Jul 1, 2024 at 9:00 AM John Smith\n<john@example.com> wrote:\n> previous message';
+        expect(stripQuotedHistory(body)).toBe(body);
+    });
+
+    it('strips an Original Message block only when the tail is quoted', () => {
+        const stripped = 'Reply here\n-----Original Message-----\n> the original text';
+        expect(stripQuotedHistory(stripped)).toBe('Reply here');
+        const kept = 'Reply here\n-----Original Message-----\nFrom: A\nSent: B\nUnquoted original body';
+        expect(stripQuotedHistory(kept)).toBe(kept);
     });
 
     it('keeps inline replies written between quoted blocks', () => {

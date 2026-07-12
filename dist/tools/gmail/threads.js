@@ -13,13 +13,13 @@ export function register(server) {
             maxBodyChars: z.number().optional().default(3000).describe("Max decoded body characters per message in clean or full mode. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
-            messageIds: z.array(z.string()).optional().describe("Only include messages with these IDs in the thread response"),
+            messageIds: z.array(z.string()).optional().describe("Only include messages with these IDs in the thread response. An empty array is treated as no filter."),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
             const { data } = await gmail.users.threads.get({ userId: 'me', id: params.id, format: 'full' });
             if (data.messages) {
-                if (params.messageIds) data.messages = data.messages.filter(message => params.messageIds.includes(message.id));
+                if (params.messageIds?.length) data.messages = data.messages.filter(message => params.messageIds.includes(message.id));
                 data.messages = data.messages.map(message => {
                     if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
                     if (params.format === 'metadata') return formatMessageMetadata(message);
