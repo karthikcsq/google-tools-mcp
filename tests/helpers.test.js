@@ -5,10 +5,47 @@ import {
     findHeader,
     formatEmailList,
     wrapTextBody,
+    foldHeader,
     isHtmlBody,
+    constructRawMessage,
     getPlainTextBody,
     getNestedHistory,
 } from '../dist/helpers.js';
+
+// ---------------------------------------------------------------------------
+// Header folding
+// ---------------------------------------------------------------------------
+describe('header folding', () => {
+    it('folds a multi-address Cc header without quoted-printable breaks', async () => {
+        const cc = Array.from({ length: 7 }, (_, index) =>
+            `recipient-${index + 1}@example-domain.com`
+        );
+        const raw = await constructRawMessage(null, {
+            to: ['sender@example.com'],
+            cc,
+            subject: 'Test',
+            body: 'Hello',
+        });
+        const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+        const headerBlock = decoded.split('\r\n\r\n')[0];
+        const lines = headerBlock.split('\r\n');
+        const ccStart = lines.findIndex(line => line.startsWith('Cc:'));
+        const ccLines = [lines[ccStart]];
+        for (let index = ccStart + 1; lines[index]?.startsWith(' '); index++) {
+            ccLines.push(lines[index]);
+        }
+        const unfoldedCc = ccLines.join('\r\n').replace(/\r\n[ \t]+/g, ' ');
+
+        expect(headerBlock).not.toContain('=\n');
+        expect(unfoldedCc).toBe(`Cc: ${cc.join(', ')}`);
+        expect(ccLines.length).toBeGreaterThan(1);
+        expect(ccLines.slice(1).every(line => line.startsWith(' '))).toBe(true);
+    });
+
+    it('leaves short headers unchanged', () => {
+        expect(foldHeader('Subject', 'Short subject')).toBe('Subject: Short subject');
+    });
+});
 
 // ---------------------------------------------------------------------------
 // findHeader
