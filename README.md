@@ -264,6 +264,8 @@ To make an MCP client run the clone instead of the published package, use an abs
 }
 ```
 
+On Windows, write the path with forward slashes (`C:/Users/you/google-tools-mcp/dist/index.js`) or escape backslashes (`C:\\Users\\...`) — a bare `C:\Users\...` is invalid JSON.
+
 Alternatively, link the clone into npm's global executable directory, then configure the client with `"command": "google-tools-mcp"`:
 
 ```bash
