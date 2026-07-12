@@ -5,7 +5,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'replaceDocumentWithMarkdown',
@@ -55,6 +55,13 @@ export function register(server) {
             }
             log.info(`Replacing doc ${args.documentId} with markdown (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
+                const revisionId = getLastReadRevisionId(args.documentId);
+                let firstWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
+                const consumeFirstWriteControl = () => {
+                    const writeControl = firstWriteControl;
+                    firstWriteControl = undefined;
+                    return writeControl;
+                };
                 // 1. Get document structure
                 const doc = await docs.documents.get({
                     documentId: args.documentId,
@@ -101,7 +108,7 @@ export function register(server) {
                         {
                             deleteContentRange: { range: deleteRange },
                         },
-                    ]);
+                    ], consumeFirstWriteControl());
                     log.info(`Delete complete.`);
                 }
                 // 4. Clean the surviving trailing paragraph.
@@ -149,11 +156,21 @@ export function register(server) {
                             },
                         },
                     ];
+                    // When the delete step was skipped (empty document), this is the
+                    // first write of the operation and must carry the write control —
+                    // otherwise it bumps the revision and the insert below would fail
+                    // with a spurious conflict against the revision from the read.
+                    const cleanupWriteControl = consumeFirstWriteControl();
                     try {
-                        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests);
+                        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests, cleanupWriteControl);
                         log.info(`Cleaned surviving paragraph (bullets + text style) at range ${startIndex}-${survivorEnd}`);
                     }
                     catch (e) {
+                        // A revision conflict is a genuine concurrent edit — surface it
+                        // instead of proceeding to clobber the document unguarded.
+                        if (cleanupWriteControl && e instanceof UserError && /changed since you last read/i.test(e.message)) {
+                            throw e;
+                        }
                         log.info(`Survivor cleanup skipped: ${e.message}`);
                     }
                 }
@@ -163,6 +180,8 @@ export function register(server) {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
+                    // This closes the read-to-first-write race; later batches are our own writes.
+                    writeControl: consumeFirstWriteControl(),
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);

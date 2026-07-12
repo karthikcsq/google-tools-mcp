@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 // Jest with ESM doesn't reset module state between tests, so we test
 // the exported functions directly and rely on the Map being shared.
 
-let trackRead, guardMutation, trackMutation, hasBeenRead;
+let trackRead, guardMutation, trackMutation, hasBeenRead, getLastReadRevisionId;
 
 beforeEach(async () => {
     // Dynamic import — module state persists across tests within same worker,
@@ -16,6 +16,7 @@ beforeEach(async () => {
     guardMutation = mod.guardMutation;
     trackMutation = mod.trackMutation;
     hasBeenRead = mod.hasBeenRead;
+    getLastReadRevisionId = mod.getLastReadRevisionId;
 });
 
 describe('readTracker', () => {
@@ -40,6 +41,12 @@ describe('readTracker', () => {
             const id = `track-modtime-${Date.now()}`;
             trackRead(id, '2026-01-01T00:00:00.000Z');
             expect(hasBeenRead(id)).toBe(true);
+        });
+
+        it('records revisionId if provided', () => {
+            const id = `track-revision-${Date.now()}`;
+            trackRead(id, null, null, 'revision-123');
+            expect(getLastReadRevisionId(id)).toBe('revision-123');
         });
     });
 
@@ -103,6 +110,13 @@ describe('readTracker', () => {
             const id = `mutate-noread-${Date.now()}`;
             // Should not throw — just silently ignores
             expect(() => trackMutation(id)).not.toThrow();
+        });
+
+        it('clears revisionId after mutation', () => {
+            const id = `mutate-revision-${Date.now()}`;
+            trackRead(id, null, null, 'revision-123');
+            trackMutation(id);
+            expect(getLastReadRevisionId(id)).toBeNull();
         });
     });
 

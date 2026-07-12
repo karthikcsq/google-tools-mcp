@@ -4,7 +4,7 @@ import { logger } from './logger.js';
 // --- Constants ---
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
 // --- Core Helper to Execute Batch Updates ---
-export async function executeBatchUpdate(docs, documentId, requests) {
+export async function executeBatchUpdate(docs, documentId, requests, writeControl) {
     if (!requests || requests.length === 0) {
         // console.warn("executeBatchUpdate called with no requests.");
         return {}; // Nothing to do
@@ -16,13 +16,17 @@ export async function executeBatchUpdate(docs, documentId, requests) {
     try {
         const response = await docs.documents.batchUpdate({
             documentId: documentId,
-            requestBody: { requests },
+            requestBody: { requests, ...(writeControl && { writeControl }) },
         });
         return response.data;
     }
     catch (error) {
         logger.error(`Google API batchUpdate Error for doc ${documentId}:`, error.response?.data || error.message);
         // Translate common API errors to UserErrors
+        const apiMessage = error.response?.data?.error?.message || error.message || '';
+        if (error.code === 400 && /revision|write\s*control|updated since/i.test(apiMessage)) {
+            throw new UserError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`);
+        }
         if (error.code === 400 && error.message.includes('Invalid requests')) {
             // Try to extract more specific info if available
             const details = error.response?.data?.error?.details;
@@ -50,7 +54,7 @@ export async function executeBatchUpdate(docs, documentId, requests) {
  * @param log - Optional logger for progress tracking
  * @returns Metadata about the execution (request counts, API calls, timing)
  */
-export async function executeBatchUpdateWithSplitting(docs, documentId, requests, log) {
+export async function executeBatchUpdateWithSplitting(docs, documentId, requests, log, writeControl) {
     const overallStart = performance.now();
     if (!requests || requests.length === 0) {
         return {
@@ -80,6 +84,11 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
             'insertInlineImage' in r ||
             'insertSectionBreak' in r));
     let totalApiCalls = 0;
+    let firstWriteControl = writeControl;
+    const executeBatch = async (batch) => {
+        await executeBatchUpdate(docs, documentId, batch, firstWriteControl);
+        firstWriteControl = undefined;
+    };
     // Execute delete batches first (must happen before inserts)
     const deleteStart = performance.now();
     if (deleteRequests.length > 0) {
@@ -91,7 +100,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
             if (log) {
                 log.info(`Delete batch content: ${JSON.stringify(batch)}`);
             }
-            await executeBatchUpdate(docs, documentId, batch);
+            await executeBatch(batch);
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -109,7 +118,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (insertRequests.length > 0) {
         for (let i = 0; i < insertRequests.length; i += MAX_BATCH) {
             const batch = insertRequests.slice(i, i + MAX_BATCH);
-            await executeBatchUpdate(docs, documentId, batch);
+            await executeBatch(batch);
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -124,7 +133,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (formatRequests.length > 0) {
         for (let i = 0; i < formatRequests.length; i += MAX_BATCH) {
             const batch = formatRequests.slice(i, i + MAX_BATCH);
-            await executeBatchUpdate(docs, documentId, batch);
+            await executeBatch(batch);
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;

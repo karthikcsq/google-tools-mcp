@@ -4,7 +4,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, TextFindParameter, TextStyleParameters, ParagraphStyleParameters } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 const RangeTarget = z
     .object({
     startIndex: z.number().int().min(1).describe('Start of range (inclusive, 1-based).'),
@@ -173,7 +173,13 @@ export function register(server) {
                 if (requests.length === 0) {
                     return 'No operations to perform.';
                 }
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                await GDocsHelpers.executeBatchUpdate(
+                    docs,
+                    args.documentId,
+                    requests,
+                    revisionId ? { requiredRevisionId: revisionId } : undefined
+                );
                 trackMutation(args.documentId);
                 // Build descriptive result
                 const actions = [];

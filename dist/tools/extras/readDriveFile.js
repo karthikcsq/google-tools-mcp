@@ -116,7 +116,7 @@ async function readGoogleDoc(args, fileMeta, log) {
     const docs = await getDocsClient();
     const res = await docs.documents.get({
         documentId: args.fileId,
-        fields: args.format === 'text' ? 'body(content(paragraph(elements(textRun(content)))))' : '*',
+        fields: args.format === 'text' ? 'revisionId,body(content(paragraph(elements(textRun(content)))))' : '*',
     });
 
     let content;
@@ -148,6 +148,7 @@ async function readGoogleDoc(args, fileMeta, log) {
         content = textContent || '(empty document)';
     }
 
+    trackRead(args.fileId, fileMeta.modifiedTime, args.format === 'markdown' ? content : undefined, res.data.revisionId);
     return JSON.stringify({
         file: { id: fileMeta.id, name: fileMeta.name, mimeType: fileMeta.mimeType },
         ...CAPABILITIES.googleDoc,

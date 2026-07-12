@@ -5,7 +5,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'appendMarkdown',
@@ -54,6 +54,13 @@ export function register(server) {
             }
             log.info(`Appending markdown to doc ${args.documentId} (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
+                const revisionId = getLastReadRevisionId(args.documentId);
+                let firstWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
+                const consumeFirstWriteControl = () => {
+                    const writeControl = firstWriteControl;
+                    firstWriteControl = undefined;
+                    return writeControl;
+                };
                 // 1. Get document end index
                 const doc = await docs.documents.get({
                     documentId: args.documentId,
@@ -92,7 +99,7 @@ export function register(server) {
                                 text: '\n\n',
                             },
                         },
-                    ]);
+                    ], consumeFirstWriteControl());
                     startIndex += 2;
                     log.info(`Added spacing, new start index: ${startIndex}`);
                 }
@@ -101,6 +108,8 @@ export function register(server) {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
+                    // This closes the read-to-first-write race; later batches are our own writes.
+                    writeControl: consumeFirstWriteControl(),
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);

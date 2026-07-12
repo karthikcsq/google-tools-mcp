@@ -53,7 +53,7 @@ export function register(server) {
                 const needsTabsContent = !!args.tabId;
                 const fields = args.format === 'json' || args.format === 'markdown'
                     ? '*' // Get everything for structure analysis
-                    : 'body(content(paragraph(elements(textRun(content)))))'; // Just text content
+                    : 'revisionId,body(content(paragraph(elements(textRun(content)))))'; // Just text content
                 const res = await docs.documents.get({
                     documentId: args.documentId,
                     includeTabsContent: needsTabsContent,
@@ -82,7 +82,7 @@ export function register(server) {
                     if (args.diffFromLastRead) {
                         log.info('diffFromLastRead ignored: only supported for format=markdown');
                     }
-                    trackRead(args.documentId, modifiedTime);
+                    trackRead(args.documentId, modifiedTime, undefined, res.data.revisionId);
                     const jsonContent = JSON.stringify(contentSource, null, 2);
                     // Apply length limit to JSON if specified
                     if (args.maxLength && jsonContent.length > args.maxLength) {
@@ -106,12 +106,12 @@ export function register(server) {
                                 'current',
                                 { context: 3 }
                             );
-                            trackRead(args.documentId, modifiedTime, markdownContent);
+                            trackRead(args.documentId, modifiedTime, markdownContent, res.data.revisionId);
                             return patch;
                         }
                         log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
                     }
-                    trackRead(args.documentId, modifiedTime, markdownContent);
+                    trackRead(args.documentId, modifiedTime, markdownContent, res.data.revisionId);
                     // Apply length limit to markdown if specified
                     if (args.maxLength && totalLength > args.maxLength) {
                         const truncatedContent = markdownContent.substring(0, args.maxLength);
@@ -151,7 +151,7 @@ export function register(server) {
                         });
                     }
                 });
-                trackRead(args.documentId, modifiedTime);
+                trackRead(args.documentId, modifiedTime, undefined, res.data.revisionId);
                 if (!textContent.trim())
                     return 'Document found, but appears empty.';
                 const totalLength = textContent.length;

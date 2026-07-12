@@ -18,12 +18,14 @@ const readLog = new Map();
  * @param fileId
  * @param modifiedTime Drive API modifiedTime (ISO string) at read time, or null
  * @param content Optional content snapshot (e.g. markdown for docs) used for diffs
+ * @param revisionId Optional Google Docs revision ID used for optimistic concurrency
  */
-export function trackRead(fileId, modifiedTime, content) {
+export function trackRead(fileId, modifiedTime, content, revisionId) {
     readLog.set(fileId, {
         readAt: new Date(),
         modifiedTime: modifiedTime || null,
         content: typeof content === 'string' ? content : null,
+        revisionId: typeof revisionId === 'string' ? revisionId : null,
     });
 }
 
@@ -126,6 +128,7 @@ export function trackMutation(fileId) {
         // Content is also stale after our mutation; clear so a future diff
         // doesn't show our own edits as "external" changes.
         entry.content = null;
+        entry.revisionId = null;
     }
 }
 
@@ -142,4 +145,9 @@ export function hasBeenRead(fileId) {
 export function getLastReadContent(fileId) {
     const entry = readLog.get(fileId);
     return entry?.content ?? null;
+}
+
+/** Return the Google Docs revision ID from the last read, or null. */
+export function getLastReadRevisionId(fileId) {
+    return readLog.get(fileId)?.revisionId ?? null;
 }
