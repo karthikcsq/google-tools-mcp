@@ -45,6 +45,11 @@ describe('header folding', () => {
     it('leaves short headers unchanged', () => {
         expect(foldHeader('Subject', 'Short subject')).toBe('Subject: Short subject');
     });
+
+    it('neutralizes embedded line breaks, including a lone CR', () => {
+        expect(foldHeader('Subject', 'Hello\rBcc: evil@x.com')).toBe('Subject: Hello Bcc: evil@x.com');
+        expect(foldHeader('Subject', 'Hello\r\n  world\nagain')).toBe('Subject: Hello world again');
+    });
 });
 
 // ---------------------------------------------------------------------------

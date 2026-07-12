@@ -111,7 +111,7 @@ export const wrapTextBody = (text) => text.split('\n').map(line => {
 
 export const foldHeader = (name, value) => {
     const prefix = `${name}: `;
-    const normalizedValue = String(value).replace(/\r?\n[ \t]*/g, ' ');
+    const normalizedValue = String(value).replace(/(?:\r\n?|\n)[ \t]*/g, ' ');
     const unfolded = prefix + normalizedValue;
     if (unfolded.length <= 78) return unfolded;
 
