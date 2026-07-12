@@ -1,7 +1,7 @@
 // Gmail Message tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
+import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, foldHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
 
 export function register(server) {
     server.addTool({
@@ -111,12 +111,12 @@ export function register(server) {
             const fullBody = params.body + quotedContent;
             // Build raw message
             const msgHeaders = [];
-            if (to?.length) msgHeaders.push(`To: ${to.join(', ')}`);
-            if (cc?.length) msgHeaders.push(`Cc: ${cc.join(', ')}`);
-            if (params.bcc?.length) msgHeaders.push(`Bcc: ${params.bcc.join(', ')}`);
-            msgHeaders.push(`Subject: ${subject}`);
-            if (messageIdHeader) msgHeaders.push(`In-Reply-To: ${messageIdHeader}`);
-            if (references.length) msgHeaders.push(`References: ${references.join(' ')}`);
+            if (to?.length) msgHeaders.push(foldHeader('To', to.join(', ')));
+            if (cc?.length) msgHeaders.push(foldHeader('Cc', cc.join(', ')));
+            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', params.bcc.join(', ')));
+            msgHeaders.push(foldHeader('Subject', subject));
+            if (messageIdHeader) msgHeaders.push(foldHeader('In-Reply-To', messageIdHeader));
+            if (references.length) msgHeaders.push(foldHeader('References', references.join(' ')));
             const htmlMode = isHtmlBody(params.body);
             let raw;
             if (params.attachments?.length) {
@@ -229,10 +229,10 @@ export function register(server) {
             }
             // Build raw message
             const msgHeaders = [];
-            msgHeaders.push(`To: ${params.to.join(', ')}`);
-            if (params.cc?.length) msgHeaders.push(`Cc: ${params.cc.join(', ')}`);
-            if (params.bcc?.length) msgHeaders.push(`Bcc: ${params.bcc.join(', ')}`);
-            msgHeaders.push(`Subject: ${subject}`);
+            msgHeaders.push(foldHeader('To', params.to.join(', ')));
+            if (params.cc?.length) msgHeaders.push(foldHeader('Cc', params.cc.join(', ')));
+            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', params.bcc.join(', ')));
+            msgHeaders.push(foldHeader('Subject', subject));
             const fwdHtmlMode = params.body && isHtmlBody(params.body);
             let raw;
             if (attachmentParts.length) {
