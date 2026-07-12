@@ -107,7 +107,10 @@ export function register(server) {
                 log.info(debugSummary);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 trackMutation(args.documentId);
-                return `${docUrl}\nSuccessfully appended ${markdown.length} characters of markdown.\n\n${debugSummary}`;
+                const warningNote = result.warnings?.length
+                    ? ` with ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (content dropped — see below)`
+                    : '';
+                return `${docUrl}\nAppended ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error appending markdown: ${error.message}`);

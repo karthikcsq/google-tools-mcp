@@ -169,7 +169,10 @@ export function register(server) {
                 log.info(debugSummary);
                 trackMutation(args.documentId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
-                return `${docUrl}\nSuccessfully replaced document content with ${markdown.length} characters of markdown.\n\n${debugSummary}`;
+                const warningNote = result.warnings?.length
+                    ? ` with ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (content dropped — see below)`
+                    : '';
+                return `${docUrl}\nReplaced document content with ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error replacing document with markdown: ${error.message}`);
