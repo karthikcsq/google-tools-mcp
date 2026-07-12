@@ -188,6 +188,18 @@ describe('Tool Registration', () => {
             expect(tools.size).toBeGreaterThanOrEqual(4);
         });
     });
+
+    describe('Maps tools', () => {
+        it('registers all first-milestone maps tools', async () => {
+            const server = createMockServer();
+            const { registerMapsTools } = await import('../dist/tools/maps/index.js');
+            registerMapsTools(server);
+            expect([...server.getTools().keys()]).toEqual([
+                'mapsGeocode', 'mapsReverseGeocode', 'mapsSearchNearby',
+                'mapsSearchPlaces', 'mapsPlaceDetails', 'mapsDirections',
+            ]);
+        });
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -205,6 +217,7 @@ describe('Total tool count', () => {
         const { registerSheetsTools } = await import('../dist/tools/sheets/index.js');
         const { registerCalendarTools } = await import('../dist/tools/calendar/index.js');
         const { registerFormsTools } = await import('../dist/tools/forms/index.js');
+        const { registerMapsTools } = await import('../dist/tools/maps/index.js');
 
         // Gmail modules
         const { register: registerMessages } = await import('../dist/tools/gmail/messages.js');
@@ -220,6 +233,7 @@ describe('Total tool count', () => {
         registerSheetsTools(server);
         registerCalendarTools(server);
         registerFormsTools(server);
+        registerMapsTools(server);
         registerMessages(server);
         registerDrafts(server);
         registerThreads(server);

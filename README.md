@@ -286,6 +286,13 @@ Google Forms — create/read forms, manage responses, and publish settings.
 
 `create_form`, `get_form`, `batch_update_form`, `get_form_response`, `list_form_responses`, `set_publish_settings`
 
+### `maps` (6 tools)
+Google Maps and Places tools for geocoding, reverse geocoding, nearby and text search, place details, and directions.
+
+`mapsGeocode`, `mapsReverseGeocode`, `mapsSearchNearby`, `mapsSearchPlaces`, `mapsPlaceDetails`, `mapsDirections`
+
+These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key separate from Google OAuth. Enable the Geocoding API, Places API (New), and Routes API for the key.
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -297,6 +304,7 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
+| `GOOGLE_MAPS_API_KEY` | For Maps tools | Google Maps Platform API key (separate from OAuth) |
 
 \* Not required as env vars if you provide credentials via `.env` file or `credentials.json` (see [Step 2](#step-2-provide-your-credentials)).
 
