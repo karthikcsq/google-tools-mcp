@@ -160,9 +160,13 @@ export function register(server) {
                     // first write of the operation and must carry the write control —
                     // otherwise it bumps the revision and the insert below would fail
                     // with a spurious conflict against the revision from the read.
-                    const cleanupWriteControl = consumeFirstWriteControl();
+                    // Peek rather than consume: this cleanup is best-effort, and a
+                    // FAILED cleanup did not bump the revision, so the insert below
+                    // must still carry the control in that case.
+                    const cleanupWriteControl = firstWriteControl;
                     try {
                         await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests, cleanupWriteControl);
+                        firstWriteControl = undefined;
                         log.info(`Cleaned surviving paragraph (bullets + text style) at range ${startIndex}-${survivorEnd}`);
                     }
                     catch (e) {

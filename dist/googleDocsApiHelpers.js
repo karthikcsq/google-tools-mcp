@@ -24,7 +24,15 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
         logger.error(`Google API batchUpdate Error for doc ${documentId}:`, error.response?.data || error.message);
         // Translate common API errors to UserErrors
         const apiMessage = error.response?.data?.error?.message || error.message || '';
-        if (error.code === 400 && /revision|write\s*control|updated since/i.test(apiMessage)) {
+        const apiStatus = error.response?.data?.error?.status;
+        // A write sent with writeControl that fails on the revision is a
+        // concurrency conflict. Don't rely on message wording alone —
+        // FAILED_PRECONDITION is Google's canonical status for this.
+        const isRevisionConflict = writeControl && (
+            apiStatus === 'FAILED_PRECONDITION' ||
+            ((error.code === 400 || error.code === 409) && /revision|write\s*control|updated since/i.test(apiMessage))
+        );
+        if (isRevisionConflict) {
             throw new UserError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`);
         }
         if (error.code === 400 && error.message.includes('Invalid requests')) {
