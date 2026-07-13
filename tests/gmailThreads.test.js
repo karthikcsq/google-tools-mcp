@@ -18,17 +18,19 @@ describe('Gmail thread output controls', () => {
         getThreadTool = tools.get('get_thread');
     });
 
+    const threeMessageThread = () => ({
+        data: {
+            id: 'thread-1',
+            messages: [
+                { id: 'message-1', payload: { headers: [] } },
+                { id: 'message-2', payload: { headers: [] } },
+                { id: 'message-3', payload: { headers: [] } },
+            ],
+        },
+    });
+
     it('filters get_thread output to requested messageIds', async () => {
-        getThread.mockResolvedValueOnce({
-            data: {
-                id: 'thread-1',
-                messages: [
-                    { id: 'message-1', payload: { headers: [] } },
-                    { id: 'message-2', payload: { headers: [] } },
-                    { id: 'message-3', payload: { headers: [] } },
-                ],
-            },
-        });
+        getThread.mockResolvedValueOnce(threeMessageThread());
 
         const result = JSON.parse(await getThreadTool.execute({
             id: 'thread-1',
@@ -37,5 +39,36 @@ describe('Gmail thread output controls', () => {
         }));
 
         expect(result.messages.map(message => message.id)).toEqual(['message-2']);
+    });
+
+    it('treats an empty messageIds array as no filter', async () => {
+        getThread.mockResolvedValueOnce(threeMessageThread());
+
+        const result = JSON.parse(await getThreadTool.execute({
+            id: 'thread-1',
+            format: 'metadata',
+            messageIds: [],
+        }));
+
+        expect(result.messages.map(message => message.id)).toEqual([
+            'message-1',
+            'message-2',
+            'message-3',
+        ]);
+    });
+
+    it('keeps only the latest N messages with maxMessages', async () => {
+        getThread.mockResolvedValueOnce(threeMessageThread());
+
+        const result = JSON.parse(await getThreadTool.execute({
+            id: 'thread-1',
+            format: 'metadata',
+            maxMessages: 2,
+        }));
+
+        expect(result.messages.map(message => message.id)).toEqual([
+            'message-2',
+            'message-3',
+        ]);
     });
 });

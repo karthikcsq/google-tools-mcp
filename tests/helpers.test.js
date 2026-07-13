@@ -230,18 +230,40 @@ describe('processMessagePart', () => {
         });
     });
 
-    it('caps undecoded html base64 payloads in full mode', () => {
-        const rawBase64 = Buffer.from('<html>' + 'x'.repeat(500) + '</html>').toString('base64');
+    it('omits oversized undecoded html payloads and reports decoded totalChars', () => {
+        const decoded = '<html>' + 'x'.repeat(500) + '</html>';
+        const rawBase64 = Buffer.from(decoded).toString('base64');
         const part = {
             mimeType: 'text/html',
-            body: { data: rawBase64 },
+            body: { data: rawBase64, size: decoded.length },
         };
         const result = processMessagePart(part, false, 100);
-        expect(result.body.data).toHaveLength(100);
+        // Payload is dropped entirely — never sliced into invalid base64.
+        expect(result.body.data).toBeUndefined();
         expect(result.body).toMatchObject({
-            bodyTruncated: true,
-            totalChars: rawBase64.length,
+            bodyOmitted: true,
+            totalChars: decoded.length,
         });
+    });
+
+    it('omits undecoded payloads even when the cap falls mid-base64 (no corruption)', () => {
+        // Cap of 7 lands inside a base64 quantum; the old slice-at-offset path
+        // would have emitted invalid base64 and an encoded-char totalChars.
+        const decoded = 'x'.repeat(40);
+        const rawBase64 = Buffer.from(decoded).toString('base64');
+        const part = { mimeType: 'text/html', body: { data: rawBase64 } };
+        const result = processMessagePart(part, false, 7);
+        expect(result.body.data).toBeUndefined();
+        expect(result.body.bodyOmitted).toBe(true);
+        expect(result.body.totalChars).toBe(decoded.length); // decoded, not encoded
+    });
+
+    it('keeps an undecoded html payload whose decoded length is within the cap', () => {
+        const decoded = '<html>hello</html>';
+        const rawBase64 = Buffer.from(decoded).toString('base64');
+        const part = { mimeType: 'text/html', body: { data: rawBase64 } };
+        const result = processMessagePart(part, false, 100);
+        expect(result.body.data).toBe(rawBase64);
     });
 
     it('leaves undecoded html payloads alone when maxBodyChars is 0', () => {
@@ -249,6 +271,27 @@ describe('processMessagePart', () => {
         const part = { mimeType: 'text/html', body: { data: rawBase64 } };
         const result = processMessagePart(part, false, 0);
         expect(result.body.data).toBe(rawBase64);
+    });
+
+    it('caps each text part independently — maxBodyChars is per-part, not a total budget', () => {
+        // A multipart message with several oversized text parts: every part is
+        // capped to maxBodyChars on its own, so the summed body can exceed the
+        // cap. This documents the per-part contract (not a whole-response cap).
+        const textPart = (n) => ({
+            mimeType: 'text/plain',
+            body: { data: Buffer.from('y'.repeat(n)).toString('base64') },
+        });
+        const part = {
+            mimeType: 'multipart/mixed',
+            parts: [textPart(50), textPart(50), textPart(50)],
+        };
+        const result = processMessagePart(part, false, 10);
+        for (const child of result.parts) {
+            expect(child.body.data).toHaveLength(10);
+            expect(child.body).toMatchObject({ bodyTruncated: true, totalChars: 50 });
+        }
+        const totalKept = result.parts.reduce((sum, c) => sum + c.body.data.length, 0);
+        expect(totalKept).toBe(30); // 3 parts * 10 > the 10-char per-part cap
     });
 });
 
@@ -292,11 +335,14 @@ describe('quoted history stripping', () => {
         expect(stripQuotedHistory(body)).toBe(body);
     });
 
-    it('strips an Original Message block only when the tail is quoted', () => {
-        const stripped = 'Reply here\n-----Original Message-----\n> the original text';
-        expect(stripQuotedHistory(stripped)).toBe('Reply here');
-        const kept = 'Reply here\n-----Original Message-----\nFrom: A\nSent: B\nUnquoted original body';
-        expect(stripQuotedHistory(kept)).toBe(kept);
+    it('strips everything after an Original Message delimiter, prefixed or not', () => {
+        // "-----Original Message-----" is an unambiguous hard delimiter: Outlook
+        // emits it on its own line and never writes reply text below it, so the
+        // whole tail is quoted history even without ">" prefixes.
+        const prefixed = 'Reply here\n-----Original Message-----\n> the original text';
+        expect(stripQuotedHistory(prefixed)).toBe('Reply here');
+        const unprefixed = 'Reply here\n-----Original Message-----\nFrom: A\nSent: B\nUnquoted original body';
+        expect(stripQuotedHistory(unprefixed)).toBe('Reply here');
     });
 
     it('keeps inline replies written between quoted blocks', () => {
@@ -310,7 +356,10 @@ describe('quoted history stripping', () => {
     });
 
     it('keeps quoted history when includeQuoted is true', () => {
-        const body = 'Answer\n> quoted';
+        // Use a strip-eligible block (attribution + quoted line) so this proves
+        // the opt-out actually suppresses a strip that would otherwise happen.
+        const body = 'Answer\n\nOn Mon, Jul 1, 2024 at 9:00 AM Alice <a@example.com> wrote:\n> quoted';
+        expect(stripQuotedHistory(body)).toBe('Answer'); // would strip by default
         const result = formatMessageClean(message(body), 3000, true);
         expect(result.body).toBe(body);
         expect(result.quotedHistoryStripped).toBeUndefined();
