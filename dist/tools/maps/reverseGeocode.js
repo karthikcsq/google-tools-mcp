@@ -5,7 +5,10 @@ export function register(server) {
     server.addTool({
         name: 'mapsReverseGeocode',
         description: 'Convert coordinates to the nearest formatted street address.',
-        parameters: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }),
+        parameters: z.object({
+            latitude: z.number().min(-90).max(90).describe('Latitude in degrees'),
+            longitude: z.number().min(-180).max(180).describe('Longitude in degrees'),
+        }),
         execute: async ({ latitude, longitude }) => {
             const params = new URLSearchParams({ latlng: `${latitude},${longitude}`, key: getMapsApiKey() });
             const data = await mapsFetch(`https://maps.googleapis.com/maps/api/geocode/json?${params}`);

@@ -6,9 +6,13 @@ export function register(server) {
         name: 'mapsSearchPlaces',
         description: 'Search Google Places with free text and an optional circular location bias.',
         parameters: z.object({
-            query: z.string().min(1),
-            locationBias: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180), radiusMeters: z.number().positive().max(50000) }).optional(),
-            maxResults: z.number().int().min(1).max(20).optional().default(10),
+            query: z.string().min(1).describe('Free-text place search, e.g. "vegan restaurants in Lafayette IN"'),
+            locationBias: z.object({
+                latitude: z.number().min(-90).max(90).describe('Bias center latitude'),
+                longitude: z.number().min(-180).max(180).describe('Bias center longitude'),
+                radiusMeters: z.number().positive().max(50000).describe('Bias radius in meters (max 50000)'),
+            }).optional().describe('Optional circular area to bias results toward'),
+            maxResults: z.number().int().min(1).max(20).optional().default(10).describe('Maximum places to return (default 10, max 20)'),
         }),
         execute: async (args) => {
             const body = { textQuery: args.query, maxResultCount: args.maxResults };

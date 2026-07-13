@@ -2,7 +2,7 @@
 
 The **easiest way** to connect your AI agent to Google Workspace.
 
-**153 tools** for Drive, Docs, Sheets, Gmail, Calendar, and Forms — all in one package. One install, one auth, and you're done.
+**159 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, and Maps — all in one package. One install, one auth, and you're done.
 
 ```bash
 npx -y google-tools-mcp setup
@@ -14,7 +14,7 @@ npx -y google-tools-mcp setup
 - **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, and Forms. No juggling multiple tokens or servers.
 - **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
 - **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
-- **153 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms — it's all there.
+- **159 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms, search places — it's all there.
 - **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
 - **No telemetry. No tracking. Fully open source.**
 

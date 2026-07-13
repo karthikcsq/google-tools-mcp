@@ -5,7 +5,7 @@ export function register(server) {
     server.addTool({
         name: 'mapsGeocode',
         description: 'Convert an address to coordinates, a formatted address, and a Google place ID.',
-        parameters: z.object({ address: z.string().min(1) }),
+        parameters: z.object({ address: z.string().min(1).describe('The street address or place name to geocode') }),
         execute: async ({ address }) => {
             const params = new URLSearchParams({ address, key: getMapsApiKey() });
             const data = await mapsFetch(`https://maps.googleapis.com/maps/api/geocode/json?${params}`);

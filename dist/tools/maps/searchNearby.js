@@ -6,9 +6,12 @@ export function register(server) {
         name: 'mapsSearchNearby',
         description: 'Find places near coordinates, optionally filtering by place types or a keyword.',
         parameters: z.object({
-            latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
-            radiusMeters: z.number().positive().max(50000), includedTypes: z.array(z.string()).max(50).optional(),
-            keyword: z.string().min(1).optional(), maxResults: z.number().int().min(1).max(20).optional().default(10),
+            latitude: z.number().min(-90).max(90).describe('Center latitude in degrees'),
+            longitude: z.number().min(-180).max(180).describe('Center longitude in degrees'),
+            radiusMeters: z.number().positive().max(50000).describe('Search radius in meters (max 50000)'),
+            includedTypes: z.array(z.string()).max(50).optional().describe('Place types to include, e.g. ["restaurant", "gym"]'),
+            keyword: z.string().min(1).optional().describe('Free-text filter applied locally against place names, addresses, and types'),
+            maxResults: z.number().int().min(1).max(20).optional().default(10).describe('Maximum places to return (default 10, max 20)'),
         }),
         execute: async (args) => {
             const body = { locationRestriction: { circle: { center: { latitude: args.latitude, longitude: args.longitude }, radius: args.radiusMeters } }, maxResultCount: args.keyword ? 20 : args.maxResults };

@@ -66,12 +66,69 @@ describe('Maps tools', () => {
     it('shapes directions and omits the polyline field', async () => {
         process.env.GOOGLE_MAPS_API_KEY = 'test-key';
         global.fetch = jest.fn().mockResolvedValue(response({ routes: [] }));
-        await tools.get('mapsDirections').execute({ origin: 'Purdue University', destination: { latitude: 40.4, longitude: -86.9 }, travelMode: 'WALK', departureTime: '2026-07-12T12:00:00Z' });
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        await tools.get('mapsDirections').execute({ origin: 'Purdue University', destination: { latitude: 40.4, longitude: -86.9 }, travelMode: 'WALK', departureTime: future });
         const [url, options] = global.fetch.mock.calls[0];
         expect(url).toBe('https://routes.googleapis.com/directions/v2:computeRoutes');
-        expect(JSON.parse(options.body)).toEqual({ origin: { address: 'Purdue University' }, destination: { location: { latLng: { latitude: 40.4, longitude: -86.9 } } }, travelMode: 'WALK', departureTime: '2026-07-12T12:00:00Z' });
+        expect(JSON.parse(options.body)).toEqual({ origin: { address: 'Purdue University' }, destination: { location: { latLng: { latitude: 40.4, longitude: -86.9 } } }, travelMode: 'WALK', departureTime: future });
         expect(options.headers['X-Goog-Api-Key']).toBe('test-key');
         expect(options.headers['X-Goog-FieldMask']).toContain('routes.legs.steps.navigationInstruction.instructions');
+        expect(options.headers['X-Goog-FieldMask']).toContain('routes.legs.steps.transitDetails');
         expect(options.headers['X-Goog-FieldMask']).not.toContain('polyline');
+    });
+
+    it('rejects a past departureTime for non-TRANSIT modes before calling the API', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn();
+        await expect(
+            tools.get('mapsDirections').execute({ origin: 'A', destination: 'B', travelMode: 'DRIVE', departureTime: '2020-01-01T00:00:00Z' })
+        ).rejects.toThrow(/departureTime must be in the future/);
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('allows a past departureTime for TRANSIT and surfaces transit step details', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({
+            routes: [{
+                distanceMeters: 5000,
+                duration: '1200s',
+                legs: [{
+                    steps: [{
+                        distanceMeters: 5000,
+                        staticDuration: '1200s',
+                        transitDetails: {
+                            headsign: 'Downtown',
+                            stopCount: 4,
+                            transitLine: { nameShort: '4B', vehicle: { type: 'BUS' } },
+                            stopDetails: { departureStop: { name: 'Main St' }, arrivalStop: { name: 'Center Sq' } },
+                        },
+                    }],
+                }],
+            }],
+        }));
+        const result = JSON.parse(await tools.get('mapsDirections').execute({ origin: 'A', destination: 'B', travelMode: 'TRANSIT', departureTime: '2020-01-01T00:00:00Z' }));
+        expect(result.steps[0].transit).toMatchObject({ line: '4B', vehicle: 'BUS', headsign: 'Downtown', departureStop: 'Main St', arrivalStop: 'Center Sq', stopCount: 4 });
+    });
+
+    it('uses a top-level field mask (no places. prefix) for place details', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ id: 'abc' }));
+        await tools.get('mapsPlaceDetails').execute({ placeId: 'abc' });
+        const [url, options] = global.fetch.mock.calls[0];
+        expect(url).toBe('https://places.googleapis.com/v1/places/abc');
+        expect(options.headers['X-Goog-FieldMask']).toContain('id,displayName');
+        expect(options.headers['X-Goog-FieldMask']).not.toContain('places.');
+    });
+
+    it('shapes the nearby search body with a circle restriction', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ places: [] }));
+        await tools.get('mapsSearchNearby').execute({ latitude: 40.4, longitude: -86.9, radiusMeters: 1500, includedTypes: ['gym'], maxResults: 5 });
+        const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+        expect(body).toEqual({
+            locationRestriction: { circle: { center: { latitude: 40.4, longitude: -86.9 }, radius: 1500 } },
+            maxResultCount: 5,
+            includedTypes: ['gym'],
+        });
     });
 });
