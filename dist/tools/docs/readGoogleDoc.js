@@ -71,7 +71,12 @@ export function register(server) {
                     if (!targetTab.documentTab) {
                         throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
-                    contentSource = { body: targetTab.documentTab.body };
+                    // List definitions are scoped to the document tab. Without them,
+                    // docsJsonToMarkdown cannot distinguish ordered lists from bullets.
+                    contentSource = {
+                        body: targetTab.documentTab.body,
+                        lists: targetTab.documentTab.lists,
+                    };
                     log.info(`Using content from tab: ${targetTab.tabProperties?.title || 'Untitled'}`);
                 }
                 else {
