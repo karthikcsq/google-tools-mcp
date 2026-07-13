@@ -186,4 +186,74 @@ describe('manageGmailSettings resource/action validation (issue #31)', () => {
         await server.getTools().get('manageGmailSettings').execute({ resource: 'vacation', action: 'get' });
         expect(calls.pop().path).toBe('users.settings.getVacation');
     });
+
+    it('rejects actions missing their required payload identifier', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        await expect(mgs.execute({ resource: 'sendAs', action: 'verify' })).rejects.toThrow(/requires payload field\(s\): sendAsEmail/);
+        await expect(mgs.execute({ resource: 'delegate', action: 'create', payload: {} })).rejects.toThrow(/delegateEmail/);
+        await expect(mgs.execute({ resource: 'imap', action: 'update' })).rejects.toThrow(/requires a payload/);
+        expect(calls).toHaveLength(0);
+    });
+});
+
+describe('Per-action required fields on the other dispatch tools', () => {
+    it('manageSmime enforces id and insert credentials', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const smime = server.getTools().get('manageSmime');
+        await expect(smime.execute({ action: 'get', sendAsEmail: 'a@b.com' })).rejects.toThrow(/requires id/);
+        await expect(smime.execute({ action: 'insert', sendAsEmail: 'a@b.com' })).rejects.toThrow(/encryptedKeyPassword and pkcs12/);
+        expect(calls).toHaveLength(0);
+    });
+
+    it('manageFilter and manageLabel enforce create/get/delete requirements', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        registerLabels(server);
+        const tools = server.getTools();
+        await expect(tools.get('manageFilter').execute({ action: 'create' })).rejects.toThrow(/criteria and filterAction/);
+        await expect(tools.get('manageFilter').execute({ action: 'delete' })).rejects.toThrow(/requires id/);
+        await expect(tools.get('manageLabel').execute({ action: 'create' })).rejects.toThrow(/requires name/);
+        await expect(tools.get('manageLabel').execute({ action: 'get' })).rejects.toThrow(/requires id/);
+        expect(calls).toHaveLength(0);
+    });
+});
+
+describe('API-call fidelity for non-trivial reshapes', () => {
+    it('sendAs patch strips sendAsEmail into the path param and keeps the rest as body', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        await server.getTools().get('manageGmailSettings').execute({
+            resource: 'sendAs',
+            action: 'patch',
+            payload: { sendAsEmail: 'alias@b.com', displayName: 'Alias', signature: '<b>sig</b>' },
+        });
+        const call = calls.pop();
+        expect(call.path).toBe('users.settings.sendAs.patch');
+        expect(call.args).toEqual({
+            userId: 'me',
+            sendAsEmail: 'alias@b.com',
+            requestBody: { displayName: 'Alias', signature: '<b>sig</b>' },
+        });
+    });
+
+    it('smime insert sends sendAsEmail both as path param and inside the requestBody', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        await server.getTools().get('manageSmime').execute({
+            action: 'insert',
+            sendAsEmail: 'alias@b.com',
+            encryptedKeyPassword: 'pw',
+            pkcs12: 'base64data',
+        });
+        const call = calls.pop();
+        expect(call.path).toBe('users.settings.sendAs.smimeInfo.insert');
+        expect(call.args).toEqual({
+            userId: 'me',
+            sendAsEmail: 'alias@b.com',
+            requestBody: { sendAsEmail: 'alias@b.com', encryptedKeyPassword: 'pw', pkcs12: 'base64data' },
+        });
+    });
 });

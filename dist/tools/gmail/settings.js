@@ -66,6 +66,25 @@ function validCombosText() {
         .join('\n');
 }
 
+// Identifier fields each resource/action needs in the payload. Enforced up
+// front so callers get a clean validation error instead of a raw API failure.
+const REQUIRED_PAYLOAD_KEYS = {
+    forwardingAddress: { get: ['forwardingEmail'], create: ['forwardingEmail'], delete: ['forwardingEmail'] },
+    delegate: { get: ['delegateEmail'], create: ['delegateEmail'], delete: ['delegateEmail'] },
+    sendAs: { get: ['sendAsEmail'], create: ['sendAsEmail'], patch: ['sendAsEmail'], update: ['sendAsEmail'], delete: ['sendAsEmail'], verify: ['sendAsEmail'] },
+};
+
+function requirePayloadKeys(resource, action, payload) {
+    const keys = REQUIRED_PAYLOAD_KEYS[resource]?.[action] || [];
+    const missing = keys.filter((key) => payload[key] === undefined || payload[key] === '');
+    if (missing.length) {
+        throw new UserError(`resource="${resource}" action="${action}" requires payload field(s): ${missing.join(', ')}.`);
+    }
+    if (action === 'update' && !REQUIRED_PAYLOAD_KEYS[resource] && Object.keys(payload).length === 0) {
+        throw new UserError(`resource="${resource}" action="update" requires a payload (the settings body to write). See the tool description for the fields.`);
+    }
+}
+
 export function register(server) {
     server.addTool({
         name: 'manageGmailSettings',
@@ -98,6 +117,7 @@ export function register(server) {
                     `Valid combinations:\n${validCombosText()}`
                 );
             }
+            requirePayloadKeys(resource, action, payload);
             const gmail = await getGmailClient();
             const { data } = await handler(gmail, payload);
             return JSON.stringify(data || { success: true });
@@ -118,6 +138,12 @@ export function register(server) {
             pkcs12: z.string().optional().describe('PKCS#12 format key pair and certificate chain (required for insert)'),
         }),
         execute: async (params) => {
+            if (['get', 'delete', 'setDefault'].includes(params.action) && !params.id) {
+                throw new UserError(`manageSmime action="${params.action}" requires id.`);
+            }
+            if (params.action === 'insert' && (!params.encryptedKeyPassword || !params.pkcs12)) {
+                throw new UserError('manageSmime action="insert" requires encryptedKeyPassword and pkcs12.');
+            }
             const gmail = await getGmailClient();
             const smime = gmail.users.settings.sendAs.smimeInfo;
             const { action, sendAsEmail, id } = params;
@@ -174,6 +200,12 @@ export function register(server) {
             }).optional().describe('Actions on matching messages (required for create)'),
         }),
         execute: async (params) => {
+            if (params.action === 'create' && (!params.criteria || !params.filterAction)) {
+                throw new UserError('manageFilter action="create" requires criteria and filterAction.');
+            }
+            if (['get', 'delete'].includes(params.action) && !params.id) {
+                throw new UserError(`manageFilter action="${params.action}" requires id.`);
+            }
             const gmail = await getGmailClient();
             const filters = gmail.users.settings.filters;
             let data;

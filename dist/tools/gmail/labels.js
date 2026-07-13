@@ -1,6 +1,7 @@
 // Gmail Label tools — consolidated dispatch tool (issue #31/#32/#33).
 // manageLabel replaces create/patch/delete/get/list_label(s).
 import { z } from 'zod';
+import { UserError } from 'fastmcp';
 import { getGmailClient } from '../../clients.js';
 
 export function register(server) {
@@ -21,6 +22,12 @@ export function register(server) {
             }).optional().describe('The color settings for the label'),
         }),
         execute: async (params) => {
+            if (params.action === 'create' && !params.name) {
+                throw new UserError('manageLabel action="create" requires name.');
+            }
+            if (['patch', 'delete', 'get'].includes(params.action) && !params.id) {
+                throw new UserError(`manageLabel action="${params.action}" requires id.`);
+            }
             const gmail = await getGmailClient();
             const { action, id, ...labelData } = params;
             let data;
