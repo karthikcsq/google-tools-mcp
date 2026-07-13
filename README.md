@@ -296,6 +296,10 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients)) |
 | `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
 | `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
+| `GOOGLE_MCP_HTTP_TOKEN` | No | Bearer token required by HTTP clients. If unset in HTTP mode, a one-time token is generated and logged at startup. Set a fixed value to keep it stable across restarts |
+| `GOOGLE_MCP_HTTP_HOST` | No | Bind address for HTTP transport (default `127.0.0.1`, loopback only). Change only if you deliberately need remote access |
+| `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` | No | Comma-separated extra `Origin` values to accept (loopback origins are always allowed). Requests with a foreign browser `Origin` are otherwise rejected |
+| `GOOGLE_MCP_HTTP_NO_AUTH` | No | Set to `1` to disable the bearer-token requirement. Only safe when you fully trust every process on the machine |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
@@ -310,29 +314,50 @@ By default the server uses **stdio** transport: each MCP client spawns its own
 or agent sessions), that's one Node process per session, each holding memory.
 
 Set `GOOGLE_MCP_TRANSPORT=http` to instead run a **single long-lived server**
-that every client shares over a localhost URL — one process regardless of how
+that every client shares over a loopback URL — one process regardless of how
 many clients connect:
 
 ```bash
 # start one shared server (keep it running; e.g. a login item or service)
-GOOGLE_MCP_TRANSPORT=http GOOGLE_MCP_PORT=3939 google-tools-mcp
+GOOGLE_MCP_TRANSPORT=http GOOGLE_MCP_PORT=3939 GOOGLE_MCP_HTTP_TOKEN=your-secret google-tools-mcp
 ```
 
-Then point each client at the URL instead of a spawn command:
+Then point each client at the URL, sending the token as a bearer header:
 
 ```json
 {
   "mcpServers": {
-    "google": { "type": "http", "url": "http://localhost:3939/mcp" }
+    "google": {
+      "type": "http",
+      "url": "http://127.0.0.1:3939/mcp",
+      "headers": { "Authorization": "Bearer your-secret" }
+    }
   }
 }
 ```
 
+### Security
+
+The HTTP endpoint exposes your **authenticated** Google Workspace tool surface
+(Gmail, Drive, Calendar, Docs, …). It is guarded so it can't be driven by other
+processes or by web pages on your machine:
+
+- **Bearer token required.** Every request must send `Authorization: Bearer <token>`.
+  Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a random one-time token is generated
+  and printed to the log at startup. Requests without a valid token get `401`.
+  (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables this — only on a fully trusted machine.)
+- **Loopback only.** Binds to `127.0.0.1` by default, so the port isn't reachable
+  from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need to.
+- **Origin checked.** Requests carrying a non-loopback browser `Origin` are
+  rejected (DNS-rebinding protection). Add trusted origins via
+  `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` if needed.
+
 Notes:
 - The shared server does **not** start or stop with your clients — you manage
   its lifecycle (start it at login / run it as a service).
-- All clients share one OAuth/token state and one process. FastMCP's HTTP-stream
-  transport tracks a separate session per client, so concurrent use is fine.
+- Each connecting client gets its own MCP session, and per-session state (such as
+  the read-before-edit guard) is isolated between clients. They still share one
+  process and one OAuth/token state, so a crash or token expiry affects everyone.
 - Auth (`google-tools-mcp auth` / `setup`) is unchanged and still uses stdio.
 
 ## Migrating from gdrive-tools-mcp / gmail-tools-mcp

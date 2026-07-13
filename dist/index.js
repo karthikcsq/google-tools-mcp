@@ -11,6 +11,8 @@
 import { FastMCP } from 'fastmcp';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
+import { resolveHttpAuthConfig, generateToken, createHttpAuthenticate } from './httpAuth.js';
+import { clearSession } from './readTracker.js';
 
 // --- Setup subcommand ---
 if (process.argv[2] === 'setup') {
@@ -46,6 +48,24 @@ const transportEnv = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase()
 const useHttp = transportEnv === 'http' || transportEnv === 'httpstream';
 const httpPort = Number(process.env.GOOGLE_MCP_PORT) || 3939;
 const httpEndpoint = process.env.GOOGLE_MCP_ENDPOINT || '/mcp';
+
+// --- HTTP security ---
+// The HTTP transport exposes the authenticated Google tool surface over a local
+// URL. Gate it behind a bearer token + Origin validation and bind to loopback
+// by default so it isn't reachable by untrusted local processes, browser-
+// delivered requests, or the network. (PR #36 review)
+const httpAuth = resolveHttpAuthConfig(process.env);
+let httpToken = httpAuth.explicitToken;
+if (useHttp && !httpAuth.noAuth && !httpToken) {
+    // No token configured — generate a one-time one so the server is never
+    // unauthenticated by accident. Log it prominently; the operator should set
+    // GOOGLE_MCP_HTTP_TOKEN to a fixed value to keep it stable across restarts.
+    httpToken = generateToken();
+    logger.warn('GOOGLE_MCP_HTTP_TOKEN is not set — generated a one-time token for this run.');
+    logger.warn(`  Token: ${httpToken}`);
+    logger.warn('  Clients must send:  Authorization: Bearer <token>');
+    logger.warn('  Set GOOGLE_MCP_HTTP_TOKEN to keep this stable across restarts.');
+}
 
 // --- Process lifecycle logging ---
 process.on('uncaughtException', (error) => {
@@ -84,9 +104,29 @@ process.on('exit', (code) => {
 });
 
 // --- Server startup ---
-const server = new FastMCP({
+const serverOptions = {
     name: 'google-tools-mcp',
     version: '1.0.0',
+};
+if (useHttp) {
+    // authenticate() runs before any tool; a throw becomes an HTTP 401. It is
+    // only attached in HTTP mode, so stdio behavior is unchanged.
+    serverOptions.authenticate = createHttpAuthenticate(
+        { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
+        logger,
+    );
+}
+const server = new FastMCP(serverOptions);
+
+// Free per-session tracker state when an HTTP client disconnects, so a long-
+// lived shared server doesn't accumulate it indefinitely.
+server.on('disconnect', ({ session }) => {
+    try {
+        const key = session?.sessionId;
+        if (key) clearSession(key);
+    } catch (cleanupError) {
+        logger.warn(`Session cleanup failed: ${cleanupError.message || cleanupError}`);
+    }
 });
 
 await registerAllTools(server);
@@ -96,9 +136,10 @@ try {
     if (useHttp) {
         await server.start({
             transportType: 'httpStream',
-            httpStream: { port: httpPort, endpoint: httpEndpoint },
+            httpStream: { port: httpPort, endpoint: httpEndpoint, host: httpAuth.host },
         });
-        logger.info(`MCP Server running over HTTP at http://localhost:${httpPort}${httpEndpoint}`);
+        logger.info(`MCP Server running over HTTP at http://${httpAuth.host}:${httpPort}${httpEndpoint}`);
+        logger.info(`Auth: ${httpAuth.noAuth ? 'DISABLED (GOOGLE_MCP_HTTP_NO_AUTH) — do not use on a shared machine' : 'bearer token required'}; bound to ${httpAuth.host}.`);
         logger.info('Shared mode: point every client at this URL instead of spawning per-session stdio servers.');
     } else {
         await server.start({ transportType: 'stdio' });
