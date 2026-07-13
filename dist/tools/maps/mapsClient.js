@@ -31,6 +31,25 @@ export function formatPlace(place) {
     return { placeId: place.id, name: place.displayName?.text || null, address: place.formattedAddress || null, location: place.location || null, types: place.types || [], rating: place.rating ?? null, userRatingCount: place.userRatingCount ?? null, priceLevel: place.priceLevel || null, googleMapsUri: place.googleMapsUri || null };
 }
 
+export function haversineMeters(a, b) {
+    const R = 6371000;
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const dLat = toRad(b.latitude - a.latitude);
+    const dLng = toRad(b.longitude - a.longitude);
+    const lat1 = toRad(a.latitude);
+    const lat2 = toRad(b.latitude);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+export function withinRadius(places, center, radiusMeters) {
+    return places.filter((place) => {
+        const loc = place.location;
+        if (!loc || typeof loc.latitude !== 'number' || typeof loc.longitude !== 'number') return false;
+        return haversineMeters(center, loc) <= radiusMeters;
+    });
+}
+
 export function dedupePlaces(places, maxResults) {
     const seen = new Set();
     return places.filter((place) => {

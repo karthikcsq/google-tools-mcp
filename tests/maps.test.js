@@ -131,4 +131,29 @@ describe('Maps tools', () => {
             includedTypes: ['gym'],
         });
     });
+
+    it('routes nearby keyword searches through Text Search with a circular bias', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ places: [] }));
+        await tools.get('mapsSearchNearby').execute({ latitude: 40.4, longitude: -86.9, radiusMeters: 1500, includedTypes: ['cafe'], keyword: 'coffee', maxResults: 5 });
+        const [url, options] = global.fetch.mock.calls[0];
+        expect(url).toBe('https://places.googleapis.com/v1/places:searchText');
+        expect(JSON.parse(options.body)).toEqual({
+            textQuery: 'coffee',
+            maxResultCount: 20,
+            locationBias: { circle: { center: { latitude: 40.4, longitude: -86.9 }, radius: 1500 } },
+            includedType: 'cafe',
+        });
+    });
+
+    it('enforces the radius on keyword results and keeps relevant hits the old local filter would drop', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ places: [
+            { id: 'inside', displayName: { text: 'Starbucks' }, types: ['cafe'], location: { latitude: 40.4, longitude: -86.9 } },
+            { id: 'outside', displayName: { text: 'Coffee Barn' }, types: ['cafe'], location: { latitude: 41.4, longitude: -86.9 } },
+        ] }));
+        const result = JSON.parse(await tools.get('mapsSearchNearby').execute({ latitude: 40.4, longitude: -86.9, radiusMeters: 1000, keyword: 'coffee', maxResults: 5 }));
+        expect(result.map((place) => place.placeId)).toEqual(['inside']);
+        expect(result[0].name).toBe('Starbucks');
+    });
 });
