@@ -109,24 +109,55 @@ export const wrapTextBody = (text) => text.split('\n').map(line => {
     return chunks.join('=\n');
 }).join('\n');
 
+// RFC 5322 line limits are measured in OCTETS, not UTF-16 code units. The raw
+// message is serialized as UTF-8, so a non-ASCII subject or display name can
+// blow past the 998-octet hard limit while `string.length` stays small. Measure
+// with byte length, and when an over-length run has no foldable whitespace, cut
+// it only at code-point boundaries so a multi-byte character (or a surrogate
+// pair such as an emoji) is never split into a corrupt/replacement byte.
+const byteLen = (str) => Buffer.byteLength(str, 'utf8');
+const SOFT_LIMIT = 78; // recommended max octets per line (RFC 5322 §2.1.1)
+const HARD_LIMIT = 998; // absolute max octets per line, excluding CRLF
+
+// Slice `str` into a head of at most `maxBytes` octets ending on a code-point
+// boundary, plus the untouched remainder. Iterating with Array.from walks
+// Unicode code points, so surrogate pairs stay intact.
+const sliceByBytes = (str, maxBytes) => {
+    const codePoints = Array.from(str);
+    let bytes = 0;
+    let cut = codePoints.length;
+    for (let i = 0; i < codePoints.length; i++) {
+        const cpBytes = byteLen(codePoints[i]);
+        if (bytes + cpBytes > maxBytes) { cut = i; break; }
+        bytes += cpBytes;
+    }
+    return [codePoints.slice(0, cut).join(''), codePoints.slice(cut).join('')];
+};
+
 export const foldHeader = (name, value) => {
     const prefix = `${name}: `;
     const normalizedValue = String(value).replace(/(?:\r\n?|\n)[ \t]*/g, ' ');
     const unfolded = prefix + normalizedValue;
-    if (unfolded.length <= 78) return unfolded;
+    if (byteLen(unfolded) <= SOFT_LIMIT) return unfolded;
 
     const lines = [];
     let line = prefix;
     const tokens = normalizedValue.match(/\S+(?:[ \t]+|$)/g) || [];
     for (const token of tokens) {
-        if (line.length > (line === prefix ? prefix.length : 1) && line.length + token.length > 78) {
+        const minBytes = line === prefix ? prefix.length : 1;
+        if (byteLen(line) > minBytes && byteLen(line) + byteLen(token) > SOFT_LIMIT) {
             lines.push(line.trimEnd());
             line = ' ';
         }
         line += token;
-        while (line.length > 998) {
-            lines.push(line.slice(0, 998));
-            line = ' ' + line.slice(998);
+        // A single token longer than the hard limit (e.g. a giant CJK subject or
+        // an emoji run with no whitespace) can't be folded at WSP, so cut it on a
+        // code-point boundary. The injected continuation space is unavoidable for
+        // an unbreakable >998-octet run, but it never corrupts a character.
+        while (byteLen(line) > HARD_LIMIT) {
+            const [head, rest] = sliceByBytes(line, HARD_LIMIT);
+            lines.push(head);
+            line = ' ' + rest;
         }
     }
     lines.push(line.trimEnd());

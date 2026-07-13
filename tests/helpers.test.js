@@ -50,6 +50,63 @@ describe('header folding', () => {
         expect(foldHeader('Subject', 'Hello\rBcc: evil@x.com')).toBe('Subject: Hello Bcc: evil@x.com');
         expect(foldHeader('Subject', 'Hello\r\n  world\nagain')).toBe('Subject: Hello world again');
     });
+
+    // RFC 5322 line limits are octets, not UTF-16 code units. These cases would
+    // slip past a `string.length` check because each glyph is 1 code unit (or 2,
+    // for emoji) but 3-4 UTF-8 octets.
+    it('keeps every physical line within the 998-octet hard limit for a long CJK subject', () => {
+        // 400 CJK words -> ~2600 octets, well past 998, but folded at spaces.
+        const subject = Array.from({ length: 400 }, (_, i) => `件名${i}`).join(' ');
+        const folded = foldHeader('Subject', subject);
+        const lines = folded.split('\r\n');
+
+        expect(lines.length).toBeGreaterThan(1);
+        for (const line of lines) {
+            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(998);
+        }
+        // No corruption: the serialized bytes decode cleanly (no U+FFFD), and the
+        // header unfolds back to the exact original value.
+        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
+        expect(decoded).not.toContain('�');
+        const unfolded = folded.replace(/\r\n[ \t]+/g, ' ');
+        expect(unfolded).toBe(`Subject: ${subject}`);
+    });
+
+    it('hard-splits an unbreakable emoji run on code-point boundaries without corruption', () => {
+        // 300 emoji, no whitespace -> 1200 octets on one token, forcing an
+        // emergency cut. A naive UTF-16 or raw-byte slice would sever a surrogate
+        // pair / multi-byte sequence and yield replacement characters.
+        const run = '😀'.repeat(300);
+        const folded = foldHeader('Subject', run);
+        const lines = folded.split('\r\n');
+
+        expect(lines.length).toBeGreaterThan(1);
+        for (const line of lines) {
+            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(998);
+        }
+        // Round-trip through UTF-8 bytes to prove no split produced a lone
+        // surrogate or truncated code point.
+        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
+        expect(decoded).not.toContain('�');
+        // The run has no internal whitespace, so removing each injected CRLF+space
+        // continuation reconstructs the original exactly.
+        const reconstructed = folded.replace(/^Subject: /, '').replace(/\r\n /g, '');
+        expect(reconstructed).toBe(run);
+    });
+
+    it('does not split a multi-byte character straddling the hard limit', () => {
+        // Fill to 1 octet short of the limit with ASCII, then place an emoji so a
+        // byte-count cut at 998 would land mid-character.
+        // "Subject: " is 9 octets; 987 'a' puts the emoji at octets 996-1000, so a
+        // byte cut at 998 must stop before it rather than slicing it in half.
+        const subject = 'a'.repeat(987) + '😀' + 'b'.repeat(10);
+        const folded = foldHeader('Subject', subject);
+        for (const line of folded.split('\r\n')) {
+            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(998);
+        }
+        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
+        expect(decoded).not.toContain('�');
+    });
 });
 
 // ---------------------------------------------------------------------------
