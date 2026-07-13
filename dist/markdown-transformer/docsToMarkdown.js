@@ -5,41 +5,48 @@
  */
 const CODE_FONT_FAMILIES = new Set(['Roboto Mono', 'Courier New', 'Consolas', 'monospace']);
 /**
- * Inspects a Google Docs JSON structure for content that docsJsonToMarkdown
- * cannot represent. Returns an array of human-readable warning strings (empty
- * if the document converts losslessly). Call before replaceDocumentWithMarkdown
- * to give the AI a heads-up about what will be permanently lost.
+ * Inspects the body content that replaceDocumentWithMarkdown will delete and
+ * re-insert, and reports anything docsJsonToMarkdown cannot represent. Returns
+ * an array of human-readable warning strings (empty if the content converts
+ * losslessly). Call before replaceDocumentWithMarkdown to warn the AI about
+ * what a body replacement will permanently lose.
  *
- * Checked: images, headers/footers, footnotes, custom text/highlight colors,
- * non-default paragraph alignment (CENTER, RIGHT, JUSTIFIED).
+ * IMPORTANT — accuracy: every warning is derived from `bodyContent` itself,
+ * i.e. the exact body (a specific tab's body in tab mode, the document body
+ * otherwise) that the replacement mutates. This deliberately does NOT inspect
+ * document-level `inlineObjects`/`footnotes` maps or `headers`/`footers`:
+ *   - Global maps can include images/footnotes belonging to OTHER tabs, which a
+ *     scoped replacement never touches, so counting them over-reports.
+ *   - Headers and footers are separate document segments that a body-content
+ *     replacement does not delete, so warning that they "will be removed" is
+ *     simply wrong. They are intentionally not reported here.
+ * Instead we count the inline-image and footnote references that actually live
+ * in this body, which are the ones deleted along with it.
+ *
+ * @param {Array} bodyContent structural elements of the body being replaced
+ *   (e.g. `contentSource.body.content`).
+ * @returns {string[]} warnings
  */
-export function checkMarkdownFidelity(docData, scanContent = null) {
+export function checkMarkdownFidelity(bodyContent) {
     const warnings = [];
-    // Images
-    const imageCount = docData.inlineObjects ? Object.keys(docData.inlineObjects).length : 0;
-    if (imageCount > 0) {
-        warnings.push(`${imageCount} image(s) — will be removed`);
-    }
-    // Headers / footers
-    if (docData.headers && Object.keys(docData.headers).length > 0) {
-        warnings.push('Document headers — will be removed');
-    }
-    if (docData.footers && Object.keys(docData.footers).length > 0) {
-        warnings.push('Document footers — will be removed');
-    }
-    // Footnotes
-    const footnoteCount = docData.footnotes ? Object.keys(docData.footnotes).length : 0;
-    if (footnoteCount > 0) {
-        warnings.push(`${footnoteCount} footnote(s) — will be removed`);
-    }
-    // Scan for custom colors and non-default alignment.
-    // scanContent overrides the body to scan (used in tab mode to target the active tab).
+    let imageCount = 0;
+    let footnoteCount = 0;
     let hasCustomColors = false;
     let hasNonDefaultAlignment = false;
     function scanParagraphElements(elements) {
         for (const pe of elements) {
+            // Inline images embedded in the body flow — deleted with the body.
+            if (pe.inlineObjectElement) {
+                imageCount++;
+            }
+            // Footnote references live in the body; deleting the body removes them
+            // (and Docs then drops the orphaned footnote).
+            if (pe.footnoteReference) {
+                footnoteCount++;
+            }
             const style = pe.textRun?.textStyle;
-            if (!style) continue;
+            if (!style)
+                continue;
             const fgRgb = style.foregroundColor?.color?.rgbColor;
             if (fgRgb && ((fgRgb.red ?? 0) > 0 || (fgRgb.green ?? 0) > 0 || (fgRgb.blue ?? 0) > 0)) {
                 hasCustomColors = true;
@@ -50,15 +57,21 @@ export function checkMarkdownFidelity(docData, scanContent = null) {
             }
         }
     }
-    function scanBodyContent(bodyContent) {
-        for (const element of bodyContent) {
+    function scanBodyContent(content) {
+        for (const element of content) {
             if (element.paragraph) {
                 const alignment = element.paragraph.paragraphStyle?.alignment;
                 if (alignment && alignment !== 'START' && alignment !== 'UNSPECIFIED') {
                     hasNonDefaultAlignment = true;
                 }
+                // Positioned (floating) images anchored to this paragraph are also
+                // removed when the paragraph is deleted.
+                if (Array.isArray(element.paragraph.positionedObjectIds)) {
+                    imageCount += element.paragraph.positionedObjectIds.length;
+                }
                 scanParagraphElements(element.paragraph.elements ?? []);
-            } else if (element.table) {
+            }
+            else if (element.table) {
                 for (const row of (element.table.tableRows ?? [])) {
                     for (const cell of (row.tableCells ?? [])) {
                         scanBodyContent(cell.content ?? []);
@@ -67,7 +80,13 @@ export function checkMarkdownFidelity(docData, scanContent = null) {
             }
         }
     }
-    scanBodyContent(scanContent ?? docData.body?.content ?? []);
+    scanBodyContent(bodyContent ?? []);
+    if (imageCount > 0) {
+        warnings.push(`${imageCount} image(s) — will be removed`);
+    }
+    if (footnoteCount > 0) {
+        warnings.push(`${footnoteCount} footnote(s) — will be removed`);
+    }
     if (hasCustomColors) {
         warnings.push('Custom text/highlight colors — will be lost');
     }

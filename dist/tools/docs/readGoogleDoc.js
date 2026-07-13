@@ -1,6 +1,3 @@
-import * as fs from 'fs/promises';
-import * as os from 'os';
-import * as path from 'path';
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { createPatch } from 'diff';
@@ -9,10 +6,7 @@ import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown, checkMarkdownFidelity } from '../../markdown-transformer/index.js';
 import { trackRead, getLastReadContent } from '../../readTracker.js';
-
-function getWorkspacePath(documentId) {
-    return path.join(os.tmpdir(), 'google-tools-mcp', `${documentId}.md`);
-}
+import { writeWorkspaceFile } from '../../workspace.js';
 
 async function fetchModifiedTime(documentId) {
     try {
@@ -106,12 +100,13 @@ export function register(server) {
                     const markdownContent = docsJsonToMarkdown(contentSource);
                     const totalLength = markdownContent.length;
                     log.info(`Generated markdown: ${totalLength} characters`);
-                    // Doc-level metadata (images/headers/footers/footnotes) always from res.data.
-                    // Color/alignment scan targets the active tab's body when tabId is set.
-                    const fidelityBodyContent = args.tabId
-                        ? GDocsHelpers.findTabById(res.data, args.tabId)?.documentTab?.body?.content ?? null
-                        : null;
-                    const fidelityWarnings = checkMarkdownFidelity(res.data, fidelityBodyContent);
+                    // Derive fidelity warnings from EXACTLY the body that will be
+                    // replaced (contentSource.body is the active tab's body in tab
+                    // mode, the document body otherwise). This scopes image/footnote/
+                    // color/alignment detection to the content the replacement mutates
+                    // and never over-reports images or footnotes living in other tabs
+                    // or in headers/footers that a body replacement leaves untouched.
+                    const fidelityWarnings = checkMarkdownFidelity(contentSource.body?.content);
                     if (args.diffFromLastRead) {
                         const previous = getLastReadContent(args.documentId);
                         if (previous !== null) {
@@ -126,9 +121,7 @@ export function register(server) {
                             trackRead(args.documentId, modifiedTime, markdownContent);
                             // Update workspace file so it stays in sync even on diff reads
                             try {
-                                const wp = getWorkspacePath(args.documentId);
-                                await fs.mkdir(path.dirname(wp), { recursive: true });
-                                await fs.writeFile(wp, markdownContent, 'utf-8');
+                                await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
                             } catch (e) {
                                 log.info(`Could not update workspace on diff read: ${e.message}`);
                             }
@@ -138,12 +131,11 @@ export function register(server) {
                     }
                     // Store clean markdown (without warning) for future diffs and guardMutation
                     trackRead(args.documentId, modifiedTime, markdownContent);
-                    // Save to local workspace file so the AI can edit it and push with filePath
+                    // Save to local workspace file so the AI can edit it and push with filePath.
+                    // Scoped by tabId so two tabs of the same document keep separate copies.
                     let localPath = null;
                     try {
-                        localPath = getWorkspacePath(args.documentId);
-                        await fs.mkdir(path.dirname(localPath), { recursive: true });
-                        await fs.writeFile(localPath, markdownContent, 'utf-8');
+                        localPath = await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
                         log.info(`Saved to ${localPath}`);
                     } catch (e) {
                         log.info(`Could not save to workspace: ${e.message}`);
@@ -168,7 +160,10 @@ export function register(server) {
                         // Use forward slashes in the advice string so the path is valid JSON
                         // regardless of OS (backslashes in Windows paths break JSON encoding).
                         const jsonSafePath = localPath.replace(/\\/g, '/');
-                        output += `\n\n📄 Local file: ${localPath}\nEdit this file, then call replaceDocumentWithMarkdown with filePath="${jsonSafePath}" to push changes.`;
+                        // If this was a tab read, the file holds only that tab's content, so the
+                        // push must target the same tab to avoid writing it into the wrong tab.
+                        const tabAdvice = args.tabId ? ` tabId="${args.tabId}"` : '';
+                        output += `\n\n📄 Local file: ${localPath}\nEdit this file, then call replaceDocumentWithMarkdown with filePath="${jsonSafePath}"${tabAdvice} to push changes.`;
                     }
                     return output;
                 }

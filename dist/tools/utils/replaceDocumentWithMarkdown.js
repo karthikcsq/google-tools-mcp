@@ -1,6 +1,4 @@
 import * as fs from 'fs/promises';
-import * as os from 'os';
-import * as path from 'path';
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
@@ -8,10 +6,8 @@ import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
+import { writeWorkspaceFile } from '../../workspace.js';
 
-function getWorkspacePath(documentId) {
-    return path.join(os.tmpdir(), 'google-tools-mcp', `${documentId}.md`);
-}
 export function register(server) {
     server.addTool({
         name: 'replaceDocumentWithMarkdown',
@@ -61,13 +57,12 @@ export function register(server) {
             if (!markdown || markdown.length === 0) {
                 throw new UserError('Either markdown or filePath must be provided with non-empty content.');
             }
-            // When inline markdown is given (not filePath), persist it to the temp workspace so
-            // there is always a local copy of what was pushed.
+            // When inline markdown is given (not filePath), mirror it to the secure
+            // workspace so there is always a local copy of what was pushed. Scoped by
+            // tabId so it lines up with the per-tab file readDocument created.
             if (!args.filePath && markdown) {
                 try {
-                    const workspacePath = getWorkspacePath(args.documentId);
-                    await fs.mkdir(path.dirname(workspacePath), { recursive: true });
-                    await fs.writeFile(workspacePath, markdown, 'utf-8');
+                    const workspacePath = await writeWorkspaceFile(args.documentId, markdown, args.tabId);
                     log.info(`Saved working copy to ${workspacePath}`);
                 } catch (e) {
                     log.info(`Could not save working copy: ${e.message}`);
