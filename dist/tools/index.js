@@ -11,6 +11,7 @@ import { promisify } from 'util';
 import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
+import { runWithSession } from '../sessionContext.js';
 import { google } from 'googleapis';
 
 const execAsync = promisify(exec);
@@ -98,11 +99,18 @@ function wrapServerWithAuthRetry(server) {
         const toolName = toolDef.name;
         if (originalExecute) {
             toolDef.execute = async function (...args) {
-                try {
-                    return await withAuthRetry(() => originalExecute.apply(this, args));
-                } catch (err) {
-                    throw appendHintToError(err, toolName);
-                }
+                // Bind this request's MCP session so per-session state (e.g. the
+                // read-before-edit tracker) is isolated across concurrent HTTP
+                // clients. context.sessionId is undefined for stdio (single
+                // client), which maps to the default namespace. (PR #36 review)
+                const sessionKey = args[1]?.sessionId ?? null;
+                return runWithSession(sessionKey, async () => {
+                    try {
+                        return await withAuthRetry(() => originalExecute.apply(this, args));
+                    } catch (err) {
+                        throw appendHintToError(err, toolName);
+                    }
+                });
             };
         }
         return originalAddTool(toolDef);
