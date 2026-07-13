@@ -29,14 +29,14 @@ export function formatInsertResult(result) {
         .map(([k, v]) => `${v} ${k}`)
         .join(', ')})`);
     lines.push(`  API calls: ${result.batchUpdate.totalApiCalls} batchUpdate calls in ${result.batchUpdate.totalElapsedMs}ms`);
-    const { phases } = result.batchUpdate;
-    if (phases.delete.requests > 0) {
+    const phases = result.batchUpdate.phases;
+    if (phases?.delete?.requests > 0) {
         lines.push(`    Delete phase: ${phases.delete.requests} requests, ${phases.delete.apiCalls} calls, ${phases.delete.elapsedMs}ms`);
     }
-    if (phases.insert.requests > 0) {
+    if (phases?.insert?.requests > 0) {
         lines.push(`    Insert phase: ${phases.insert.requests} requests, ${phases.insert.apiCalls} calls, ${phases.insert.elapsedMs}ms`);
     }
-    if (phases.format.requests > 0) {
+    if (phases?.format?.requests > 0) {
         lines.push(`    Format phase: ${phases.format.requests} requests, ${phases.format.apiCalls} calls, ${phases.format.elapsedMs}ms`);
     }
     return lines.join('\n');
@@ -116,8 +116,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
         ...(options?.firstHeadingAsTitle && { firstHeadingAsTitle: true }),
         ...(defaultForegroundColor && { defaultForegroundColor }),
     };
-    const requests = convertMarkdownToRequests(markdown, startIndex, tabId, conversionOptions);
-    const warnings = requests.warnings ?? [];
+    const { requests, warnings } = convertMarkdownToRequests(markdown, startIndex, tabId, conversionOptions);
     const parseElapsedMs = Math.round(performance.now() - parseStart);
     // Count requests by type
     const requestsByType = {};

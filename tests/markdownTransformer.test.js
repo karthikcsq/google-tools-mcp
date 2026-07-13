@@ -329,14 +329,14 @@ describe('docsJsonToMarkdown', () => {
 // convertMarkdownToRequests — markdown to Docs API requests
 // ---------------------------------------------------------------------------
 describe('convertMarkdownToRequests', () => {
-    it('returns empty array for empty/whitespace markdown', () => {
-        expect(convertMarkdownToRequests('')).toEqual([]);
-        expect(convertMarkdownToRequests('   ')).toEqual([]);
-        expect(convertMarkdownToRequests(null)).toEqual([]);
+    it('returns empty requests and warnings for empty/whitespace markdown', () => {
+        expect(convertMarkdownToRequests('')).toEqual({ requests: [], warnings: [] });
+        expect(convertMarkdownToRequests('   ')).toEqual({ requests: [], warnings: [] });
+        expect(convertMarkdownToRequests(null)).toEqual({ requests: [], warnings: [] });
     });
 
     it('generates insertText for plain text', () => {
-        const requests = convertMarkdownToRequests('Hello world', 1);
+        const { requests } = convertMarkdownToRequests('Hello world', 1);
         const inserts = requests.filter(r => 'insertText' in r);
         expect(inserts.length).toBeGreaterThan(0);
         // The inserted text should contain 'Hello world'
@@ -345,7 +345,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('generates heading style for # heading', () => {
-        const requests = convertMarkdownToRequests('# My Heading', 1);
+        const { requests } = convertMarkdownToRequests('# My Heading', 1);
         const paragraphStyles = requests.filter(r => 'updateParagraphStyle' in r);
         expect(paragraphStyles.length).toBeGreaterThan(0);
         // At least one should set HEADING_1 or TITLE
@@ -357,7 +357,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('generates bold formatting for **text**', () => {
-        const requests = convertMarkdownToRequests('**bold text**', 1);
+        const { requests } = convertMarkdownToRequests('**bold text**', 1);
         const textStyles = requests.filter(r => 'updateTextStyle' in r);
         const boldRequest = textStyles.find(r =>
             r.updateTextStyle?.textStyle?.bold === true
@@ -366,21 +366,21 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('uses the provided startIndex for insertions', () => {
-        const requests = convertMarkdownToRequests('Text', 42);
+        const { requests } = convertMarkdownToRequests('Text', 42);
         const inserts = requests.filter(r => 'insertText' in r);
         // First insert should be at index 42
         expect(inserts[0].insertText.location.index).toBe(42);
     });
 
     it('includes tabId in requests when provided', () => {
-        const requests = convertMarkdownToRequests('Text', 1, 'tab-99');
+        const { requests } = convertMarkdownToRequests('Text', 1, 'tab-99');
         const inserts = requests.filter(r => 'insertText' in r);
         expect(inserts[0].insertText.location.tabId).toBe('tab-99');
     });
 
     it('handles multiple paragraphs', () => {
         const md = 'Paragraph one\n\nParagraph two';
-        const requests = convertMarkdownToRequests(md, 1);
+        const { requests } = convertMarkdownToRequests(md, 1);
         const inserts = requests.filter(r => 'insertText' in r);
         const allText = inserts.map(r => r.insertText.text).join('');
         expect(allText).toContain('Paragraph one');
@@ -389,7 +389,7 @@ describe('convertMarkdownToRequests', () => {
 
     it('handles bullet lists', () => {
         const md = '- Item 1\n- Item 2\n- Item 3';
-        const requests = convertMarkdownToRequests(md, 1);
+        const { requests } = convertMarkdownToRequests(md, 1);
         const inserts = requests.filter(r => 'insertText' in r);
         const allText = inserts.map(r => r.insertText.text).join('');
         expect(allText).toContain('Item 1');
@@ -398,7 +398,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('parses rich inline HTML formatting into text style requests', () => {
-        const requests = convertMarkdownToRequests('<u><span style="color:#ff0000; background-color:#ffff00; font-size:14pt; font-family:Arial">Styled</span></u>', 1);
+        const { requests } = convertMarkdownToRequests('<u><span style="color:#ff0000; background-color:#ffff00; font-size:14pt; font-family:Arial">Styled</span></u>', 1);
         const richRequest = requests.find(r =>
             r.updateTextStyle?.textStyle?.underline === true &&
             r.updateTextStyle?.textStyle?.foregroundColor?.color?.rgbColor?.red === 1 &&
@@ -410,7 +410,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('parses paragraph alignment wrappers', () => {
-        const requests = convertMarkdownToRequests('<p align="center">Centered text</p>', 1);
+        const { requests } = convertMarkdownToRequests('<p align="center">Centered text</p>', 1);
         const alignmentRequest = requests.find(r =>
             r.updateParagraphStyle?.paragraphStyle?.alignment === 'CENTER'
         );
@@ -418,7 +418,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('styles markdown blockquotes instead of dropping them', () => {
-        const requests = convertMarkdownToRequests('> Quoted text', 1);
+        const { requests } = convertMarkdownToRequests('> Quoted text', 1);
         const quoteRequest = requests.find(r =>
             r.updateParagraphStyle?.paragraphStyle?.indentStart?.magnitude === 36 &&
             r.updateParagraphStyle?.paragraphStyle?.borderLeft
@@ -427,7 +427,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('applies markdown table alignment to table cell paragraphs', () => {
-        const requests = convertMarkdownToRequests('| Left | Right |\n| --- | ---: |\n| a | b |', 1);
+        const { requests } = convertMarkdownToRequests('| Left | Right |\n| --- | ---: |\n| a | b |', 1);
         const alignmentRequest = requests.find(r =>
             r.updateParagraphStyle?.paragraphStyle?.alignment === 'END'
         );
@@ -436,7 +436,7 @@ describe('convertMarkdownToRequests', () => {
 
     // --- Issue #14: default foreground color ---
     it('adds base foreground color when defaultForegroundColor option is provided', () => {
-        const requests = convertMarkdownToRequests('Hello world', 1, undefined, {
+        const { requests } = convertMarkdownToRequests('Hello world', 1, undefined, {
             defaultForegroundColor: { red: 0, green: 0, blue: 0 },
         });
         const colorRequests = requests.filter(r =>
@@ -449,7 +449,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('base foreground color covers the full inserted range', () => {
-        const requests = convertMarkdownToRequests('Hello world', 5, undefined, {
+        const { requests } = convertMarkdownToRequests('Hello world', 5, undefined, {
             defaultForegroundColor: { red: 0, green: 0, blue: 0 },
         });
         const colorReq = requests.find(r =>
@@ -462,7 +462,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('does not add foreground color when option is not provided', () => {
-        const requests = convertMarkdownToRequests('Hello world', 1);
+        const { requests } = convertMarkdownToRequests('Hello world', 1);
         const colorRequests = requests.filter(r =>
             r.updateTextStyle?.fields === 'foregroundColor'
         );
@@ -470,7 +470,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('includes tabId in foreground color request when tabId is provided', () => {
-        const requests = convertMarkdownToRequests('Hello', 1, 'tab-42', {
+        const { requests } = convertMarkdownToRequests('Hello', 1, 'tab-42', {
             defaultForegroundColor: { red: 0, green: 0, blue: 0 },
         });
         const colorReq = requests.find(r =>
@@ -481,7 +481,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('supports non-black default colors (e.g. document with dark theme)', () => {
-        const requests = convertMarkdownToRequests('Hello', 1, undefined, {
+        const { requests } = convertMarkdownToRequests('Hello', 1, undefined, {
             defaultForegroundColor: { red: 1, green: 1, blue: 1 },
         });
         const colorReq = requests.find(r =>
@@ -493,23 +493,43 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('warns when a markdown image is dropped', () => {
-        const requests = convertMarkdownToRequests('Before ![architecture diagram](https://example.com/diagram.png) after');
-        expect(requests.warnings).toHaveLength(1);
-        expect(requests.warnings[0]).toContain('architecture diagram');
-        expect(requests.warnings[0]).toContain('https://example.com/diagram.png');
+        const { requests, warnings } = convertMarkdownToRequests('Before ![architecture diagram](https://example.com/diagram.png) after');
+        // Surrounding text still converts; the image is the only thing dropped.
+        expect(requests.some(r => 'insertText' in r)).toBe(true);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('architecture diagram');
+        expect(warnings[0]).toContain('https://example.com/diagram.png');
     });
 
     it('warns when unsupported HTML block content is dropped', () => {
-        const requests = convertMarkdownToRequests('<details><summary>Notes</summary>Hidden details</details>');
-        expect(requests.warnings).toHaveLength(1);
-        expect(requests.warnings[0]).toContain('<details>');
-        expect(requests.warnings[0]).toContain('Hidden details');
+        const { warnings } = convertMarkdownToRequests('<details><summary>Notes</summary>Hidden details</details>');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('<details>');
+        expect(warnings[0]).toContain('Hidden details');
     });
 
     it('returns zero warnings for supported markdown constructs', () => {
         const markdown = '# Heading\n\n- item\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n---\n\n```js\nconst ok = true;\n```';
-        const requests = convertMarkdownToRequests(markdown);
-        expect(requests.warnings).toEqual([]);
+        const { warnings } = convertMarkdownToRequests(markdown);
+        expect(warnings).toEqual([]);
+    });
+
+    it('collapses repeated identical drops into one warning with an occurrence count', () => {
+        const md = '![logo](https://example.com/logo.png)\n\n![logo](https://example.com/logo.png)\n\n![logo](https://example.com/logo.png)';
+        const { warnings } = convertMarkdownToRequests(md);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('(3 occurrences)');
+    });
+
+    it('preserves warnings across array transformations (explicit object contract)', () => {
+        // The warnings live on a sibling field, not a hidden array property, so
+        // spreading/cloning the requests array cannot silently drop them.
+        const result = convertMarkdownToRequests('![diagram](https://example.com/d.png)');
+        const spreadRequests = [...result.requests];
+        const clonedResult = JSON.parse(JSON.stringify(result));
+        expect(spreadRequests).toEqual(result.requests);
+        expect(clonedResult.warnings).toEqual(result.warnings);
+        expect(result.warnings).toHaveLength(1);
     });
 });
 
@@ -524,15 +544,7 @@ describe('formatInsertResult', () => {
             parseElapsedMs: 1,
             totalRequests: 0,
             requestsByType: {},
-            batchUpdate: {
-                totalApiCalls: 0,
-                totalElapsedMs: 0,
-                phases: {
-                    delete: { requests: 0, apiCalls: 0, elapsedMs: 0 },
-                    insert: { requests: 0, apiCalls: 0, elapsedMs: 0 },
-                    format: { requests: 0, apiCalls: 0, elapsedMs: 0 },
-                },
-            },
+            batchUpdate: { totalApiCalls: 0, totalElapsedMs: 0 },
         });
         expect(output).toMatch(/^WARNINGS \(content dropped\):/);
         expect(output).toContain('Dropped image "diagram"');

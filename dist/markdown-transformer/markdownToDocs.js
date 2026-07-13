@@ -134,11 +134,13 @@ const EMPTY_1x1_TABLE_SIZE = 6;
  * @param startIndex - The document index where content should be inserted (1-based)
  * @param tabId - Optional tab ID for multi-tab documents
  * @param options - Optional conversion options (e.g. firstHeadingAsTitle)
- * @returns Array of Google Docs API requests (insertions first, then formatting)
+ * @returns `{ requests, warnings }` — Google Docs API requests (insertions
+ *   first, then formatting) and human-readable warnings for any markdown
+ *   constructs that were silently dropped during conversion.
  */
 export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, options) {
     if (!markdown || markdown.trim().length === 0) {
-        return withWarnings([], []);
+        return { requests: [], warnings: [] };
     }
     const parser = createParser();
     const tokens = parser.parse(markdown, {});
@@ -161,8 +163,7 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
         inTableCell: false,
         paragraphFormattingStack: [],
         htmlParagraphPushStack: [],
-        warnings: [],
-        warningSet: new Set(),
+        warningCounts: new Map(),
         tabId,
         titleConsumed: false,
         firstHeadingAsTitle: options?.firstHeadingAsTitle ?? false,
@@ -173,7 +174,10 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
             processToken(token, context);
         }
         finalizeFormatting(context);
-        return withWarnings([...context.insertRequests, ...context.formatRequests], context.warnings);
+        return {
+            requests: [...context.insertRequests, ...context.formatRequests],
+            warnings: collectWarnings(context),
+        };
     }
     catch (error) {
         if (error instanceof MarkdownConversionError) {
@@ -517,18 +521,20 @@ function handleHtmlBlockToken(token, context) {
     }
 }
 function addWarning(context, warning) {
-    if (!context.warningSet.has(warning)) {
-        context.warningSet.add(warning);
-        context.warnings.push(warning);
+    // Deduplicate by message but keep a count so repeated drops of the same
+    // construct are reported as "(N occurrences)" rather than collapsing to one.
+    context.warningCounts.set(warning, (context.warningCounts.get(warning) ?? 0) + 1);
+}
+function collectWarnings(context) {
+    const warnings = [];
+    for (const [message, count] of context.warningCounts) {
+        warnings.push(count > 1 ? `${message} (${count} occurrences)` : message);
     }
+    return warnings;
 }
 function summarizeContent(content) {
     const normalized = content.replace(/\s+/g, ' ').trim();
     return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
-}
-function withWarnings(requests, warnings) {
-    Object.defineProperty(requests, 'warnings', { value: warnings, enumerable: false });
-    return requests;
 }
 // --- Paragraph Handlers ---
 function handleParagraphOpen(context) {
