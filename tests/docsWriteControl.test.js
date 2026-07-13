@@ -57,8 +57,14 @@ describe('Google Docs optimistic concurrency', () => {
         ).rejects.toThrow(/Google API Error/);
     });
 
-    it('applies writeControl only to the first executed batch when splitting', async () => {
-        const batchUpdate = jest.fn().mockResolvedValue({ data: { replies: [] } });
+    it('chains writeControl across split batches using each response revision', async () => {
+        // Each successful batchUpdate returns the document's new head revision.
+        // The next batch must require that revision so a collaborator edit landing
+        // between our own batches is rejected as a conflict rather than applied.
+        let n = 0;
+        const batchUpdate = jest.fn().mockImplementation(async () => ({
+            data: { replies: [], writeControl: { requiredRevisionId: `rev-after-${++n}` } },
+        }));
         const docs = { documents: { batchUpdate } };
         const requests = [
             { deleteContentRange: { range: { startIndex: 1, endIndex: 5 } } },
@@ -70,9 +76,32 @@ describe('Google Docs optimistic concurrency', () => {
             requiredRevisionId: 'rev-1',
         });
 
-        expect(batchUpdate.mock.calls.length).toBeGreaterThanOrEqual(2);
+        // Three phases (delete → insert → format) → three batches.
+        expect(batchUpdate.mock.calls.length).toBe(3);
+        // First batch requires the revision from our read; each later batch requires
+        // the revision the previous batch produced.
         expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toEqual({ requiredRevisionId: 'rev-1' });
-        for (const call of batchUpdate.mock.calls.slice(1)) {
+        expect(batchUpdate.mock.calls[1][0].requestBody.writeControl).toEqual({ requiredRevisionId: 'rev-after-1' });
+        expect(batchUpdate.mock.calls[2][0].requestBody.writeControl).toEqual({ requiredRevisionId: 'rev-after-2' });
+    });
+
+    it('leaves split batches unguarded when no initial writeControl (legacy flow)', async () => {
+        // A response revision must not silently start guarding a flow that never
+        // captured a revision at read time.
+        const batchUpdate = jest.fn().mockResolvedValue({
+            data: { replies: [], writeControl: { requiredRevisionId: 'rev-x' } },
+        });
+        const docs = { documents: { batchUpdate } };
+        const requests = [
+            { deleteContentRange: { range: { startIndex: 1, endIndex: 5 } } },
+            { insertText: { location: { index: 1 }, text: 'hello' } },
+            { updateTextStyle: { range: { startIndex: 1, endIndex: 5 }, textStyle: {}, fields: 'bold' } },
+        ];
+
+        await executeBatchUpdateWithSplitting(docs, 'doc-1', requests, undefined, undefined);
+
+        expect(batchUpdate.mock.calls.length).toBe(3);
+        for (const call of batchUpdate.mock.calls) {
             expect(call[0].requestBody.writeControl).toBeUndefined();
         }
     });

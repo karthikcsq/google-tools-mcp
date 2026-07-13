@@ -56,11 +56,17 @@ export function register(server) {
             log.info(`Replacing doc ${args.documentId} with markdown (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
                 const revisionId = getLastReadRevisionId(args.documentId);
-                let firstWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
-                const consumeFirstWriteControl = () => {
-                    const writeControl = firstWriteControl;
-                    firstWriteControl = undefined;
-                    return writeControl;
+                // Optimistic-concurrency guard. The first write carries the revision
+                // from our last read; each subsequent write advances to the revision the
+                // previous write produced (returned by batchUpdate). This keeps every
+                // write in the operation (delete → cleanup → insert) guarded against
+                // concurrent edits instead of dropping the guard after the first write
+                // (PR #42 review).
+                let pendingWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
+                const advanceWriteControl = (response) => {
+                    if (pendingWriteControl && response?.writeControl) {
+                        pendingWriteControl = response.writeControl;
+                    }
                 };
                 // 1. Get document structure
                 const doc = await docs.documents.get({
@@ -104,11 +110,12 @@ export function register(server) {
                         deleteRange.tabId = args.tabId;
                     }
                     log.info(`Deleting content from index ${startIndex} to ${endIndex}`);
-                    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                    const deleteResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
                         {
                             deleteContentRange: { range: deleteRange },
                         },
-                    ], consumeFirstWriteControl());
+                    ], pendingWriteControl);
+                    advanceWriteControl(deleteResult);
                     log.info(`Delete complete.`);
                 }
                 // 4. Clean the surviving trailing paragraph.
@@ -156,17 +163,18 @@ export function register(server) {
                             },
                         },
                     ];
-                    // When the delete step was skipped (empty document), this is the
-                    // first write of the operation and must carry the write control —
-                    // otherwise it bumps the revision and the insert below would fail
-                    // with a spurious conflict against the revision from the read.
-                    // Peek rather than consume: this cleanup is best-effort, and a
-                    // FAILED cleanup did not bump the revision, so the insert below
-                    // must still carry the control in that case.
-                    const cleanupWriteControl = firstWriteControl;
+                    // This cleanup is the operation's first write when the delete step
+                    // was skipped (empty document), so it must carry the current guard —
+                    // otherwise it bumps the revision and the insert below fails with a
+                    // spurious conflict against the revision from the read. Peek (don't
+                    // advance yet): the cleanup is best-effort, and only a SUCCESSFUL
+                    // cleanup changes the revision.
+                    const cleanupWriteControl = pendingWriteControl;
                     try {
-                        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests, cleanupWriteControl);
-                        firstWriteControl = undefined;
+                        const cleanupResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests, cleanupWriteControl);
+                        // Advance only after success, so the insert requires the revision
+                        // the cleanup produced.
+                        advanceWriteControl(cleanupResult);
                         log.info(`Cleaned surviving paragraph (bullets + text style) at range ${startIndex}-${survivorEnd}`);
                     }
                     catch (e) {
@@ -175,6 +183,9 @@ export function register(server) {
                         if (cleanupWriteControl && e instanceof UserError && /changed since you last read/i.test(e.message)) {
                             throw e;
                         }
+                        // Non-conflict failure: the cleanup did not modify the document,
+                        // so the revision is unchanged and pendingWriteControl still
+                        // guards the insert below (we deliberately did NOT advance it).
                         log.info(`Survivor cleanup skipped: ${e.message}`);
                     }
                 }
@@ -184,8 +195,9 @@ export function register(server) {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
-                    // This closes the read-to-first-write race; later batches are our own writes.
-                    writeControl: consumeFirstWriteControl(),
+                    // Carries the current guard; insertMarkdown chains it across its own
+                    // split batches so the whole insert stays guarded.
+                    writeControl: pendingWriteControl,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);

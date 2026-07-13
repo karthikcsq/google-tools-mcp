@@ -92,10 +92,20 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
             'insertInlineImage' in r ||
             'insertSectionBreak' in r));
     let totalApiCalls = 0;
-    let firstWriteControl = writeControl;
+    // Chain the optimistic-concurrency guard across every batch this operation
+    // sends. When markdown is split into delete/insert/format phases (or a phase
+    // exceeds 50 requests), each successful batchUpdate returns the document's new
+    // head revision in its writeControl. Requiring that revision on the next batch
+    // means a collaborator edit landing between our batches is rejected as a
+    // conflict instead of having our precomputed ranges applied to their content
+    // (PR #42 review). Only chain when we started guarded, so legacy flows that
+    // never captured a revision stay unguarded.
+    let chainedWriteControl = writeControl;
     const executeBatch = async (batch) => {
-        await executeBatchUpdate(docs, documentId, batch, firstWriteControl);
-        firstWriteControl = undefined;
+        const data = await executeBatchUpdate(docs, documentId, batch, chainedWriteControl);
+        if (chainedWriteControl && data?.writeControl) {
+            chainedWriteControl = data.writeControl;
+        }
     };
     // Execute delete batches first (must happen before inserts)
     const deleteStart = performance.now();
@@ -173,6 +183,9 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
         },
         totalApiCalls,
         totalElapsedMs: Math.round(totalElapsedMs),
+        // The revision guard after the last batch, so a caller that writes again
+        // after this call can keep the chain intact.
+        finalWriteControl: chainedWriteControl,
     };
 }
 // --- Text Finding Helper ---

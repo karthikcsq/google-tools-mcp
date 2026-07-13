@@ -55,11 +55,16 @@ export function register(server) {
             log.info(`Appending markdown to doc ${args.documentId} (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
                 const revisionId = getLastReadRevisionId(args.documentId);
-                let firstWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
-                const consumeFirstWriteControl = () => {
-                    const writeControl = firstWriteControl;
-                    firstWriteControl = undefined;
-                    return writeControl;
+                // Optimistic-concurrency guard. The first write carries the revision
+                // from our last read; each subsequent write advances to the revision the
+                // previous write produced (returned by batchUpdate). This keeps every
+                // write in the operation guarded against concurrent edits instead of
+                // dropping the guard after the first write (PR #42 review).
+                let pendingWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
+                const advanceWriteControl = (response) => {
+                    if (pendingWriteControl && response?.writeControl) {
+                        pendingWriteControl = response.writeControl;
+                    }
                 };
                 // 1. Get document end index
                 const doc = await docs.documents.get({
@@ -92,14 +97,15 @@ export function register(server) {
                     if (args.tabId) {
                         location.tabId = args.tabId;
                     }
-                    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                    const spacingResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
                         {
                             insertText: {
                                 location,
                                 text: '\n\n',
                             },
                         },
-                    ], consumeFirstWriteControl());
+                    ], pendingWriteControl);
+                    advanceWriteControl(spacingResult);
                     startIndex += 2;
                     log.info(`Added spacing, new start index: ${startIndex}`);
                 }
@@ -108,8 +114,9 @@ export function register(server) {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
-                    // This closes the read-to-first-write race; later batches are our own writes.
-                    writeControl: consumeFirstWriteControl(),
+                    // Carries the current guard; insertMarkdown chains it across its own
+                    // split batches so the whole insert stays guarded.
+                    writeControl: pendingWriteControl,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
