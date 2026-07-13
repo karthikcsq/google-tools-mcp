@@ -66,9 +66,17 @@ function validCombosText() {
         .join('\n');
 }
 
-// Identifier fields each resource/action needs in the payload. Enforced up
-// front so callers get a clean validation error instead of a raw API failure.
+// Required payload fields per resource/action. Mirrors the non-optional fields
+// of the former granular Zod schemas (identifiers AND request-body fields), so
+// callers get a clean validation error up front instead of an opaque Google API
+// error when a required field is missing. Optional fields are intentionally
+// absent. Booleans that are legitimately `false` (e.g. imap.enabled=false) pass.
 const REQUIRED_PAYLOAD_KEYS = {
+    imap: { update: ['enabled'] },
+    pop: { update: ['accessWindow', 'disposition'] },
+    vacation: { update: ['enableAutoReply', 'responseBodyPlainText'] },
+    language: { update: ['displayLanguage'] },
+    autoForwarding: { update: ['enabled', 'emailAddress', 'disposition'] },
     forwardingAddress: { get: ['forwardingEmail'], create: ['forwardingEmail'], delete: ['forwardingEmail'] },
     delegate: { get: ['delegateEmail'], create: ['delegateEmail'], delete: ['delegateEmail'] },
     sendAs: { get: ['sendAsEmail'], create: ['sendAsEmail'], patch: ['sendAsEmail'], update: ['sendAsEmail'], delete: ['sendAsEmail'], verify: ['sendAsEmail'] },
@@ -79,9 +87,6 @@ function requirePayloadKeys(resource, action, payload) {
     const missing = keys.filter((key) => payload[key] === undefined || payload[key] === '');
     if (missing.length) {
         throw new UserError(`resource="${resource}" action="${action}" requires payload field(s): ${missing.join(', ')}.`);
-    }
-    if (action === 'update' && !REQUIRED_PAYLOAD_KEYS[resource] && Object.keys(payload).length === 0) {
-        throw new UserError(`resource="${resource}" action="update" requires a payload (the settings body to write). See the tool description for the fields.`);
     }
 }
 

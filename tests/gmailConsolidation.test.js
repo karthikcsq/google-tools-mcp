@@ -193,8 +193,31 @@ describe('manageGmailSettings resource/action validation (issue #31)', () => {
         const mgs = server.getTools().get('manageGmailSettings');
         await expect(mgs.execute({ resource: 'sendAs', action: 'verify' })).rejects.toThrow(/requires payload field\(s\): sendAsEmail/);
         await expect(mgs.execute({ resource: 'delegate', action: 'create', payload: {} })).rejects.toThrow(/delegateEmail/);
-        await expect(mgs.execute({ resource: 'imap', action: 'update' })).rejects.toThrow(/requires a payload/);
+        await expect(mgs.execute({ resource: 'imap', action: 'update' })).rejects.toThrow(/requires payload field\(s\): enabled/);
         expect(calls).toHaveLength(0);
+    });
+
+    it('rejects an update whose payload is non-empty but missing a required body field', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        // maxFolderSize alone is not enough — the original update_imap schema required `enabled`.
+        await expect(mgs.execute({ resource: 'imap', action: 'update', payload: { maxFolderSize: 500 } }))
+            .rejects.toThrow(/requires payload field\(s\): enabled/);
+        // autoForwarding update requires all three of enabled, emailAddress, disposition.
+        await expect(mgs.execute({ resource: 'autoForwarding', action: 'update', payload: { enabled: true } }))
+            .rejects.toThrow(/emailAddress, disposition/);
+        expect(calls).toHaveLength(0);
+    });
+
+    it('accepts an update that disables a boolean setting (enabled=false is a valid value)', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        await server.getTools().get('manageGmailSettings')
+            .execute({ resource: 'imap', action: 'update', payload: { enabled: false } });
+        const call = calls.pop();
+        expect(call.path).toBe('users.settings.updateImap');
+        expect(call.args).toEqual({ userId: 'me', requestBody: { enabled: false } });
     });
 });
 
