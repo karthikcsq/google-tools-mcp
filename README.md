@@ -365,3 +365,8 @@ This package replaces both [`gdrive-tools-mcp`](https://www.npmjs.com/package/gd
 ## License
 
 MIT
+
+## Releasing
+
+Maintainers: see [RELEASING.md](RELEASING.md) for the tag-triggered npm
+publishing workflow and its one-time trusted-publisher setup.
