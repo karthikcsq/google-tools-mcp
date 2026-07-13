@@ -6,20 +6,22 @@ import { processMessagePart, formatMessageClean, formatMessageMetadata } from '.
 export function register(server) {
     server.addTool({
         name: 'get_thread',
-        description: 'Get a specific thread by ID. Clean mode removes quoted reply history by default. Full mode returns raw MIME trees with decoded text bodies limited by maxBodyChars.',
+        description: 'Get a specific thread by ID. Clean mode removes quoted reply history by default. Full mode returns raw MIME trees with decoded text bodies limited by maxBodyChars. Use maxMessages (latest N) or messageIds to fetch only the messages you need. Note: maxBodyChars caps each message body independently, not the total response size.',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format for each message: clean (default), metadata (headers only), or full (raw MIME tree)"),
-            maxBodyChars: z.number().optional().default(3000).describe("Max decoded body characters per message in clean or full mode. 0 = unlimited."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
             messageIds: z.array(z.string()).optional().describe("Only include messages with these IDs in the thread response. An empty array is treated as no filter."),
+            maxMessages: z.number().optional().describe("Only include the latest N messages of the thread (applied after messageIds). Omit for all. Use 1-2 for the usual 'just the latest reply' case."),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
             const { data } = await gmail.users.threads.get({ userId: 'me', id: params.id, format: 'full' });
             if (data.messages) {
                 if (params.messageIds?.length) data.messages = data.messages.filter(message => params.messageIds.includes(message.id));
+                if (params.maxMessages > 0) data.messages = data.messages.slice(-params.maxMessages);
                 data.messages = data.messages.map(message => {
                     if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
                     if (params.format === 'metadata') return formatMessageMetadata(message);
@@ -41,9 +43,10 @@ export function register(server) {
             labelIds: z.array(z.string()).optional().describe("Only return threads with labels that match all specified label IDs"),
             includeSpamTrash: z.boolean().optional().describe("Include threads from SPAM and TRASH"),
             format: z.enum(['full', 'clean', 'metadata']).optional().describe("When set, auto-fetches full thread details. metadata=headers only (default when set), clean=with bodies, full=raw MIME tree."),
-            maxBodyChars: z.number().optional().default(3000).describe("Max decoded body characters per message in clean or full mode. 0 = unlimited."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
+            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all."),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
@@ -61,6 +64,7 @@ export function register(server) {
                         try {
                             const { data: thread } = await gmail.users.threads.get({ userId: 'me', id, format: 'full' });
                             if (thread.messages) {
+                                if (params.maxMessages > 0) thread.messages = thread.messages.slice(-params.maxMessages);
                                 thread.messages = thread.messages.map(message => {
                                     if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
                                     if (params.format === 'metadata') return formatMessageMetadata(message);
@@ -85,9 +89,10 @@ export function register(server) {
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the threads to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format for each message: clean (default), metadata (headers only), or full (raw MIME tree)"),
-            maxBodyChars: z.number().optional().default(3000).describe("Max decoded body characters per message in clean or full mode. 0 = unlimited."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
+            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all."),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
@@ -96,6 +101,7 @@ export function register(server) {
                     try {
                         const { data } = await gmail.users.threads.get({ userId: 'me', id, format: 'full' });
                         if (data.messages) {
+                            if (params.maxMessages > 0) data.messages = data.messages.slice(-params.maxMessages);
                             data.messages = data.messages.map(message => {
                                 if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
                                 if (params.format === 'metadata') return formatMessageMetadata(message);

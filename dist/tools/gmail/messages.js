@@ -283,7 +283,7 @@ export function register(server) {
         parameters: z.object({
             id: z.string().describe("The ID of the message to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format: clean (default), metadata (headers only), or full (raw MIME tree)"),
-            maxBodyChars: z.number().optional().default(3000).describe("Max decoded body characters in clean or full mode. 0 = unlimited. Truncated responses include bodyTruncated: true."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — the message body in clean mode, each MIME text part in full mode; not a whole-response cap. Truncated text carries bodyTruncated + totalChars; oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
@@ -307,7 +307,7 @@ export function register(server) {
             labelIds: z.array(z.string()).optional().describe("Only return messages with labels that match all specified label IDs"),
             includeSpamTrash: z.boolean().optional().describe("Include messages from SPAM and TRASH"),
             format: z.enum(['full', 'clean', 'metadata']).optional().describe("When set, auto-fetches full message details. metadata=headers only (default when set), clean=with body, full=raw MIME tree."),
-            maxBodyChars: z.number().optional().default(3000).describe("Max decoded body characters in clean or full mode. 0 = unlimited."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
@@ -405,7 +405,7 @@ export function register(server) {
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the messages to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format: clean (default), metadata (headers only), or full (raw MIME tree)"),
-            maxBodyChars: z.number().optional().default(3000).describe("Max decoded body characters in clean or full mode. 0 = unlimited."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),

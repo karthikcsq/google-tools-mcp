@@ -27,17 +27,23 @@ export const processMessagePart = (messagePart, includeBodyHtml = false, maxBody
     if ((messagePart.mimeType !== 'text/html' || includeBodyHtml) && messagePart.body) {
         const bodyLimit = messagePart.mimeType?.startsWith('text/') ? maxBodyChars : 0;
         messagePart.body = decodedBody(messagePart.body, bodyLimit);
-    } else if (messagePart.body?.data && maxBodyChars > 0 && messagePart.body.data.length > maxBodyChars) {
+    } else if (messagePart.body?.data && maxBodyChars > 0) {
         // Parts left undecoded (e.g. text/html without includeBodyHtml) still
         // carry their full base64 payload — the main size offender in full
-        // mode. Cap those too so maxBodyChars actually bounds the response.
-        messagePart.body = {
-            data: messagePart.body.data.slice(0, maxBodyChars),
-            size: messagePart.body.data.length,
-            attachmentId: messagePart.body.attachmentId,
-            bodyTruncated: true,
-            totalChars: messagePart.body.data.length,
-        };
+        // mode. We can't slice raw base64 to bound it: cutting at an arbitrary
+        // offset yields invalid, non-portable base64 and a totalChars measured
+        // in encoded (not decoded) characters. Instead, decode just to measure,
+        // and when the decoded body exceeds the cap drop the payload entirely,
+        // leaving valid truncation metadata (decoded totalChars) in its place.
+        const decodedChars = Buffer.from(messagePart.body.data, 'base64').toString('utf-8').length;
+        if (decodedChars > maxBodyChars) {
+            messagePart.body = {
+                size: messagePart.body.size ?? messagePart.body.data.length,
+                attachmentId: messagePart.body.attachmentId,
+                bodyOmitted: true,
+                totalChars: decodedChars,
+            };
+        }
     }
     if (messagePart.parts) {
         messagePart.parts = messagePart.parts.map(part => processMessagePart(part, includeBodyHtml, maxBodyChars));
@@ -298,9 +304,16 @@ export const stripQuotedHistory = (text) => {
     // ">"-prefixed excerpts (pasted shell output, manual quotes). Only a real
     // attribution marker opens a strip.
     let stripFrom = -1;
+    // A hard delimiter is an unambiguous "everything below is the original"
+    // separator (Outlook's "-----Original Message-----"). Clients emit it on its
+    // own line and never author reply text after it, so we strip the tail
+    // unconditionally — even when the quoted original carries no ">" prefixes,
+    // which is the common Outlook case the ">"-only check used to miss.
+    let hardDelimiter = false;
     for (let i = 0; i < lines.length; i++) {
         if (/^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i.test(lines[i])) {
             stripFrom = i;
+            hardDelimiter = true;
             break;
         }
         if (/^\s*On .+ wrote:\s*$/i.test(lines[i])) {
@@ -321,7 +334,8 @@ export const stripQuotedHistory = (text) => {
         }
     }
     if (stripFrom === -1) return text;
-    // Only strip when everything after the marker is quoted/attribution/blank
+    if (hardDelimiter) return lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
+    // Otherwise only strip when everything after the marker is quoted/attribution/blank
     // AND at least one line is actually ">"-quoted. Inline repliers and
     // bottom-posters put real content below or between quoted blocks, and a
     // trailing block of bare header-like lines (a pasted invite, a signature)
