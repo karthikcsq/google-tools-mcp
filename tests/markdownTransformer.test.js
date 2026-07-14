@@ -531,6 +531,26 @@ describe('convertMarkdownToRequests', () => {
         expect(clonedResult.warnings).toEqual(result.warnings);
         expect(result.warnings).toHaveLength(1);
     });
+
+    it('warns when a self-closing unsupported inline HTML tag is dropped', () => {
+        const { warnings } = convertMarkdownToRequests('Look <img src="x.png"/> there');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('<img>');
+    });
+
+    it('warns and preserves text when an unsupported inline HTML opening tag is used', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<kbd>Ctrl</kbd>');
+        expect(warnings.some(w => w.includes('<kbd>'))).toBe(true);
+        // Text content between the tags is preserved even though the tag itself is ignored.
+        const allText = requests.filter(r => 'insertText' in r).map(r => r.insertText.text).join('');
+        expect(allText).toContain('Ctrl');
+    });
+
+    it('warns when an unparseable inline HTML fragment (e.g. a comment) is dropped', () => {
+        const { warnings } = convertMarkdownToRequests('Weird <!-- a comment --> tag');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatch(/Dropped unsupported inline HTML/);
+    });
 });
 
 // ---------------------------------------------------------------------------
