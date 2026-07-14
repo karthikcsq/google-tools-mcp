@@ -4,7 +4,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'deleteRange',
@@ -66,7 +66,8 @@ export function register(server) {
                 const request = {
                     deleteContentRange: { range },
                 };
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
                 trackMutation(args.documentId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;

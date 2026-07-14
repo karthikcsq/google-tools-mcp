@@ -5,7 +5,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'appendText',
@@ -88,7 +88,8 @@ export function register(server) {
                 const request = {
                     insertText: { location, text: textToInsert },
                 };
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
                 trackMutation(args.documentId);
                 log.info(`Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { getLastReadRevisionId } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'addTab',
@@ -52,19 +53,15 @@ export function register(server) {
                     tabProperties.index = args.index;
                 if (args.iconEmoji !== undefined)
                     tabProperties.iconEmoji = args.iconEmoji;
-                const response = await docs.documents.batchUpdate({
-                    documentId: args.documentId,
-                    requestBody: {
-                        requests: [
-                            {
-                                addDocumentTab: {
-                                    tabProperties,
-                                },
-                            },
-                        ],
+                const revisionId = getLastReadRevisionId(args.documentId);
+                const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                    {
+                        addDocumentTab: {
+                            tabProperties,
+                        },
                     },
-                });
-                const newTabProps = response.data.replies?.[0]?.addDocumentTab?.tabProperties;
+                ], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                const newTabProps = response.replies?.[0]?.addDocumentTab?.tabProperties;
                 if (newTabProps) {
                     return JSON.stringify({
                         url: `https://docs.google.com/document/d/${args.documentId}/edit`,

@@ -740,7 +740,7 @@ export function buildUpdateParagraphStyleRequest(startIndex, endIndex, style, ta
     return { request, fields: fieldsToUpdate };
 }
 // --- Specific Feature Helpers ---
-export async function createTable(docs, documentId, rows, columns, index, tabId) {
+export async function createTable(docs, documentId, rows, columns, index, tabId, writeControl) {
     if (rows < 1 || columns < 1) {
         throw new UserError('Table must have at least 1 row and 1 column.');
     }
@@ -755,7 +755,7 @@ export async function createTable(docs, documentId, rows, columns, index, tabId)
             columns: columns,
         },
     };
-    return executeBatchUpdate(docs, documentId, [request]);
+    return executeBatchUpdate(docs, documentId, [request], writeControl);
 }
 export async function insertText(docs, documentId, text, index) {
     if (!text)
@@ -888,7 +888,7 @@ export async function addCommentHelper(docs, documentId, text, startIndex, endIn
  * @param height - Optional height in points
  * @returns Promise with batch update response
  */
-export async function insertInlineImage(docs, documentId, imageUrl, index, width, height, tabId) {
+export async function insertInlineImage(docs, documentId, imageUrl, index, width, height, tabId, writeControl) {
     // Validate URL format
     try {
         new URL(imageUrl);
@@ -914,7 +914,7 @@ export async function insertInlineImage(docs, documentId, imageUrl, index, width
             }),
         },
     };
-    return executeBatchUpdate(docs, documentId, [request]);
+    return executeBatchUpdate(docs, documentId, [request], writeControl);
 }
 /**
  * Uploads a local image file to Google Drive.
@@ -997,14 +997,14 @@ localFilePath, parentFolderId, skipPublicSharing = false) {
  *      with the actual image blob from Drive (no public sharing needed).
  */
 export async function insertImageViaAppsScript(docs, scriptClient, // script_v1.Script type
-deploymentId, documentId, driveFileId, charIndex, tabId) {
+deploymentId, documentId, driveFileId, charIndex, tabId, writeControl) {
     const marker = `[mcp-img-${driveFileId}]`;
     // Step 1: Insert marker at the requested position via Docs API
     const location = { index: charIndex };
     if (tabId) {
         location.tabId = tabId;
     }
-    await executeBatchUpdate(docs, documentId, [{ insertText: { location, text: marker } }]);
+    await executeBatchUpdate(docs, documentId, [{ insertText: { location, text: marker } }], writeControl);
     // Step 2: Call Apps Script to replace the marker with the image
     const response = await scriptClient.scripts.run({
         scriptId: deploymentId,
