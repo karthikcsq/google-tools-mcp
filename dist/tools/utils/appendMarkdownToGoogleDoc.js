@@ -60,12 +60,7 @@ export function register(server) {
                 // previous write produced (returned by batchUpdate). This keeps every
                 // write in the operation guarded against concurrent edits instead of
                 // dropping the guard after the first write (PR #42 review).
-                let pendingWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
-                const advanceWriteControl = (response) => {
-                    if (pendingWriteControl && response?.writeControl) {
-                        pendingWriteControl = response.writeControl;
-                    }
-                };
+                const writeControlChain = GDocsHelpers.createWriteControlChain(revisionId);
                 // 1. Get document end index
                 const doc = await docs.documents.get({
                     documentId: args.documentId,
@@ -104,8 +99,8 @@ export function register(server) {
                                 text: '\n\n',
                             },
                         },
-                    ], pendingWriteControl);
-                    advanceWriteControl(spacingResult);
+                    ], writeControlChain.current);
+                    writeControlChain.advance(spacingResult);
                     startIndex += 2;
                     log.info(`Added spacing, new start index: ${startIndex}`);
                 }
@@ -116,7 +111,7 @@ export function register(server) {
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
                     // Carries the current guard; insertMarkdown chains it across its own
                     // split batches so the whole insert stays guarded.
-                    writeControl: pendingWriteControl,
+                    writeControl: writeControlChain.current,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);

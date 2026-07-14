@@ -62,12 +62,7 @@ export function register(server) {
                 // write in the operation (delete → cleanup → insert) guarded against
                 // concurrent edits instead of dropping the guard after the first write
                 // (PR #42 review).
-                let pendingWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
-                const advanceWriteControl = (response) => {
-                    if (pendingWriteControl && response?.writeControl) {
-                        pendingWriteControl = response.writeControl;
-                    }
-                };
+                const writeControlChain = GDocsHelpers.createWriteControlChain(revisionId);
                 // 1. Get document structure
                 const doc = await docs.documents.get({
                     documentId: args.documentId,
@@ -114,8 +109,8 @@ export function register(server) {
                         {
                             deleteContentRange: { range: deleteRange },
                         },
-                    ], pendingWriteControl);
-                    advanceWriteControl(deleteResult);
+                    ], writeControlChain.current);
+                    writeControlChain.advance(deleteResult);
                     log.info(`Delete complete.`);
                 }
                 // 4. Clean the surviving trailing paragraph.
@@ -169,12 +164,12 @@ export function register(server) {
                     // spurious conflict against the revision from the read. Peek (don't
                     // advance yet): the cleanup is best-effort, and only a SUCCESSFUL
                     // cleanup changes the revision.
-                    const cleanupWriteControl = pendingWriteControl;
+                    const cleanupWriteControl = writeControlChain.current;
                     try {
                         const cleanupResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests, cleanupWriteControl);
                         // Advance only after success, so the insert requires the revision
                         // the cleanup produced.
-                        advanceWriteControl(cleanupResult);
+                        writeControlChain.advance(cleanupResult);
                         log.info(`Cleaned surviving paragraph (bullets + text style) at range ${startIndex}-${survivorEnd}`);
                     }
                     catch (e) {
@@ -184,7 +179,7 @@ export function register(server) {
                             throw e;
                         }
                         // Non-conflict failure: the cleanup did not modify the document,
-                        // so the revision is unchanged and pendingWriteControl still
+                        // so the revision is unchanged and writeControlChain.current still
                         // guards the insert below (we deliberately did NOT advance it).
                         log.info(`Survivor cleanup skipped: ${e.message}`);
                     }
@@ -197,7 +192,7 @@ export function register(server) {
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
                     // Carries the current guard; insertMarkdown chains it across its own
                     // split batches so the whole insert stays guarded.
-                    writeControl: pendingWriteControl,
+                    writeControl: writeControlChain.current,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);

@@ -53,6 +53,40 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
     }
 }
 /**
+ * Creates a small stateful helper for chaining an optimistic-concurrency guard
+ * across a sequence of writes that make up a single logical operation (e.g.
+ * delete -> cleanup -> insert). The first write carries the revision from the
+ * caller's last read; each subsequent write must require the revision the
+ * previous write produced (returned as `writeControl` on a successful
+ * batchUpdate response), so a collaborator edit landing between any two of
+ * our own batches is rejected as a conflict instead of silently applied
+ * against (PR #42 review).
+ *
+ * Guarding is opt-in: when `revisionId` is null/undefined (a legacy read that
+ * never captured a revision), `current` stays undefined for the life of the
+ * chain and `advance` is a no-op, so the flow remains unguarded.
+ *
+ * @param revisionId - The revisionId from the caller's last tracked read, or null/undefined
+ * @returns { get current(), advance(response) }
+ */
+export function createWriteControlChain(revisionId) {
+    let pendingWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
+    return {
+        get current() {
+            return pendingWriteControl;
+        },
+        // Advance the chain to the revision produced by a successful write.
+        // Only advances when the chain is armed and the response carried a new
+        // writeControl — a best-effort write that fails (and is swallowed by the
+        // caller) must NOT advance the chain, since the document was not modified.
+        advance(response) {
+            if (pendingWriteControl && response?.writeControl) {
+                pendingWriteControl = response.writeControl;
+            }
+        },
+    };
+}
+/**
  * Executes batch updates with automatic splitting for large request arrays.
  * Separates insert and format operations, executing inserts first.
  *
