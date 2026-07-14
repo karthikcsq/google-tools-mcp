@@ -49,7 +49,7 @@ export function register(server) {
                 };
                 const revisionId = getLastReadRevisionId(args.documentId);
                 const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId);
+                trackMutation(args.documentId, response?.writeControl?.requiredRevisionId);
                 const changed = response.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nReplaced ${changed} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;

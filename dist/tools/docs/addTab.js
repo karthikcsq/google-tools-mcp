@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId } from '../../readTracker.js';
+import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'addTab',
@@ -61,6 +61,7 @@ export function register(server) {
                         },
                     },
                 ], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, response?.writeControl?.requiredRevisionId);
                 const newTabProps = response.replies?.[0]?.addDocumentTab?.tabProperties;
                 if (newTabProps) {
                     return JSON.stringify({

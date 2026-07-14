@@ -89,8 +89,8 @@ export function register(server) {
                     insertText: { location, text: textToInsert },
                 };
                 const revisionId = getLastReadRevisionId(args.documentId);
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId);
+                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 log.info(`Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully appended text to ${args.tabId ? `tab ${args.tabId} in ` : ''}document ${args.documentId}.`;

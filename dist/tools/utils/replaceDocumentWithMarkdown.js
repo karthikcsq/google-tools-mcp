@@ -196,7 +196,12 @@ export function register(server) {
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
-                trackMutation(args.documentId);
+                // insertMarkdown chains the guard across its own internal split batches
+                // and returns the final revision as batchUpdate.finalWriteControl; fold
+                // that into our chain so trackMutation re-arms the guard against the
+                // TRUE post-write revision instead of the pre-insert (delete/cleanup) one.
+                writeControlChain.advance({ writeControl: result.batchUpdate?.finalWriteControl });
+                trackMutation(args.documentId, writeControlChain.current?.requiredRevisionId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully replaced document content with ${markdown.length} characters of markdown.\n\n${debugSummary}`;
             }

@@ -117,8 +117,21 @@ export async function guardMutation(fileId, opts) {
 /**
  * Update the read tracker after a successful mutation (so subsequent mutations
  * don't fail the external-change check against our own changes).
+ *
+ * @param fileId
+ * @param newRevisionId Optional Google Docs revision ID produced by the write
+ *   that just succeeded (the API's batchUpdate response echoes this back as
+ *   `writeControl.requiredRevisionId` — "the updated write control after
+ *   applying the request"). When provided, the WriteControl guard is
+ *   re-armed against this fresh revision instead of being disabled, so a
+ *   second write to the same document later in the same session (with no
+ *   re-read in between) is still guarded against a genuine concurrent edit —
+ *   rather than either (a) silently going out unguarded, or (b) reusing the
+ *   now-stale pre-mutation revision and spuriously conflicting with our own
+ *   prior write. When omitted, the revision is cleared (legacy/unknown
+ *   behavior, same as before).
  */
-export function trackMutation(fileId) {
+export function trackMutation(fileId, newRevisionId) {
     const entry = readLog.get(fileId);
     if (entry) {
         entry.readAt = new Date();
@@ -128,7 +141,7 @@ export function trackMutation(fileId) {
         // Content is also stale after our mutation; clear so a future diff
         // doesn't show our own edits as "external" changes.
         entry.content = null;
-        entry.revisionId = null;
+        entry.revisionId = typeof newRevisionId === 'string' ? newRevisionId : null;
     }
 }
 

@@ -67,8 +67,8 @@ export function register(server) {
                     deleteContentRange: { range },
                 };
                 const revisionId = getLastReadRevisionId(args.documentId);
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId);
+                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }

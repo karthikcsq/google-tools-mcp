@@ -174,13 +174,13 @@ export function register(server) {
                     return 'No operations to perform.';
                 }
                 const revisionId = getLastReadRevisionId(args.documentId);
-                await GDocsHelpers.executeBatchUpdate(
+                const writeResponse = await GDocsHelpers.executeBatchUpdate(
                     docs,
                     args.documentId,
                     requests,
                     revisionId ? { requiredRevisionId: revisionId } : undefined
                 );
-                trackMutation(args.documentId);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 // Build descriptive result
                 const actions = [];
                 if (endIndex !== undefined && normalizedText === '')
