@@ -164,6 +164,15 @@ export const foldHeader = (name, value) => {
     return lines.join('\r\n');
 };
 
+// getThreadHeaders returns pre-joined "Name: value" strings; split on the
+// first colon (header field-names are always ASCII and never contain one)
+// and re-fold the value so threading headers (Subject/In-Reply-To/References)
+// get the same RFC 5322 folding as To/Cc/Bcc/Subject above.
+const foldThreadHeader = (header) => {
+    const separator = header.indexOf(':');
+    return foldHeader(header.slice(0, separator), header.slice(separator + 2));
+};
+
 export const isHtmlBody = (text) => /<\/?[a-z][\s\S]*?>/i.test(text);
 
 export const constructRawMessage = async (gmail, params) => {
@@ -177,10 +186,7 @@ export const constructRawMessage = async (gmail, params) => {
     if (params.cc?.length) message.push(foldHeader('Cc', params.cc.join(', ')));
     if (params.bcc?.length) message.push(foldHeader('Bcc', params.bcc.join(', ')));
     if (thread) {
-        message.push(...getThreadHeaders(thread).map(header => {
-            const separator = header.indexOf(':');
-            return foldHeader(header.slice(0, separator), header.slice(separator + 2));
-        }));
+        message.push(...getThreadHeaders(thread).map(foldThreadHeader));
     } else if (params.subject) {
         message.push(foldHeader('Subject', params.subject));
     } else {
@@ -214,10 +220,7 @@ export const constructRawMessageWithAttachments = async (gmail, params) => {
     if (params.cc?.length) headers.push(foldHeader('Cc', params.cc.join(', ')));
     if (params.bcc?.length) headers.push(foldHeader('Bcc', params.bcc.join(', ')));
     if (thread) {
-        headers.push(...getThreadHeaders(thread).map(header => {
-            const separator = header.indexOf(':');
-            return foldHeader(header.slice(0, separator), header.slice(separator + 2));
-        }));
+        headers.push(...getThreadHeaders(thread).map(foldThreadHeader));
     } else if (params.subject) {
         headers.push(foldHeader('Subject', params.subject));
     } else {
