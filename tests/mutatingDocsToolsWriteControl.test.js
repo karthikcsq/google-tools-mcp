@@ -150,6 +150,23 @@ describe('deleteRange — WriteControl guard', () => {
             tool.execute({ documentId, startIndex: 1, endIndex: 5 }, { log: noopLog })
         ).rejects.toThrow(/changed since you last read/i);
     });
+
+    it('omits writeControl when the document was never read (legacy/no-op behavior)', async () => {
+        const documentId = `delete-untracked-${Date.now()}`;
+        const { batchUpdate } = setUpDocsMock(async () => ({ data: {} }));
+        // Track a read WITHOUT a revisionId (simulates a legacy read path); guardMutation
+        // requires a read to exist, but getLastReadRevisionId should still resolve to null.
+        trackRead(documentId, null, null, undefined);
+
+        const server = createMockServer();
+        registerDeleteRange(server);
+        const tool = server.getTool('deleteRange');
+
+        await tool.execute({ documentId, startIndex: 1, endIndex: 5 }, { log: noopLog });
+
+        expect(batchUpdate).toHaveBeenCalledTimes(1);
+        expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toBeUndefined();
+    });
 });
 
 describe('findAndReplace — WriteControl guard', () => {
@@ -196,5 +213,24 @@ describe('findAndReplace — WriteControl guard', () => {
         await expect(
             tool.execute({ documentId, findText: 'foo', replaceText: 'bar' }, { log: noopLog })
         ).rejects.toThrow(/changed since you last read/i);
+    });
+
+    it('omits writeControl when the document was never read (legacy/no-op behavior)', async () => {
+        const documentId = `far-untracked-${Date.now()}`;
+        const { batchUpdate } = setUpDocsMock(async () => ({
+            data: { replies: [{ replaceAllText: { occurrencesChanged: 1 } }] },
+        }));
+        // Track a read WITHOUT a revisionId (simulates a legacy read path); guardMutation
+        // requires a read to exist, but getLastReadRevisionId should still resolve to null.
+        trackRead(documentId, null, null, undefined);
+
+        const server = createMockServer();
+        registerFindAndReplace(server);
+        const tool = server.getTool('findAndReplace');
+
+        await tool.execute({ documentId, findText: 'foo', replaceText: 'bar' }, { log: noopLog });
+
+        expect(batchUpdate).toHaveBeenCalledTimes(1);
+        expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toBeUndefined();
     });
 });

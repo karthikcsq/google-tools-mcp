@@ -5,16 +5,20 @@
 // these tools ever had a guardMutation check, so there's no existing guard to
 // preserve — this only proves the additive, opt-in WriteControl wiring is correct:
 // when a caller's prior read is tracked, the revision is attached to every write.
-import { describe, it, expect, jest } from '@jest/globals';
+import { describe, it, expect, jest, beforeAll, afterAll } from '@jest/globals';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 let fakeDocs;
 let fakeDrive;
+let fakeScript;
 jest.unstable_mockModule('../dist/clients.js', () => ({
     getDocsClient: async () => fakeDocs,
     getDriveClient: async () => fakeDrive,
     getSheetsClient: async () => { throw new Error('not used'); },
     getCalendarClient: async () => { throw new Error('not used'); },
-    getScriptClient: async () => { throw new Error('not used'); },
+    getScriptClient: async () => fakeScript,
 }));
 
 const { trackRead } = await import('../dist/readTracker.js');
@@ -24,6 +28,7 @@ const { register: registerInsertTableWithData } = await import('../dist/tools/do
 const { register: registerInsertTable } = await import('../dist/tools/docs/insertTable.js');
 const { register: registerAddTab } = await import('../dist/tools/docs/addTab.js');
 const { register: registerRenameTab } = await import('../dist/tools/docs/renameTab.js');
+const { register: registerInsertImage } = await import('../dist/tools/docs/insertImage.js');
 
 function createMockServer() {
     const tools = new Map();
@@ -152,6 +157,158 @@ describe('insertTable — WriteControl guard', () => {
         await server.getTool('insertTable').execute({ documentId, rows: 2, columns: 2, index: 1 }, { log: noopLog });
 
         expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toEqual({ requiredRevisionId: 'rev-read' });
+    });
+
+    it('rejects a stale-revision write with a clear re-read error', async () => {
+        const documentId = `inserttable-stale-${Date.now()}`;
+        fakeDocs = { documents: { get: jest.fn(), batchUpdate: jest.fn(async () => { throw staleRevisionError(); }) } };
+        trackRead(documentId, null, null, 'rev-read');
+
+        const server = createMockServer();
+        registerInsertTable(server);
+        await expect(
+            server.getTool('insertTable').execute({ documentId, rows: 2, columns: 2, index: 1 }, { log: noopLog })
+        ).rejects.toThrow(/changed since you last read/i);
+    });
+});
+
+describe('insertImage — WriteControl guard', () => {
+    describe('standard URL path (insertInlineImage)', () => {
+        it('attaches the tracked revision to its batchUpdate call', async () => {
+            const documentId = `insertimage-url-${Date.now()}`;
+            const batchUpdate = jest.fn(async ({ requestBody }) => ({ data: { writeControl: requestBody.writeControl } }));
+            fakeDocs = { documents: { get: jest.fn(), batchUpdate } };
+            trackRead(documentId, null, null, 'rev-read');
+
+            const server = createMockServer();
+            registerInsertImage(server);
+            await server.getTool('insertImage').execute({
+                documentId,
+                imageUrl: 'https://example.com/pic.png',
+                index: 1,
+            }, { log: noopLog });
+
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
+            expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toEqual({ requiredRevisionId: 'rev-read' });
+        });
+
+        it('rejects a stale-revision write with a clear re-read error', async () => {
+            const documentId = `insertimage-url-stale-${Date.now()}`;
+            fakeDocs = { documents: { get: jest.fn(), batchUpdate: jest.fn(async () => { throw staleRevisionError(); }) } };
+            trackRead(documentId, null, null, 'rev-read');
+
+            const server = createMockServer();
+            registerInsertImage(server);
+            await expect(
+                server.getTool('insertImage').execute({
+                    documentId,
+                    imageUrl: 'https://example.com/pic.png',
+                    index: 1,
+                }, { log: noopLog })
+            ).rejects.toThrow(/changed since you last read/i);
+        });
+
+        it('omits writeControl when the document was never read (no-op behavior)', async () => {
+            const documentId = `insertimage-url-untracked-${Date.now()}`;
+            const batchUpdate = jest.fn(async () => ({ data: {} }));
+            fakeDocs = { documents: { get: jest.fn(), batchUpdate } };
+            // No trackRead call for this documentId.
+
+            const server = createMockServer();
+            registerInsertImage(server);
+            await server.getTool('insertImage').execute({
+                documentId,
+                imageUrl: 'https://example.com/pic.png',
+                index: 1,
+            }, { log: noopLog });
+
+            expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toBeUndefined();
+        });
+    });
+
+    describe('local-file Apps Script path (insertImageViaAppsScript)', () => {
+        const tmpImagePath = path.join(os.tmpdir(), `write-control-test-${process.pid}.png`);
+        const originalDeploymentId = process.env.APPS_SCRIPT_DEPLOYMENT_ID;
+
+        beforeAll(() => {
+            // A 1x1 PNG's exact bytes don't matter — uploadImageToDrive only reads
+            // the file as a stream and inspects the extension for mime-type mapping.
+            fs.writeFileSync(tmpImagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+            process.env.APPS_SCRIPT_DEPLOYMENT_ID = 'test-deployment-id';
+        });
+
+        afterAll(() => {
+            fs.rmSync(tmpImagePath, { force: true });
+            if (originalDeploymentId === undefined) {
+                delete process.env.APPS_SCRIPT_DEPLOYMENT_ID;
+            }
+            else {
+                process.env.APPS_SCRIPT_DEPLOYMENT_ID = originalDeploymentId;
+            }
+        });
+
+        function setUpAppsScriptMocks(batchUpdateImpl) {
+            const batchUpdate = jest.fn(batchUpdateImpl);
+            fakeDocs = { documents: { get: jest.fn(), batchUpdate } };
+            fakeDrive = {
+                files: {
+                    get: async () => ({ data: {} }),
+                    // uploadImageToDrive passes a real fs.createReadStream as media.body.
+                    // Drain it fully before resolving so the stream's lazy internal
+                    // fs.open()/read() has already completed by the time this test's
+                    // afterAll deletes the temp file — otherwise the open races the
+                    // deletion and throws an unhandled ENOENT on the stream.
+                    create: async ({ media } = {}) => {
+                        if (media?.body) {
+                            await new Promise((resolve, reject) => {
+                                media.body.on('data', () => { });
+                                media.body.on('end', resolve);
+                                media.body.on('close', resolve);
+                                media.body.on('error', reject);
+                            });
+                        }
+                        return { data: { id: 'uploaded-file-id' } };
+                    },
+                },
+            };
+            fakeScript = { scripts: { run: jest.fn(async () => ({ data: { response: { result: { success: true } } } })) } };
+            return { batchUpdate };
+        }
+
+        it('attaches the tracked revision to the marker-insertion batchUpdate call', async () => {
+            const documentId = `insertimage-appsscript-${Date.now()}`;
+            const { batchUpdate } = setUpAppsScriptMocks(async ({ requestBody }) => ({
+                data: { writeControl: requestBody.writeControl },
+            }));
+            trackRead(documentId, null, null, 'rev-read');
+
+            const server = createMockServer();
+            registerInsertImage(server);
+            await server.getTool('insertImage').execute({
+                documentId,
+                localImagePath: tmpImagePath,
+                index: 1,
+            }, { log: noopLog });
+
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
+            expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toEqual({ requiredRevisionId: 'rev-read' });
+        });
+
+        it('rejects a stale-revision write with a clear re-read error', async () => {
+            const documentId = `insertimage-appsscript-stale-${Date.now()}`;
+            setUpAppsScriptMocks(async () => { throw staleRevisionError(); });
+            trackRead(documentId, null, null, 'rev-read');
+
+            const server = createMockServer();
+            registerInsertImage(server);
+            await expect(
+                server.getTool('insertImage').execute({
+                    documentId,
+                    localImagePath: tmpImagePath,
+                    index: 1,
+                }, { log: noopLog })
+            ).rejects.toThrow(/changed since you last read/i);
+        });
     });
 });
 
