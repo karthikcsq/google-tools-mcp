@@ -256,7 +256,7 @@ Google Sheets operations.
 
 `readSpreadsheet`, `writeSpreadsheet`, `batchWrite`, `appendRows`, `clearRange`, `createSpreadsheet`, `getSpreadsheetInfo`, `addSheet`, `deleteSheet`, `duplicateSheet`, `renameSheet`, `formatCells`, `readCellFormat`, `autoResizeColumns`, `freezeRowsAndColumns`, `setColumnWidths`, `addConditionalFormatting`, `copyFormatting`, `setDropdownValidation`, `createTable`, `deleteTable`, `getTable`, `listTables`, `appendTableRows`, `updateTableRange`, `insertChart`, `deleteChart`, `groupRows`, `ungroupAllRows`
 
-### `email` (10 tools)
+### `email` (16 tools)
 Gmail messages and drafts (hot-path tools stay granular).
 
 `sendMessage`, `replyMessage`, `forwardMessage`, `getMessage`, `listMessages`, `modifyMessage`, `deleteMessage`, `trashMessage`, `batchGetMessages`, `getAttachment`, `createDraft`, `updateDraft`, `deleteDraft`, `getDraft`, `listDrafts`, `sendDraft`
