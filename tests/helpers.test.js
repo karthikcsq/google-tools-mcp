@@ -153,6 +153,12 @@ describe('getPlainTextBody', () => {
     it('returns empty string for missing body', () => {
         expect(getPlainTextBody({ mimeType: 'text/plain' })).toBe('');
     });
+
+    it('does not throw on malformed base64 (untrusted input safety)', () => {
+        const part = { mimeType: 'text/plain', body: { data: 'not!!valid$$base64%%' } };
+        expect(() => getPlainTextBody(part)).not.toThrow();
+        expect(typeof getPlainTextBody(part)).toBe('string');
+    });
 });
 
 // ---------------------------------------------------------------------------
