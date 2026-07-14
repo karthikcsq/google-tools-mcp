@@ -84,6 +84,9 @@ export function register(server) {
                     // (rather than propagate a now-stale one) so a subsequent write in this
                     // session re-reads instead of either spuriously conflicting or silently
                     // reusing an outdated revision.
+                    log.warn(`WriteControl guard cleared for document ${args.documentId} after Apps Script image insertion ` +
+                        '(the script mutates the doc outside batchUpdate visibility, so no true post-write revision is available). ' +
+                        'The next write to this document in this session will proceed unguarded until it is read again.');
                     trackMutation(args.documentId);
                     const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                     return `${docUrl}\nSuccessfully inserted local image at index ${args.index} via Apps Script${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
