@@ -12,6 +12,9 @@ export async function mapsFetch(url, options = {}) {
     catch (error) { throw new UserError(`Google Maps request failed: ${error.message || error}`); }
     let data;
     try { data = await response.json(); } catch { data = null; }
+    if (data === null && response.ok) {
+        throw new UserError(`Google Maps API returned an unparsable response (HTTP ${response.status}).`);
+    }
     const apiStatusError = data?.status && !['OK', 'ZERO_RESULTS'].includes(data.status);
     if (!response.ok || apiStatusError) {
         const status = data?.error?.status || data?.status || response.status;

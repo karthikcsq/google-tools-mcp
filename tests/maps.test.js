@@ -156,4 +156,64 @@ describe('Maps tools', () => {
         expect(result.map((place) => place.placeId)).toEqual(['inside']);
         expect(result[0].name).toBe('Starbucks');
     });
+
+    it('applies extra includedTypes as a local filter on top of a keyword Text Search', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ places: [
+            { id: 'cafe-match', displayName: { text: 'Starbucks' }, types: ['cafe', 'store'], location: { latitude: 40.4, longitude: -86.9 } },
+            { id: 'no-match', displayName: { text: 'Corner Diner' }, types: ['restaurant'], location: { latitude: 40.4, longitude: -86.9 } },
+        ] }));
+        const result = JSON.parse(await tools.get('mapsSearchNearby').execute({
+            latitude: 40.4, longitude: -86.9, radiusMeters: 1000, includedTypes: ['cafe', 'bakery'], keyword: 'coffee', maxResults: 5,
+        }));
+        // Text Search accepts only a single includedType, so with more than one requested
+        // type none is sent to the API; both are instead enforced as a local filter.
+        const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+        expect(body.includedType).toBeUndefined();
+        expect(result.map((place) => place.placeId)).toEqual(['cafe-match']);
+    });
+
+    it('shapes reverse geocode query parameters and maps the response', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({
+            status: 'OK',
+            results: [{ formatted_address: '610 Purdue Mall, West Lafayette, IN', place_id: 'place-123', geometry: { location: { lat: 40.4237, lng: -86.9212 } } }],
+        }));
+        const result = JSON.parse(await tools.get('mapsReverseGeocode').execute({ latitude: 40.4237, longitude: -86.9212 }));
+        const url = new URL(global.fetch.mock.calls[0][0]);
+        expect(url.pathname).toBe('/maps/api/geocode/json');
+        expect(url.searchParams.get('latlng')).toBe('40.4237,-86.9212');
+        expect(url.searchParams.get('key')).toBe('test-key');
+        expect(result).toEqual({
+            formattedAddress: '610 Purdue Mall, West Lafayette, IN',
+            placeId: 'place-123',
+            location: { lat: 40.4237, lng: -86.9212 },
+        });
+    });
+
+    it('returns null when reverse geocode finds nothing', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ status: 'ZERO_RESULTS', results: [] }));
+        const result = JSON.parse(await tools.get('mapsReverseGeocode').execute({ latitude: 1, longitude: 2 }));
+        expect(result).toBeNull();
+    });
+
+    it('falls back to the requested coordinates when a matched result has no geometry location', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({
+            status: 'OK',
+            results: [{ formatted_address: 'Somewhere', place_id: 'place-456' }],
+        }));
+        const result = JSON.parse(await tools.get('mapsReverseGeocode').execute({ latitude: 1, longitude: 2 }));
+        expect(result).toEqual({ formattedAddress: 'Somewhere', placeId: 'place-456', location: { lat: 1, lng: 2 } });
+    });
+
+    it('throws a clear UserError instead of a raw crash when a 200 response body is not valid JSON', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true, status: 200, statusText: 'OK',
+            json: jest.fn().mockRejectedValue(new SyntaxError('Unexpected end of JSON input')),
+        });
+        await expect(tools.get('mapsSearchPlaces').execute({ query: 'coffee', maxResults: 10 })).rejects.toThrow(/unparsable response/);
+    });
 });
