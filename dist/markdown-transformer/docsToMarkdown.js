@@ -4,6 +4,79 @@
  * When these are detected on a text run, we render backtick code in markdown.
  */
 const CODE_FONT_FAMILIES = new Set(['Roboto Mono', 'Courier New', 'Consolas', 'monospace']);
+/**
+ * Inspects the body content that replaceDocumentWithMarkdown will delete and
+ * re-insert, and reports anything docsJsonToMarkdown cannot represent at all.
+ * Returns an array of human-readable warning strings (empty if the content
+ * converts losslessly). Call before replaceDocumentWithMarkdown to warn the AI
+ * about what a body replacement will permanently lose.
+ *
+ * Checked: inline/positioned images and footnote references, neither of which
+ * has any markdown representation in either direction of this converter.
+ *
+ * NOT checked (intentionally): custom text/highlight colors and non-default
+ * paragraph alignment. Those round-trip losslessly through the rich-markdown
+ * HTML extensions this converter emits by default (`<span style="color:...">`,
+ * `<p align="...">`, table alignment markers) and their inverse parsing in
+ * markdownToDocs.js, so warning about them here would be inaccurate.
+ *
+ * IMPORTANT — accuracy: every warning is derived from `bodyContent` itself,
+ * i.e. the exact body (a specific tab's body in tab mode, the document body
+ * otherwise) that the replacement mutates. This deliberately does NOT inspect
+ * document-level `headers`/`footers`, which are separate document segments a
+ * body-content replacement does not delete, nor the global `inlineObjects`/
+ * `footnotes` maps, which can include content belonging to OTHER tabs that a
+ * scoped replacement never touches.
+ *
+ * @param {Array} bodyContent structural elements of the body being replaced
+ *   (e.g. `contentSource.body.content`).
+ * @returns {string[]} warnings
+ */
+export function checkMarkdownFidelity(bodyContent) {
+    const warnings = [];
+    let imageCount = 0;
+    let footnoteCount = 0;
+    function scanParagraphElements(elements) {
+        for (const pe of elements) {
+            // Inline images embedded in the body flow — deleted with the body.
+            if (pe.inlineObjectElement) {
+                imageCount++;
+            }
+            // Footnote references live in the body; deleting the body removes them
+            // (and Docs then drops the orphaned footnote).
+            if (pe.footnoteReference) {
+                footnoteCount++;
+            }
+        }
+    }
+    function scanBodyContent(content) {
+        for (const element of content) {
+            if (element.paragraph) {
+                // Positioned (floating) images anchored to this paragraph are also
+                // removed when the paragraph is deleted.
+                if (Array.isArray(element.paragraph.positionedObjectIds)) {
+                    imageCount += element.paragraph.positionedObjectIds.length;
+                }
+                scanParagraphElements(element.paragraph.elements ?? []);
+            }
+            else if (element.table) {
+                for (const row of (element.table.tableRows ?? [])) {
+                    for (const cell of (row.tableCells ?? [])) {
+                        scanBodyContent(cell.content ?? []);
+                    }
+                }
+            }
+        }
+    }
+    scanBodyContent(bodyContent ?? []);
+    if (imageCount > 0) {
+        warnings.push(`${imageCount} image(s) — will be removed`);
+    }
+    if (footnoteCount > 0) {
+        warnings.push(`${footnoteCount} footnote(s) — will be removed`);
+    }
+    return warnings;
+}
 // --- Main Conversion ---
 /**
  * Converts Google Docs JSON structure to a markdown string.
