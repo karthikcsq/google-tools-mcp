@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 // Jest with ESM doesn't reset module state between tests, so we test
 // the exported functions directly and rely on the Map being shared.
 
-let trackRead, guardMutation, trackMutation, hasBeenRead, getLastReadRevisionId;
+let trackRead, guardMutation, trackMutation, hasBeenRead, getLastReadRevisionId, requireRereadBeforeMutation;
 
 beforeEach(async () => {
     // Dynamic import — module state persists across tests within same worker,
@@ -17,6 +17,7 @@ beforeEach(async () => {
     trackMutation = mod.trackMutation;
     hasBeenRead = mod.hasBeenRead;
     getLastReadRevisionId = mod.getLastReadRevisionId;
+    requireRereadBeforeMutation = mod.requireRereadBeforeMutation;
 });
 
 describe('readTracker', () => {
@@ -117,6 +118,39 @@ describe('readTracker', () => {
             trackRead(id, null, null, 'revision-123');
             trackMutation(id);
             expect(getLastReadRevisionId(id)).toBeNull();
+        });
+    });
+
+    // --- requireRereadBeforeMutation ---
+    describe('requireRereadBeforeMutation', () => {
+        it('blocks the next mutation until the file is read again', async () => {
+            const id = `require-reread-${Date.now()}`;
+            trackRead(id, '2026-01-01T00:00:00.000Z', 'before', 'revision-123');
+            await expect(guardMutation(id, { skipExternalCheck: true })).resolves.toBeUndefined();
+
+            requireRereadBeforeMutation(id, 'an Apps Script changed it.');
+
+            await expect(guardMutation(id, { skipExternalCheck: true }))
+                .rejects
+                .toThrow(/must be read again/);
+            expect(getLastReadRevisionId(id)).toBeNull();
+        });
+
+        it('lets mutations through again after a fresh read', async () => {
+            const id = `require-reread-clear-${Date.now()}`;
+            trackRead(id, '2026-01-01T00:00:00.000Z', 'before', 'revision-123');
+            requireRereadBeforeMutation(id, 'an Apps Script changed it.');
+            await expect(guardMutation(id, { skipExternalCheck: true })).rejects.toThrow();
+
+            trackRead(id, '2026-01-02T00:00:00.000Z', 'after', 'revision-456');
+            await expect(guardMutation(id, { skipExternalCheck: true })).resolves.toBeUndefined();
+            expect(getLastReadRevisionId(id)).toBe('revision-456');
+        });
+
+        it('is a no-op for files that were never read', () => {
+            const id = `require-reread-noread-${Date.now()}`;
+            expect(() => requireRereadBeforeMutation(id, 'whatever.')).not.toThrow();
+            expect(hasBeenRead(id)).toBe(false);
         });
     });
 

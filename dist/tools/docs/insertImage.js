@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDocsClient, getDriveClient, getScriptClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { getLastReadRevisionId, requireRereadBeforeMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'insertImage',
@@ -80,14 +80,13 @@ export function register(server) {
                     await GDocsHelpers.insertImageViaAppsScript(docs, scriptClient, appsScriptDeploymentId, args.documentId, driveFileId, args.index, args.tabId, appsScriptRevisionId ? { requiredRevisionId: appsScriptRevisionId } : undefined);
                     // The Apps Script call that replaces the marker with the image mutates
                     // the document outside our batchUpdate visibility, so we have no way to
-                    // learn the true post-write revision here. Clear the tracked revision
-                    // (rather than propagate a now-stale one) so a subsequent write in this
-                    // session re-reads instead of either spuriously conflicting or silently
-                    // reusing an outdated revision.
-                    log.warn(`WriteControl guard cleared for document ${args.documentId} after Apps Script image insertion ` +
-                        '(the script mutates the doc outside batchUpdate visibility, so no true post-write revision is available). ' +
-                        'The next write to this document in this session will proceed unguarded until it is read again.');
-                    trackMutation(args.documentId);
+                    // learn the true post-write revision here. trackMutation would clear the
+                    // revision and the modifiedTime, which leaves the next write with nothing
+                    // to check against and sends it out unguarded on a pre-image baseline.
+                    // Require a fresh read instead.
+                    log.warn(`Document ${args.documentId} must be read again before the next write ` +
+                        '(the Apps Script mutates the doc outside batchUpdate visibility, so no true post-write revision is available).');
+                    requireRereadBeforeMutation(args.documentId, 'an Apps Script inserted an image and its resulting revision is not visible to us.');
                     const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                     return `${docUrl}\nSuccessfully inserted local image at index ${args.index} via Apps Script${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
                 }

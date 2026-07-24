@@ -50,6 +50,19 @@ export async function guardMutation(fileId, opts) {
         );
     }
 
+    // A previous write left the document in a state we can't describe: no
+    // revision to guard against and no content snapshot to diff. Refuse rather
+    // than let this write go out against a stale baseline. The modifiedTime
+    // check below cannot cover this, because it is skipped when modifiedTime
+    // is null and would just re-baseline on the post-write value.
+    if (entry.requiresReread) {
+        throw new UserError(
+            `This file (${fileId}) must be read again before it can be edited: ${entry.requiresReread} ` +
+            'Read it again (readDocument, readSpreadsheet, readFile, or readDriveFile) and rebase your edit ' +
+            'on the current content.'
+        );
+    }
+
     // Optionally check if file was modified externally since last read
     if (!opts?.skipExternalCheck) {
         try {
@@ -142,6 +155,32 @@ export function trackMutation(fileId, newRevisionId) {
         // doesn't show our own edits as "external" changes.
         entry.content = null;
         entry.revisionId = typeof newRevisionId === 'string' ? newRevisionId : null;
+    }
+}
+
+/**
+ * Mark a file as needing a fresh read before any further mutation.
+ *
+ * Use this instead of trackMutation after a write whose resulting revision we
+ * cannot learn (an Apps Script call that edits the document outside our
+ * batchUpdate visibility, for example). trackMutation on its own clears the
+ * revision and the modifiedTime, which leaves the next write with nothing to
+ * guard against: it sends no writeControl and the external-change check is
+ * skipped because modifiedTime is null. That write would then be based on a
+ * pre-mutation read without anyone noticing. Blocking it and asking for a
+ * re-read is the only safe option when the post-write revision is unknown.
+ *
+ * @param fileId
+ * @param reason Sentence fragment explaining what happened, shown to the caller.
+ */
+export function requireRereadBeforeMutation(fileId, reason) {
+    const entry = readLog.get(fileId);
+    if (entry) {
+        entry.readAt = new Date();
+        entry.modifiedTime = null;
+        entry.content = null;
+        entry.revisionId = null;
+        entry.requiresReread = reason || 'a previous write changed it in a way we could not track.';
     }
 }
 
