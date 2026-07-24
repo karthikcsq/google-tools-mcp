@@ -36,6 +36,7 @@ export function checkMarkdownFidelity(bodyContent) {
     const warnings = [];
     let imageCount = 0;
     let footnoteCount = 0;
+    let tocCount = 0;
     function scanParagraphElements(elements) {
         for (const pe of elements) {
             // Inline images embedded in the body flow — deleted with the body.
@@ -66,6 +67,13 @@ export function checkMarkdownFidelity(bodyContent) {
                     }
                 }
             }
+            // A generated table of contents sits in the body, so the replacement
+            // deletes it, and markdown has no way to express one, so the importer
+            // cannot put it back. Without this the whole round trip drops the TOC
+            // with nothing said about it.
+            else if (element.tableOfContents) {
+                tocCount++;
+            }
         }
     }
     scanBodyContent(bodyContent ?? []);
@@ -74,6 +82,9 @@ export function checkMarkdownFidelity(bodyContent) {
     }
     if (footnoteCount > 0) {
         warnings.push(`${footnoteCount} footnote(s) — will be removed`);
+    }
+    if (tocCount > 0) {
+        warnings.push(`${tocCount} table(s) of contents — will be removed (markdown cannot express a generated TOC; reinsert it in Docs afterward)`);
     }
     return warnings;
 }
