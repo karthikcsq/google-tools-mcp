@@ -33,15 +33,24 @@ export const processMessagePart = (messagePart, includeBodyHtml = false, maxBody
         // mode. We can't slice raw base64 to bound it: cutting at an arbitrary
         // offset yields invalid, non-portable base64 and a totalChars measured
         // in encoded (not decoded) characters. Instead, decode just to measure,
-        // and when the decoded body exceeds the cap drop the payload entirely,
-        // leaving valid truncation metadata (decoded totalChars) in its place.
+        // and when the body exceeds the cap drop the payload entirely, leaving
+        // valid truncation metadata (decoded totalChars) in its place.
+        //
+        // The cap has to consider both measures. What the client actually
+        // receives is the base64 string, which runs about four characters per
+        // three bytes of body, and non-ASCII text costs several bytes per
+        // character. So 3,000 characters of CJK HTML decode well under a
+        // 10,000 character cap while returning roughly 12,000 characters of
+        // base64. Gate on whichever measure is larger.
+        const encodedChars = messagePart.body.data.length;
         const decodedChars = Buffer.from(messagePart.body.data, 'base64').toString('utf-8').length;
-        if (decodedChars > maxBodyChars) {
+        if (decodedChars > maxBodyChars || encodedChars > maxBodyChars) {
             messagePart.body = {
-                size: messagePart.body.size ?? messagePart.body.data.length,
+                size: messagePart.body.size ?? encodedChars,
                 attachmentId: messagePart.body.attachmentId,
                 bodyOmitted: true,
                 totalChars: decodedChars,
+                encodedChars,
             };
         }
     }
