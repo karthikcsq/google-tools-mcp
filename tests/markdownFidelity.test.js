@@ -54,6 +54,24 @@ describe('checkMarkdownFidelity', () => {
         expect(checkMarkdownFidelity(body)).toContain('1 footnote(s) — will be removed');
     });
 
+    it('reports a generated table of contents', () => {
+        const body = [
+            para([textRun('Contents\n')]),
+            { tableOfContents: { content: [para([textRun('Chapter 1\n')])] } },
+            para([textRun('Chapter 1\n')]),
+        ];
+        expect(checkMarkdownFidelity(body)[0]).toMatch(/^1 table\(s\) of contents — will be removed/);
+    });
+
+    it('counts each table of contents separately', () => {
+        const body = [
+            { tableOfContents: { content: [] } },
+            para([textRun('body\n')]),
+            { tableOfContents: { content: [] } },
+        ];
+        expect(checkMarkdownFidelity(body)[0]).toMatch(/^2 table\(s\) of contents/);
+    });
+
     it('does NOT flag custom colors — they round-trip via rich-markdown spans', () => {
         const body = [para([{ textRun: { content: 'red text\n', textStyle: { foregroundColor: { color: { rgbColor: { red: 1, green: 0, blue: 0 } } } } } }])];
         expect(checkMarkdownFidelity(body)).toEqual([]);

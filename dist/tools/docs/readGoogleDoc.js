@@ -111,6 +111,11 @@ export function register(server) {
                     // living in other tabs or in headers/footers a body replacement leaves
                     // untouched.
                     const fidelityWarnings = checkMarkdownFidelity(contentSource.body?.content);
+                    const fidelityNotice = fidelityWarnings.length > 0
+                        ? '\n\n---\n⚠️ FORMATTING LOSS WARNING: This document contains content that cannot be represented in markdown. Calling replaceDocumentWithMarkdown will permanently lose:\n' +
+                            fidelityWarnings.map(w => `  • ${w}`).join('\n') +
+                            '\nConsider using modifyText or appendMarkdown for targeted edits instead.\n---'
+                        : '';
                     if (args.diffFromLastRead) {
                         const previous = getLastReadContent(args.documentId);
                         if (previous !== null) {
@@ -130,7 +135,13 @@ export function register(server) {
                             } catch (e) {
                                 log.info(`Could not update workspace on diff read: ${e.message}`);
                             }
-                            return patch;
+                            // The diff can be silent about content the converter has no
+                            // representation for: an image or footnote another editor added
+                            // since the last read simply is not in either markdown snapshot,
+                            // so it never shows up as a change. The workspace file was still
+                            // refreshed above, and pushing it back would delete that content.
+                            // Carry the same warning the full read gives.
+                            return patch + fidelityNotice;
                         }
                         log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
                     }
@@ -156,11 +167,7 @@ export function register(server) {
                     }
                     // Append fidelity warning after the markdown so the AI knows what
                     // replaceDocumentWithMarkdown would permanently destroy.
-                    if (fidelityWarnings.length > 0) {
-                        output += '\n\n---\n⚠️ FORMATTING LOSS WARNING: This document contains content that cannot be represented in markdown. Calling replaceDocumentWithMarkdown will permanently lose:\n' +
-                            fidelityWarnings.map(w => `  • ${w}`).join('\n') +
-                            '\nConsider using modifyText or appendMarkdown for targeted edits instead.\n---';
-                    }
+                    output += fidelityNotice;
                     if (localPath) {
                         // Use forward slashes in the advice string so the path is valid JSON
                         // regardless of OS (backslashes in Windows paths break JSON encoding).
