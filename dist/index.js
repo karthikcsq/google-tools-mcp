@@ -78,7 +78,21 @@ await registerAllTools(server);
 try {
     logger.info('Starting google-tools-mcp server...');
     await server.start({ transportType: 'stdio' });
-    logger.info('MCP Server running using stdio. Awaiting client connection...');
+    // process.uptime() covers the whole life of this node process, including
+    // module load time, so a slow number here means the server itself is
+    // slow to boot. If this is fast (~1s) but the MCP client still reports a
+    // long time-to-connect, the delay is happening before this process even
+    // started — e.g. npx re-resolving the dependency tree on every launch.
+    // See https://github.com/karthikcsq/google-tools-mcp/issues/46
+    const readyMs = Math.round(process.uptime() * 1000);
+    logger.info(`MCP Server running using stdio in ${readyMs}ms. Awaiting client connection...`);
+    if (readyMs > 5000) {
+        logger.warn(`Startup took ${readyMs}ms. If the MCP client also reports a long connection time, ` +
+            'this process itself is slow — check for antivirus/disk contention. If this number is small ' +
+            'but the client-reported connect time is much larger (e.g. near 30000ms), the delay is happening ' +
+            'before this process starts (commonly npx re-resolving the dependency tree on every launch); ' +
+            'see the README troubleshooting section for a fix.');
+    }
     logger.info('Google auth will run automatically on first tool call.');
 } catch (startError) {
     logger.error('FATAL: Server failed to start:', startError.message || startError);

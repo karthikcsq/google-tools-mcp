@@ -82,6 +82,84 @@ function cancelled() {
     process.exit(0);
 }
 
+// ---------------------------------------------------------------------------
+// Fast-launch install
+// ---------------------------------------------------------------------------
+// `npx -y google-tools-mcp` re-resolves and verifies the whole dependency
+// tree on every single launch. On some machines (observed on Windows, likely
+// antivirus scanning of npm's file I/O during install/verify — this package
+// pulls in fastmcp + the full googleapis client library tree) that takes
+// 30+ seconds, even when the exact version is already cached. Claude Code's
+// stdio MCP connection timeout is a fixed 30s, so that's enough to lose the
+// race and surface as "the server won't connect" with no visible cause.
+// See https://github.com/karthikcsq/google-tools-mcp/issues/46
+//
+// To avoid paying npx's per-launch cost on every server start, we install
+// the package globally once here and point the MCP client directly at the
+// resolved dist/index.js via `node`, skipping npx entirely afterward.
+
+// Pure helper: where npm puts an installed package's files under a given
+// global node_modules root. Exported for testing.
+export function resolveGlobalIndexPath(globalRoot) {
+    return path.join(globalRoot, 'google-tools-mcp', 'dist', 'index.js');
+}
+
+// Installs google-tools-mcp globally and resolves the absolute path to its
+// dist/index.js so callers can launch it directly with `node`, bypassing
+// npx. `run`/`access`/`hasNpm` are injectable for testing; they default to
+// the real shell/filesystem/CLI-detection implementations.
+export async function installGlobalFastLaunch({
+    run = runCommand,
+    access = fs.access,
+    hasNpm = () => hasCli('npm'),
+} = {}) {
+    if (!hasNpm()) {
+        return { ok: false, reason: 'npm was not found on PATH — cannot install globally.' };
+    }
+
+    try {
+        await run('npm install -g google-tools-mcp@latest');
+    } catch (err) {
+        return { ok: false, reason: `npm install -g google-tools-mcp failed: ${err.message}` };
+    }
+
+    let globalRoot;
+    try {
+        globalRoot = (await run('npm root -g')).trim();
+    } catch (err) {
+        return { ok: false, reason: `could not resolve the npm global root: ${err.message}` };
+    }
+
+    const indexPath = resolveGlobalIndexPath(globalRoot);
+    try {
+        await access(indexPath);
+    } catch {
+        return { ok: false, reason: `installed globally, but dist/index.js was not found at ${indexPath}` };
+    }
+
+    return { ok: true, indexPath };
+}
+
+// Builds the { command, args, shellDisplay } to launch the server with,
+// given the result of installGlobalFastLaunch(). Falls back to the slower
+// `npx -y google-tools-mcp` when the fast-launch install didn't succeed, so
+// setup never fails outright — it just can't avoid the npx race on this
+// machine.
+export function buildLaunchCommand(fastLaunch, { execPath = process.execPath } = {}) {
+    if (fastLaunch?.ok) {
+        return {
+            command: execPath,
+            args: [fastLaunch.indexPath],
+            shellDisplay: `"${execPath}" "${fastLaunch.indexPath}"`,
+        };
+    }
+    return {
+        command: 'npx',
+        args: ['-y', 'google-tools-mcp'],
+        shellDisplay: 'npx -y google-tools-mcp',
+    };
+}
+
 // Pull the GCP project number out of an OAuth client ID.
 // Format: <project_number>-<hash>.apps.googleusercontent.com
 function extractProjectNumberFromClientId(clientId) {
@@ -381,6 +459,25 @@ export async function runSetup() {
 
     // ── Step 5: Install ──────────────────────────────────────────────────
     p.log.step(chalk.cyan.bold('Step 5') + chalk.dim(' · ') + 'Install MCP server');
+    p.log.message(chalk.dim(
+        'Installing globally so your MCP client launches google-tools-mcp directly ' +
+        'instead of through npx — npx re-resolves the whole dependency tree on every ' +
+        'launch, which can take 30+ seconds on some machines and lose the race against ' +
+        "Claude Code's 30s connection timeout (github.com/karthikcsq/google-tools-mcp/issues/46)."
+    ));
+
+    const installSpinner = p.spinner();
+    installSpinner.start('Installing google-tools-mcp globally...');
+    const fastLaunch = await installGlobalFastLaunch();
+    if (fastLaunch.ok) {
+        installSpinner.stop(chalk.green('Installed globally — MCP clients will launch it directly via node.'));
+    } else {
+        installSpinner.stop(chalk.yellow('Global install failed — falling back to npx (slower; can hit connection timeouts).'));
+        p.log.warn(fastLaunch.reason);
+        p.log.message(chalk.dim('See the README troubleshooting section if the MCP server fails to connect.'));
+    }
+
+    const launch = buildLaunchCommand(fastLaunch);
 
     const hasCodex = hasCli('codex');
     const hasClaude = hasCli('claude');
@@ -393,19 +490,20 @@ export async function runSetup() {
         });
         if (p.isCancel(install)) cancelled();
 
+        const codexAddCmd = `codex mcp add google -- ${launch.shellDisplay}`;
         if (install) {
             const s = p.spinner();
             s.start('Adding to Codex...');
             try {
-                await runCommand('codex mcp add google -- npx -y google-tools-mcp');
+                await runCommand(codexAddCmd);
                 s.stop('Added to Codex!');
             } catch (err) {
                 s.stop('Failed to add automatically');
                 p.log.warn(`Error: ${err.message}`);
-                p.log.message(`Run manually:\n${chalk.cyan('codex mcp add google -- npx -y google-tools-mcp')}`);
+                p.log.message(`Run manually:\n${chalk.cyan(codexAddCmd)}`);
             }
         } else {
-            p.log.message(`To add later:\n${chalk.cyan('codex mcp add google -- npx -y google-tools-mcp')}`);
+            p.log.message(`To add later:\n${chalk.cyan(codexAddCmd)}`);
         }
     }
 
@@ -418,34 +516,38 @@ export async function runSetup() {
         });
         if (p.isCancel(install)) cancelled();
 
+        const claudeAddCmd = `claude mcp add -s user google -- ${launch.shellDisplay}`;
         if (install) {
             const s = p.spinner();
             s.start('Adding to Claude Code...');
             try {
-                await runCommand('claude mcp add -s user google -- npx -y google-tools-mcp');
+                await runCommand(claudeAddCmd);
                 s.stop('Added to Claude Code!');
             } catch (err) {
                 s.stop('Failed to add automatically');
                 p.log.warn(`Error: ${err.message}`);
-                p.log.message(`Run manually:\n${chalk.cyan('claude mcp add -s user google -- npx -y google-tools-mcp')}`);
+                p.log.message(`Run manually:\n${chalk.cyan(claudeAddCmd)}`);
             }
         } else {
-            p.log.message(`To add later:\n${chalk.cyan('claude mcp add -s user google -- npx -y google-tools-mcp')}`);
+            p.log.message(`To add later:\n${chalk.cyan(claudeAddCmd)}`);
         }
     }
 
     if (!hasCodex && !hasClaude) {
+        const jsonSnippet = JSON.stringify({
+            mcpServers: { google: { command: launch.command, args: launch.args } },
+        });
         p.log.message([
             'Add to your MCP client:',
             '',
             chalk.dim('Codex:'),
-            chalk.cyan('  codex mcp add google -- npx -y google-tools-mcp'),
+            chalk.cyan(`  codex mcp add google -- ${launch.shellDisplay}`),
             '',
             chalk.dim('Claude Code:'),
-            chalk.cyan('  claude mcp add -s user google -- npx -y google-tools-mcp'),
+            chalk.cyan(`  claude mcp add -s user google -- ${launch.shellDisplay}`),
             '',
             chalk.dim('Other clients') + chalk.dim(' (.mcp.json):'),
-            chalk.cyan('  { "mcpServers": { "google": { "command": "npx", "args": ["-y", "google-tools-mcp"] } } }'),
+            chalk.cyan(`  ${jsonSnippet}`),
         ].join('\n'));
     }
 
