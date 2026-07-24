@@ -31,6 +31,24 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      # A v* tag can be pushed from any local branch, so the version check alone
+      # is not enough: it would happily publish a commit that never went through
+      # main. Ask the API whether the tagged commit is reachable from main and
+      # refuse otherwise. Comparing main...<sha> returns "identical" when the tag
+      # is exactly main's tip and "behind" when it is an older commit on main;
+      # anything else ("ahead", "diverged") means the commit is not on main.
+      - name: Verify tagged commit is on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${GITHUB_SHA}" --jq .status)"
+          echo "Comparison of main...${GITHUB_SHA}: ${status}"
+          if [ "$status" != "identical" ] && [ "$status" != "behind" ]; then
+            echo "Tag $GITHUB_REF_NAME points at a commit that is not on main. Refusing to publish."
+            exit 1
+          fi
+
       - name: Verify tag matches package.json version
         shell: bash
         run: |

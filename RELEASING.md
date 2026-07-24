@@ -36,9 +36,13 @@ published package.
    ```
 
 The pushed `vX.Y.Z` tag starts `.github/workflows/publish.yml`. The workflow
-refuses to publish unless the tag and `package.json` have the same version,
-then installs dependencies, runs the test suite, verifies the package tarball,
-and publishes to npm.
+refuses to publish unless the tagged commit is reachable from `main` and the
+tag and `package.json` have the same version, then installs dependencies, runs
+the test suite, verifies the package tarball, and publishes to npm.
+
+Tagging a commit that is not on `main` fails the run before anything is
+published, so a `v*` tag pushed from a local or unmerged branch cannot reach
+npm.
 
 After it completes, verify the GitHub Actions run, the npm registry version,
 and a clean `npx -y google-tools-mcp@X.Y.Z` invocation.
