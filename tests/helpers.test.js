@@ -272,6 +272,24 @@ describe('processMessagePart', () => {
         expect(result.body.data).toBe(rawBase64);
     });
 
+    it('omits an undecoded payload whose base64 exceeds the cap even when its decoded text does not', () => {
+        // Non-ASCII is the case the decoded-only check missed: these characters
+        // are three bytes each, so 3,000 of them decode to 3,000 characters
+        // (under a 10,000 cap) but return roughly 12,000 characters of base64.
+        const decoded = '漢'.repeat(3000);
+        const rawBase64 = Buffer.from(decoded).toString('base64');
+        expect(decoded.length).toBeLessThan(10000);
+        expect(rawBase64.length).toBeGreaterThan(10000);
+        const part = { mimeType: 'text/html', body: { data: rawBase64 } };
+        const result = processMessagePart(part, false, 10000);
+        expect(result.body.data).toBeUndefined();
+        expect(result.body).toMatchObject({
+            bodyOmitted: true,
+            totalChars: decoded.length,
+            encodedChars: rawBase64.length,
+        });
+    });
+
     it('leaves undecoded html payloads alone when maxBodyChars is 0', () => {
         const rawBase64 = Buffer.from('<html>hello</html>').toString('base64');
         const part = { mimeType: 'text/html', body: { data: rawBase64 } };
