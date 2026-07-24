@@ -10,6 +10,7 @@ import {
     extractBearerToken,
     tokensMatch,
     createHttpAuthenticate,
+    createHttpRequestGuard,
 } from '../dist/httpAuth.js';
 
 // Minimal http.IncomingMessage stand-in: only headers are read.
@@ -160,6 +161,73 @@ describe('httpAuth', () => {
             await expect(
                 authenticate(req({ origin: 'https://evil.example' })),
             ).rejects.toThrow(/Origin/);
+        });
+    });
+
+    // --- request guard: every method, not just POST -------------------------
+    // FastMCP's authenticate() only runs on session creation (POST). GET
+    // (stream attach) and DELETE (session kill) are dispatched on the
+    // Mcp-Session-Id header alone, so they need their own gate.
+    describe('createHttpRequestGuard', () => {
+        const token = 'guard-token';
+        const guardReq = (method, headers = {}, url = '/mcp') => ({ method, url, headers });
+        const fakeRes = () => {
+            const res = { statusCode: null, body: null, headers: {} };
+            res.setHeader = (k, v) => { res.headers[k] = v; };
+            res.writeHead = (code) => { res.statusCode = code; return res; };
+            res.end = (body) => { res.body = body; return res; };
+            return res;
+        };
+
+        it.each(['GET', 'DELETE', 'POST'])('rejects %s with no token', (method) => {
+            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const res = fakeRes();
+            expect(guard(guardReq(method, { 'mcp-session-id': 'leaked' }), res)).toBe(true);
+            expect(res.statusCode).toBe(401);
+        });
+
+        it.each(['GET', 'DELETE'])('lets %s through with a valid token', (method) => {
+            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const res = fakeRes();
+            expect(guard(guardReq(method, { authorization: `Bearer ${token}` }), res)).toBe(false);
+            expect(res.statusCode).toBeNull();
+        });
+
+        it('rejects a disallowed Origin with 403 even when the token is right', () => {
+            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const res = fakeRes();
+            expect(guard(guardReq('GET', {
+                authorization: `Bearer ${token}`,
+                origin: 'https://evil.example',
+            }), res)).toBe(true);
+            expect(res.statusCode).toBe(403);
+        });
+
+        it('leaves OPTIONS preflight alone (browsers never send Authorization on it)', () => {
+            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const res = fakeRes();
+            expect(guard(guardReq('OPTIONS'), res)).toBe(false);
+        });
+
+        it('leaves other paths alone, so /ping stays reachable', () => {
+            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const res = fakeRes();
+            expect(guard(guardReq('GET', {}, '/ping'), res)).toBe(false);
+        });
+
+        it('honours a non-default endpoint', () => {
+            const guard = createHttpRequestGuard({ token }, undefined, '/custom');
+            const res = fakeRes();
+            expect(guard(guardReq('GET', {}, '/mcp'), res)).toBe(false);
+            expect(guard(guardReq('GET', {}, '/custom'), fakeRes())).toBe(true);
+        });
+
+        it('skips the token check when noAuth is set but still guards Origin', () => {
+            const guard = createHttpRequestGuard({ noAuth: true }, undefined, '/mcp');
+            expect(guard(guardReq('DELETE', {}), fakeRes())).toBe(false);
+            const res = fakeRes();
+            expect(guard(guardReq('DELETE', { origin: 'https://evil.example' }), res)).toBe(true);
+            expect(res.statusCode).toBe(403);
         });
     });
 });

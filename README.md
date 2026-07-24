@@ -342,10 +342,14 @@ The HTTP endpoint exposes your **authenticated** Google Workspace tool surface
 (Gmail, Drive, Calendar, Docs, …). It is guarded so it can't be driven by other
 processes or by web pages on your machine:
 
-- **Bearer token required.** Every request must send `Authorization: Bearer <token>`.
-  Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a random one-time token is generated
-  and printed to the log at startup. Requests without a valid token get `401`.
-  (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables this — only on a fully trusted machine.)
+- **Bearer token required.** Every request to the MCP endpoint must send
+  `Authorization: Bearer <token>`, including the `GET` that attaches to a session's
+  event stream and the `DELETE` that terminates one, so a leaked session id on its
+  own gets nobody in. Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a random one-time
+  token is generated and printed to stderr at startup (printed directly, so it
+  still appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`). Requests without a
+  valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables this — only on a
+  fully trusted machine.) The `/ping` health endpoint stays open.
 - **Loopback only.** Binds to `127.0.0.1` by default, so the port isn't reachable
   from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need to.
 - **Origin checked.** Requests carrying a non-loopback browser `Origin` are

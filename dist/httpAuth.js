@@ -21,6 +21,7 @@
 // In stdio mode `authenticate` is invoked with no request, so these gates are
 // inert there and the default transport is byte-for-byte unaffected.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import http from 'node:http';
 
 /**
  * Resolve HTTP auth configuration from the environment. Pure — no side effects.
@@ -110,25 +111,132 @@ export function tokensMatch(a, b) {
  * @param {{ warn?: Function }} [logger]
  */
 export function createHttpAuthenticate(config, logger) {
-    const { token, noAuth = false, allowedOrigins = [] } = config || {};
     return async function authenticate(request) {
         // stdio transport calls authenticate() with no request — nothing to guard.
         if (!request) return {};
 
-        const origin = firstHeader(request.headers?.origin);
-        if (!isOriginAllowed(origin, allowedOrigins)) {
-            logger?.warn?.(`Rejected HTTP request from disallowed Origin: ${origin}`);
-            throw new Error('Forbidden: request Origin is not allowed');
-        }
-
-        if (!noAuth) {
-            const provided = extractBearerToken(request);
-            if (!tokensMatch(provided, token)) {
-                logger?.warn?.('Rejected HTTP request: missing or invalid authentication token.');
-                throw new Error('Unauthorized: missing or invalid authentication token');
-            }
+        const result = checkHttpAuth(request.headers, config);
+        if (!result.ok) {
+            logger?.warn?.(result.reason);
+            throw new Error(result.message);
         }
 
         return { authenticated: true };
     };
+}
+
+/**
+ * Apply the origin and token gates to a plain headers object.
+ *
+ * Both the FastMCP `authenticate` hook and the transport middleware call this,
+ * so there is one definition of what an acceptable request looks like and the
+ * two cannot drift apart.
+ *
+ * @param {Record<string, string|string[]|undefined>} headers
+ * @param {{ token?: string, noAuth?: boolean, allowedOrigins?: string[] }} config
+ * @returns {{ok: true} | {ok: false, status: number, message: string, reason: string}}
+ */
+export function checkHttpAuth(headers, config) {
+    const { token, noAuth = false, allowedOrigins = [] } = config || {};
+
+    const origin = firstHeader(headers?.origin ?? headers?.Origin);
+    if (!isOriginAllowed(origin, allowedOrigins)) {
+        return {
+            ok: false,
+            status: 403,
+            message: 'Forbidden: request Origin is not allowed',
+            reason: `Rejected HTTP request from disallowed Origin: ${origin}`,
+        };
+    }
+
+    if (!noAuth) {
+        const provided = extractBearerToken({ headers });
+        if (!tokensMatch(provided, token)) {
+            return {
+                ok: false,
+                status: 401,
+                message: 'Unauthorized: missing or invalid authentication token',
+                reason: 'Rejected HTTP request: missing or invalid authentication token.',
+            };
+        }
+    }
+
+    return { ok: true };
+}
+
+/**
+ * Build a request guard that applies the same gates to every HTTP method.
+ *
+ * FastMCP's `authenticate` hook is only reached on session creation. In the
+ * pinned mcp-proxy that means POST: its GET branch (attaching to a session's
+ * event stream) and DELETE branch (terminating a session) dispatch on the
+ * Mcp-Session-Id header alone and never call the hook. Anyone who learned a
+ * session id could read from or kill that session without presenting a token,
+ * while the README promises every request is bearer-protected.
+ *
+ * Returns true when it has already written a rejection, false to let the
+ * request continue.
+ *
+ * OPTIONS is let through: browsers never attach Authorization to a preflight,
+ * and the real request behind it is still gated. Paths other than the MCP
+ * endpoint (mcp-proxy's own /ping, for one) are left alone.
+ *
+ * @param {{ token?: string, noAuth?: boolean, allowedOrigins?: string[] }} config
+ * @param {{ warn?: Function }} [logger]
+ * @param {string} endpoint the MCP endpoint path, e.g. '/mcp'
+ */
+export function createHttpRequestGuard(config, logger, endpoint) {
+    return function guardRequest(req, res) {
+        if (req.method === 'OPTIONS') return false;
+
+        let pathname;
+        try {
+            pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+        } catch {
+            return false;
+        }
+        if (pathname !== endpoint) return false;
+
+        const result = checkHttpAuth(req.headers, config);
+        if (result.ok) return false;
+
+        logger?.warn?.(`${result.reason} (${req.method} ${pathname})`);
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(result.status).end(JSON.stringify({ error: result.message }));
+        return true;
+    };
+}
+
+/**
+ * Run `start` with every HTTP server it creates wrapped in `guard`.
+ *
+ * There is no supported way to reach mcp-proxy's request listener: FastMCP does
+ * not accept middleware for the stream transport, its Hono app is not what
+ * serves this endpoint, and startHTTPServer returns only a close function. So
+ * we substitute http.createServer for the duration of startup, wrap whatever
+ * listener gets handed to it, and put the original back before returning. The
+ * substitution is confined to that window and never touches anything the caller
+ * creates before or after.
+ *
+ * @param {() => Promise<void>} start
+ * @param {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => boolean} guard
+ */
+export async function startWithRequestGuard(start, guard) {
+    const originalCreateServer = http.createServer;
+    http.createServer = function patchedCreateServer(...args) {
+        const listenerIndex = args.findIndex((arg) => typeof arg === 'function');
+        if (listenerIndex !== -1) {
+            const listener = args[listenerIndex];
+            args[listenerIndex] = function guardedListener(req, res) {
+                if (guard(req, res)) return undefined;
+                return listener.call(this, req, res);
+            };
+        }
+        return originalCreateServer.apply(this, args);
+    };
+    try {
+        return await start();
+    } finally {
+        http.createServer = originalCreateServer;
+    }
 }

@@ -11,7 +11,7 @@
 import { FastMCP } from 'fastmcp';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
-import { resolveHttpAuthConfig, generateToken, createHttpAuthenticate } from './httpAuth.js';
+import { resolveHttpAuthConfig, generateToken, createHttpAuthenticate, createHttpRequestGuard, startWithRequestGuard } from './httpAuth.js';
 import { clearSession } from './readTracker.js';
 
 // --- Setup subcommand ---
@@ -61,10 +61,16 @@ if (useHttp && !httpAuth.noAuth && !httpToken) {
     // unauthenticated by accident. Log it prominently; the operator should set
     // GOOGLE_MCP_HTTP_TOKEN to a fixed value to keep it stable across restarts.
     httpToken = generateToken();
-    logger.warn('GOOGLE_MCP_HTTP_TOKEN is not set — generated a one-time token for this run.');
-    logger.warn(`  Token: ${httpToken}`);
-    logger.warn('  Clients must send:  Authorization: Bearer <token>');
-    logger.warn('  Set GOOGLE_MCP_HTTP_TOKEN to keep this stable across restarts.');
+    // Write straight to stderr rather than through the logger. LOG_LEVEL=error
+    // and LOG_LEVEL=silent are both documented settings, and either one would
+    // swallow a warn-level message — starting a server that demands a token
+    // nobody ever saw, so every client gets rejected with no way to recover.
+    process.stderr.write(
+        'GOOGLE_MCP_HTTP_TOKEN is not set — generated a one-time token for this run.\n' +
+        `  Token: ${httpToken}\n` +
+        '  Clients must send:  Authorization: Bearer <token>\n' +
+        '  Set GOOGLE_MCP_HTTP_TOKEN to keep this stable across restarts.\n'
+    );
 }
 
 // --- Process lifecycle logging ---
@@ -134,10 +140,19 @@ await registerAllTools(server);
 try {
     logger.info('Starting google-tools-mcp server...');
     if (useHttp) {
-        await server.start({
+        // authenticate() above only runs on session creation (POST). The guard
+        // covers the endpoint itself, so GET stream attachment and DELETE
+        // session termination have to present the same token instead of riding
+        // on a session id alone.
+        const guard = createHttpRequestGuard(
+            { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
+            logger,
+            httpEndpoint,
+        );
+        await startWithRequestGuard(() => server.start({
             transportType: 'httpStream',
             httpStream: { port: httpPort, endpoint: httpEndpoint, host: httpAuth.host },
-        });
+        }), guard);
         logger.info(`MCP Server running over HTTP at http://${httpAuth.host}:${httpPort}${httpEndpoint}`);
         logger.info(`Auth: ${httpAuth.noAuth ? 'DISABLED (GOOGLE_MCP_HTTP_NO_AUTH) — do not use on a shared machine' : 'bearer token required'}; bound to ${httpAuth.host}.`);
         logger.info('Shared mode: point every client at this URL instead of spawning per-session stdio servers.');
