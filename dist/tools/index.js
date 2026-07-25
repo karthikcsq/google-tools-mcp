@@ -195,11 +195,21 @@ export async function registerAllTools(server) {
     const wrappedServer = wrapServerWithAuthRetry(server);
 
     // Capture each registered tool so the legacy alias layer can look up the
-    // new tools' implementations to forward to.
+    // new tools' implementations to forward to. We snapshot a shallow copy of
+    // toolDef *before* handing it to wrappedAddTool: wrapServerWithAuthRetry
+    // mutates toolDef.execute in place to add the auth-retry wrapper, and since
+    // registeredTools would otherwise hold a reference to that same (mutated)
+    // object, aliases would forward to an already-retry-wrapped execute. Then,
+    // because each alias is itself registered through this same addTool (which
+    // gets retry-wrapped again), a persistent invalid_grant would invoke the
+    // real handler up to 4x and reauthorize repeatedly instead of the
+    // documented single retry. The snapshot keeps the map pointing at the raw,
+    // unwrapped implementation so the outer (alias-level) wrapper is the only
+    // retry layer applied.
     const registeredTools = new Map();
     const wrappedAddTool = wrappedServer.addTool.bind(wrappedServer);
     wrappedServer.addTool = function (toolDef) {
-        registeredTools.set(toolDef.name, toolDef);
+        registeredTools.set(toolDef.name, { ...toolDef });
         return wrappedAddTool(toolDef);
     };
 
