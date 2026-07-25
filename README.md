@@ -253,22 +253,28 @@ npm start
 # Equivalent: node dist/index.js
 ```
 
-To make an MCP client run the clone instead of the published package, use an absolute path in its configuration:
+To make an MCP client run the clone instead of the published package, use an absolute path in its configuration. Pin `command` to the absolute Node executable too, not a bare `node`: desktop and GUI MCP clients often launch with a minimal PATH that doesn't include `node` (this is especially common with nvm, volta, or fnm), even when `node` resolves fine in your own shell. Confirming `node` works in a terminal doesn't prove what the GUI client's process can resolve, since it may not inherit your shell's PATH at all, so hand it the resolved path directly. Get that path with:
+
+```bash
+node -p "process.execPath"
+```
+
+Then use that output as `command`:
 
 ```json
 {
   "mcpServers": {
     "google": {
-      "command": "node",
+      "command": "/absolute/path/to/node",
       "args": ["/absolute/path/to/google-tools-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-On Windows, write the path with forward slashes (`C:/Users/you/google-tools-mcp/dist/index.js`) or escape backslashes (`C:\\Users\\...`) — a bare `C:\Users\...` is invalid JSON.
+On Windows, write both paths with forward slashes (`C:/Users/you/google-tools-mcp/dist/index.js`) or escape backslashes (`C:\\Users\\...`) — a bare `C:\Users\...` is invalid JSON.
 
-Alternatively, link the clone into npm's global executable directory, then configure the client with `"command": "google-tools-mcp"`:
+Alternatively, link the clone into npm's global executable directory, then configure the client with `"command": "google-tools-mcp"`. This has the same bare-command risk described above: a GUI client's PATH doesn't have to match your shell's, so after linking, resolve the absolute path once with `command -v google-tools-mcp` (macOS/Linux) or `where google-tools-mcp` (Windows) and put that path in `command` instead of the bare name.
 
 ```bash
 cd /absolute/path/to/google-tools-mcp
