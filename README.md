@@ -296,7 +296,7 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients)) |
 | `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
 | `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
-| `GOOGLE_MCP_HTTP_TOKEN` | No | Bearer token required by HTTP clients. If unset in HTTP mode, a one-time token is generated and logged at startup. Set a fixed value to keep it stable across restarts |
+| `GOOGLE_MCP_HTTP_TOKEN` | No | Bearer token required by HTTP clients. If unset in HTTP mode, a one-time token is generated and printed to stderr at startup. Set a fixed value to keep it stable across restarts |
 | `GOOGLE_MCP_HTTP_HOST` | No | Bind address for HTTP transport (default `127.0.0.1`, loopback only). Change only if you deliberately need remote access |
 | `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` | No | Comma-separated extra `Origin` values to accept (loopback origins are always allowed). Requests with a foreign browser `Origin` are otherwise rejected |
 | `GOOGLE_MCP_HTTP_NO_AUTH` | No | Set to `1` to disable the bearer-token requirement. Only safe when you fully trust every process on the machine |
