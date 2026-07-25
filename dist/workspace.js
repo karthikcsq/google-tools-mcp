@@ -31,14 +31,14 @@ function sanitizeComponent(value) {
 // scopes working copies per user; on POSIX the directory is additionally locked
 // to 0700 and ownership-verified in ensureSafeBaseDir().
 //
-// GOOGLE_TOOLS_MCP_WORKSPACE_DIR overrides the computed path entirely when set.
+// GOOGLE_MCP_WORKSPACE_DIR overrides the computed path entirely when set.
 // This exists so tests (and any caller that wants an isolated workspace) can
 // point at a throwaway sandbox instead of the real per-user production
 // directory, without needing a second code path in production. Unset (the
 // normal production case), behavior is unchanged.
 export function getWorkspaceDir() {
-    if (process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR) {
-        return process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+    if (process.env.GOOGLE_MCP_WORKSPACE_DIR) {
+        return process.env.GOOGLE_MCP_WORKSPACE_DIR;
     }
     let userPart;
     try {

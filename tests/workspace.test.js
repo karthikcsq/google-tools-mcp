@@ -19,7 +19,7 @@
 // working copies, and colliding on one shared path also isn't safe across
 // parallel Jest workers.
 //
-// GOOGLE_TOOLS_MCP_WORKSPACE_DIR (see dist/workspace.js) overrides the
+// GOOGLE_MCP_WORKSPACE_DIR (see dist/workspace.js) overrides the
 // resolved directory. Every test that writes anything sets it (directly or
 // via the describe-level beforeAll/afterAll below) to a directory obtained
 // from fs.mkdtemp() -- a fresh, collision-proof sandbox -- and restores the
@@ -95,19 +95,19 @@ describe('writeWorkspaceFile', () => {
     let previousEnvValue;
 
     beforeAll(async () => {
-        previousEnvValue = process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+        previousEnvValue = process.env.GOOGLE_MCP_WORKSPACE_DIR;
         // A dedicated sandbox for this describe block only. Never the
         // production path, and unique per test run so parallel Jest workers
         // (and parallel CI runs) can never collide on it.
         sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gtm-workspace-test-'));
-        process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = sandboxDir;
+        process.env.GOOGLE_MCP_WORKSPACE_DIR = sandboxDir;
     });
 
     afterAll(async () => {
         if (previousEnvValue === undefined) {
-            delete process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+            delete process.env.GOOGLE_MCP_WORKSPACE_DIR;
         } else {
-            process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = previousEnvValue;
+            process.env.GOOGLE_MCP_WORKSPACE_DIR = previousEnvValue;
         }
         // Safe: sandboxDir is a directory this file created with mkdtemp, never
         // the real per-user production workspace.
@@ -154,16 +154,16 @@ describe('writeWorkspaceFile', () => {
         // of the test rather than touching the shared sandboxDir (which other
         // tests in this file rely on staying a real directory). The override
         // is restored to sandboxDir in `finally`.
-        const priorOverride = process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+        const priorOverride = process.env.GOOGLE_MCP_WORKSPACE_DIR;
         const testDir = path.join(os.tmpdir(), `gtm-symlink-basedir-${uid()}`);
         const decoy = path.join(os.tmpdir(), `gtm-decoy-${uid()}`);
-        process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = testDir;
+        process.env.GOOGLE_MCP_WORKSPACE_DIR = testDir;
         try {
             await fs.mkdir(decoy, { recursive: true });
             await fs.symlink(decoy, testDir, 'dir');
             await expect(writeWorkspaceFile(`doc-${uid()}`, 'data')).rejects.toThrow(/symlink|not a regular directory/i);
         } finally {
-            process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = priorOverride;
+            process.env.GOOGLE_MCP_WORKSPACE_DIR = priorOverride;
             // testDir/decoy are paths this test invented via uid() and never
             // existed before this test created them -- safe to remove.
             await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
