@@ -1,22 +1,44 @@
 // Gmail Thread tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, formatMessageClean, formatMessageMetadata, capArrayByResponseBudget, DEFAULT_MAX_RESPONSE_CHARS } from '../../helpers.js';
+import { processMessagePart, formatMessageClean, formatMessageMetadata, capToResponseBudget, makeOmissionStub, DEFAULT_MAX_RESPONSE_CHARS } from '../../helpers.js';
 
-// Applies the whole-response character budget to a thread's formatted messages
-// array, keeping the latest messages (dropping oldest-first) and stamping
-// truncation metadata directly on the thread object so callers can tell it
-// happened and how to get the rest.
+// A single message can exceed maxResponseChars on its own (maxBodyChars only
+// caps each MIME part independently, and headers/metadata add more on top).
+// Rather than ship it unbounded or drop it with no explanation, replace it
+// with a bounded stub naming the message id and how to fetch it directly.
+const messageOmissionStub = (maxResponseChars) => (message, budgetForStub) => makeOmissionStub(message, budgetForStub, id =>
+    `This message alone is larger than maxResponseChars (${maxResponseChars}), even with per-part caps applied. Fetch it directly with messageIds: ["${id}"] and a larger maxResponseChars, or use format: 'metadata' for headers only.`);
+
+// A single thread can exceed maxResponseChars on its own even after every
+// message inside it has already been capped (e.g. maxResponseChars is small
+// enough that even the per-thread floor does not fit). Same treatment as a
+// single oversized message: a bounded stub rather than an unbounded thread
+// or a silently dropped one.
+const threadOmissionStub = (maxResponseChars) => (thread, budgetForStub) => makeOmissionStub(thread, budgetForStub, id =>
+    `This thread alone is larger than maxResponseChars (${maxResponseChars}), even after per-message capping. Fetch it directly with get_thread using id: "${id}" and a larger maxResponseChars, a smaller maxMessages, or format: 'metadata'.`);
+
+// Applies the whole-response character budget to a thread's formatted
+// messages array, keeping the latest messages (dropping oldest-first),
+// stamping truncation metadata directly on the thread object, and replacing
+// a still-oversized last message with a bounded stub. Caps against the real
+// serialized size of the whole thread object (not just its messages array),
+// so headers, snippet, and every other field the Gmail API attaches are
+// accounted for too, and reserves room for its own truncation metadata by
+// measuring it rather than guessing a constant.
 const capThreadMessages = (thread, maxResponseChars) => {
     if (!thread.messages) return thread;
-    const budget = capArrayByResponseBudget(thread.messages, maxResponseChars, 'start');
-    thread.messages = budget.items;
-    if (budget.truncated) {
-        thread.responseTruncated = true;
-        thread.totalMessages = budget.totalCount;
-        thread.includedMessages = budget.includedCount;
-        thread.truncationNote = `Showing the latest ${budget.includedCount} of ${budget.totalCount} messages to stay under maxResponseChars (${maxResponseChars}). Use maxMessages, messageIds, format:'metadata', or a smaller maxBodyChars to fetch specific messages, or raise/zero maxResponseChars for the rest.`;
-    }
+    const items = thread.messages;
+    capToResponseBudget(items, maxResponseChars, 'start', messageOmissionStub(maxResponseChars), (capped, truncated, totalCount, includedCount) => {
+        thread.messages = capped;
+        if (truncated) {
+            thread.responseTruncated = true;
+            thread.totalMessages = totalCount;
+            thread.includedMessages = includedCount;
+            thread.truncationNote = `Showing the latest ${includedCount} of ${totalCount} messages to stay under maxResponseChars (${maxResponseChars}). Use maxMessages, messageIds, format:'metadata', or a smaller maxBodyChars to fetch specific messages, or raise/zero maxResponseChars for the rest.`;
+        }
+        return thread;
+    });
     return thread;
 };
 
@@ -99,14 +121,17 @@ export function register(server) {
                         }
                     })
                 );
-                const budget = capArrayByResponseBudget(data.threads, params.maxResponseChars, 'end');
-                data.threads = budget.items;
-                if (budget.truncated) {
-                    data.responseTruncated = true;
-                    data.totalThreads = budget.totalCount;
-                    data.includedThreads = budget.includedCount;
-                    data.truncationNote = `Showing ${budget.includedCount} of ${budget.totalCount} threads fetched this call to stay under maxResponseChars (${params.maxResponseChars}). Use pageToken to continue, a smaller maxResults/maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`;
-                }
+                const threads = data.threads;
+                capToResponseBudget(threads, params.maxResponseChars, 'end', threadOmissionStub(params.maxResponseChars), (capped, truncated, totalCount, includedCount) => {
+                    data.threads = capped;
+                    if (truncated) {
+                        data.responseTruncated = true;
+                        data.totalThreads = totalCount;
+                        data.includedThreads = includedCount;
+                        data.truncationNote = `Showing ${includedCount} of ${totalCount} threads fetched this call to stay under maxResponseChars (${params.maxResponseChars}). Use pageToken to continue, a smaller maxResults/maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`;
+                    }
+                    return data;
+                });
             }
             return JSON.stringify(data);
         },
@@ -146,19 +171,19 @@ export function register(server) {
                     }
                 })
             );
-            const budget = capArrayByResponseBudget(results, params.maxResponseChars, 'end');
-            let output = budget.items;
-            if (budget.truncated) {
-                output = output.slice();
-                const lastIndex = output.length - 1;
-                output[lastIndex] = {
-                    ...output[lastIndex],
+            const output = capToResponseBudget(results, params.maxResponseChars, 'end', threadOmissionStub(params.maxResponseChars), (capped, truncated, totalCount, includedCount) => {
+                if (!truncated) return capped;
+                const withMetadata = capped.slice();
+                const lastIndex = withMetadata.length - 1;
+                withMetadata[lastIndex] = {
+                    ...withMetadata[lastIndex],
                     batchResponseTruncated: true,
-                    totalThreadsRequested: budget.totalCount,
-                    includedThreads: budget.includedCount,
-                    truncationNote: `Only ${budget.includedCount} of ${budget.totalCount} requested threads are included to stay under maxResponseChars (${params.maxResponseChars}). Re-run with fewer ids, a smaller maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`,
+                    totalThreadsRequested: totalCount,
+                    includedThreads: includedCount,
+                    truncationNote: `Only ${includedCount} of ${totalCount} requested threads are included to stay under maxResponseChars (${params.maxResponseChars}). Re-run with fewer ids, a smaller maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`,
                 };
-            }
+                return withMetadata;
+            });
             return JSON.stringify(output);
         },
     });

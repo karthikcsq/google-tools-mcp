@@ -438,14 +438,42 @@ export const formatMessageClean = (message, maxBodyChars = 3000, includeQuoted =
 // per-item caps above. 0 disables it (opt-out, matching maxBodyChars).
 export const DEFAULT_MAX_RESPONSE_CHARS = 100000;
 
+// Produces a bounded stand-in for a single item that is too large to include
+// even alone, within maxChars. Adapts to whatever room is actually available
+// instead of assuming a fixed size: the id is capped to a safe length, and
+// the human-readable reason is truncated to whatever space remains after the
+// id and the required fields. This keeps the stub itself from ever being the
+// thing that blows the budget, down to the floor of the bare skeleton
+// ({"id":"...","responseOmitted":true}), which is the minimum needed to tell
+// the caller anything was omitted at all.
+export const makeOmissionStub = (item, maxChars, describe) => {
+    const id = String(item?.id ?? '').slice(0, 200);
+    const skeleton = { id, responseOmitted: true };
+    const skeletonSize = JSON.stringify(skeleton).length;
+    // Reserve a little extra for the "omittedReason" key, its quotes, and the
+    // comma joining it to the skeleton.
+    const roomForReason = Math.max(0, (maxChars || 0) - skeletonSize - 20);
+    if (roomForReason <= 0) return skeleton;
+    return { ...skeleton, omittedReason: describe(id).slice(0, roomForReason) };
+};
+
 // Drops items from an array (oldest-first via 'start', or lowest-priority-last
-// via 'end') until the serialized array fits within maxChars, always keeping
-// at least one item. Used to bound the aggregate size of a messages array
-// (within one thread) or a threads/results array (across a list/batch call).
-// Re-stringifying on every drop is O(n^2) in item count, which is fine for the
-// message/thread counts these tools realistically return; it keeps the logic
-// exact instead of estimating from average item size.
-export const capArrayByResponseBudget = (items, maxChars, dropFrom = 'start') => {
+// via 'end') until the serialized array fits within maxChars. Used to bound
+// the aggregate size of a messages array (within one thread) or a
+// threads/results array (across a list/batch call). Re-stringifying on every
+// drop is O(n^2) in item count, which is fine for the message/thread counts
+// these tools realistically return; it keeps the logic exact instead of
+// estimating from average item size.
+//
+// A single remaining item, whether because only one was ever given or every
+// other item was dropped, can still exceed maxChars on its own (a full MIME
+// message, oversized headers). Without a makeStub function, that item is kept
+// as-is, unbounded, matching the original behavior for callers that have not
+// opted in. Every production call site in this codebase now passes a
+// makeStub, so the item is replaced with a bounded omission stub instead:
+// shipping it unbounded would defeat the point of the budget, and dropping to
+// zero items would tell the caller nothing about what was cut.
+export const capArrayByResponseBudget = (items, maxChars, dropFrom = 'start', makeStub) => {
     const totalCount = items?.length ?? 0;
     if (!maxChars || maxChars <= 0 || !totalCount) {
         return { items: items || [], truncated: false, totalCount, includedCount: totalCount };
@@ -458,7 +486,48 @@ export const capArrayByResponseBudget = (items, maxChars, dropFrom = 'start') =>
         if (dropFrom === 'start') kept.shift();
         else kept.pop();
     }
+    if (makeStub && kept.length === 1 && JSON.stringify(kept).length > maxChars) {
+        // The stub itself will be measured wrapped in a one-element array
+        // (the "[" and "]" JSON.stringify adds around it), so give the
+        // stub-maker 2 fewer characters than the full budget to work with.
+        kept[0] = makeStub(kept[0], Math.max(0, maxChars - 2));
+    }
     return { items: kept, truncated: true, totalCount, includedCount: kept.length };
+};
+
+// Caps `items` against the real, final serialized size of whatever payload
+// the caller actually returns, not the array in isolation. Truncation
+// metadata (counts, notes) is attached after capping and adds its own bytes;
+// reserving room for it by guessing a fixed constant is fragile, since the
+// note text length and the tool's own attachment shape (top-level fields for
+// get_thread/list_threads, mutating the last element of a bare array for
+// batch_get_threads) both vary. Instead this measures the real payload size
+// on each attempt and shrinks the array's own budget by the exact overshoot,
+// converging on a final payload that fits maxChars including its metadata.
+//
+// attachMetadata(cappedItems, truncated, totalCount, includedCount) must
+// return the exact value the caller will JSON.stringify and return: a full
+// object for get_thread/list_threads, or a full array for batch_get_threads.
+export const capToResponseBudget = (items, maxChars, dropFrom, makeStub, attachMetadata) => {
+    const totalCount = items?.length ?? 0;
+    const untouched = attachMetadata(items || [], false, totalCount, totalCount);
+    if (!maxChars || maxChars <= 0 || !totalCount || JSON.stringify(untouched).length <= maxChars) {
+        return untouched;
+    }
+    let arrayBudget = maxChars;
+    let payload = untouched;
+    // Six attempts is generous headroom: each attempt measures the real
+    // overshoot and shrinks the array's budget by exactly that much, so this
+    // converges in one or two attempts in practice (metadata size only
+    // shifts by a digit or two between attempts) and never loops needlessly.
+    for (let attempt = 0; attempt < 6; attempt++) {
+        const budget = capArrayByResponseBudget(items, arrayBudget, dropFrom, makeStub);
+        payload = attachMetadata(budget.items, true, totalCount, budget.includedCount);
+        const size = JSON.stringify(payload).length;
+        if (size <= maxChars || arrayBudget <= 0) return payload;
+        arrayBudget = Math.max(0, arrayBudget - (size - maxChars));
+    }
+    return payload;
 };
 
 export const formatMessageMetadata = (message) => {
