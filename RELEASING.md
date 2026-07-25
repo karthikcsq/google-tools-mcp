@@ -112,15 +112,27 @@ commit is on `main`.
    git push origin vX.Y.Z
    ```
 
-6. Approve the run. The tag push starts
-   `.github/workflows/publish.yml`, which pauses on the `npm-publish`
-   environment and waits for a required reviewer. Approve it at
+6. Approve the run at
    <https://github.com/karthikcsq/google-tools-mcp/actions>.
 
-Before approving, the workflow has already confirmed the tagged commit is
-reachable from `main` and that the tag matches `package.json`. After approval it
-installs dependencies, runs the test suite, verifies the package tarball, and
-publishes.
+The tag push starts `.github/workflows/publish.yml`, which runs in two jobs:
+
+- **`validate`** is not gated on any environment. It checks that the tagged
+  commit is reachable from `main` and that the tag matches `package.json`. A bad
+  tag fails here, in seconds, without asking anyone to approve anything.
+- **`publish`** runs only if `validate` passed, and is gated on the
+  `npm-publish` environment. This is where the approval request appears, so by
+  the time you see it the tag is already known-good. After approval it installs
+  dependencies, runs the test suite, verifies the package tarball, and
+  publishes.
+
+The split matters because `environment:` applies to an entire job. With the
+checks inside the gated job, GitHub would request approval first and run them
+afterwards, so a reviewer would be approving a tag without knowing whether it
+even pointed at `main`.
+
+`id-token: write` is granted to the `publish` job alone rather than to the
+workflow, so the ungated `validate` job cannot mint the OIDC token npm accepts.
 
 Tagging a commit that is not on `main` fails the run before anything is
 published, so a `v*` tag pushed from a local or unmerged branch cannot reach
