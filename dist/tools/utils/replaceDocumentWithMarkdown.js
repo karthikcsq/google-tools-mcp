@@ -55,18 +55,6 @@ export function register(server) {
             if (!markdown || markdown.length === 0) {
                 throw new UserError('Either markdown or filePath must be provided with non-empty content.');
             }
-            // When inline markdown is given (not filePath), mirror it to the secure
-            // workspace so there is always a local working copy of what was pushed,
-            // matching the file readDocument would have produced. Scoped by tabId so
-            // it lines up with the per-tab file readDocument created.
-            if (!args.filePath) {
-                try {
-                    const workspacePath = await writeWorkspaceFile(args.documentId, markdown, args.tabId);
-                    log.info(`Saved working copy to ${workspacePath}`);
-                } catch (e) {
-                    log.info(`Could not save working copy: ${e.message}`);
-                }
-            }
             log.info(`Replacing doc ${args.documentId} with markdown (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
                 // 1. Get document structure
@@ -181,6 +169,24 @@ export function register(server) {
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
                 trackMutation(args.documentId);
+                // Mirror the pushed markdown to the local workspace only now that the
+                // Docs mutation has actually succeeded and been tracked. Writing this
+                // earlier (before the fetch/delete/cleanup/insert sequence above)
+                // meant that if any of those steps failed, the local file held content
+                // that was never committed to the document; worse, if the delete
+                // succeeded but the insert failed, the workspace file would show the
+                // full intended result while the document itself was left partial.
+                // Scoped by tabId so it lines up with the per-tab file readDocument
+                // created. Non-fatal: a failure to save the mirror doesn't undo an
+                // already-successful Docs write, so we log and continue.
+                if (!args.filePath) {
+                    try {
+                        const workspacePath = await writeWorkspaceFile(args.documentId, markdown, args.tabId);
+                        log.info(`Saved working copy to ${workspacePath}`);
+                    } catch (e) {
+                        log.info(`Could not save working copy: ${e.message}`);
+                    }
+                }
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully replaced document content with ${markdown.length} characters of markdown.\n\n${debugSummary}`;
             }

@@ -8,7 +8,25 @@
 //   - O_NOFOLLOW so a pre-planted symlink at the target path can't be clobbered
 //     (POSIX);
 //   - private permissions (0700 dir / 0600 file) on POSIX.
-import { describe, it, expect, afterEach } from '@jest/globals';
+//
+// Sandboxing: every test in the 'writeWorkspaceFile' describe block below
+// actually writes to (and, in the symlink tests, deletes/replaces) whatever
+// directory getWorkspaceDir() resolves to. getWorkspaceDir() normally returns
+// the REAL per-user production directory that readDocument/
+// replaceDocumentWithMarkdown use to hold live working copies of a user's
+// Google Docs. Running these tests against that real path -- and recursively
+// deleting it in cleanup, as this suite used to -- can destroy a user's saved
+// working copies, and colliding on one shared path also isn't safe across
+// parallel Jest workers.
+//
+// GOOGLE_TOOLS_MCP_WORKSPACE_DIR (see dist/workspace.js) overrides the
+// resolved directory. Every test that writes anything sets it (directly or
+// via the describe-level beforeAll/afterAll below) to a directory obtained
+// from fs.mkdtemp() -- a fresh, collision-proof sandbox -- and restores the
+// previous value afterward. No test in this file ever removes the real
+// production path; the only directories ever deleted here are ones this file
+// itself created via mkdtemp.
+import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -35,14 +53,10 @@ async function canSymlink() {
     }
 }
 
-const created = [];
-afterEach(async () => {
-    for (const p of created.splice(0)) {
-        await fs.rm(p, { recursive: true, force: true }).catch(() => {});
-    }
-});
-
-describe('workspace path scoping', () => {
+describe('workspace path scoping (default, unoverridden directory)', () => {
+    // No override active here: this block never writes to disk, it only
+    // inspects the path strings getWorkspaceDir()/getWorkspacePath() produce,
+    // so it is safe to run against the real default resolution.
     it('base dir is under the OS temp dir and scoped per-user', () => {
         const dir = getWorkspaceDir();
         expect(dir.startsWith(os.tmpdir())).toBe(true);
@@ -77,8 +91,30 @@ describe('workspace path scoping', () => {
 });
 
 describe('writeWorkspaceFile', () => {
+    let sandboxDir;
+    let previousEnvValue;
+
+    beforeAll(async () => {
+        previousEnvValue = process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+        // A dedicated sandbox for this describe block only. Never the
+        // production path, and unique per test run so parallel Jest workers
+        // (and parallel CI runs) can never collide on it.
+        sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gtm-workspace-test-'));
+        process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = sandboxDir;
+    });
+
+    afterAll(async () => {
+        if (previousEnvValue === undefined) {
+            delete process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+        } else {
+            process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = previousEnvValue;
+        }
+        // Safe: sandboxDir is a directory this file created with mkdtemp, never
+        // the real per-user production workspace.
+        await fs.rm(sandboxDir, { recursive: true, force: true });
+    });
+
     it('writes content and returns a readable path', async () => {
-        created.push(getWorkspaceDir());
         const id = `doc-${uid()}`;
         const p = await writeWorkspaceFile(id, 'hello content');
         expect(p).toBe(getWorkspacePath(id));
@@ -86,7 +122,6 @@ describe('writeWorkspaceFile', () => {
     });
 
     it('overwrites (truncates) an existing file', async () => {
-        created.push(getWorkspaceDir());
         const id = `doc-${uid()}`;
         await writeWorkspaceFile(id, 'a much longer first version');
         const p = await writeWorkspaceFile(id, 'short');
@@ -94,7 +129,6 @@ describe('writeWorkspaceFile', () => {
     });
 
     it('keeps tab writes separate on disk', async () => {
-        created.push(getWorkspaceDir());
         const id = `doc-${uid()}`;
         await writeWorkspaceFile(id, 'tab one body', 'tab-1');
         await writeWorkspaceFile(id, 'tab two body', 'tab-2');
@@ -103,7 +137,6 @@ describe('writeWorkspaceFile', () => {
     });
 
     (isWin ? it.skip : it)('creates a 0700 base dir and 0600 file (POSIX)', async () => {
-        created.push(getWorkspaceDir());
         const id = `doc-${uid()}`;
         const p = await writeWorkspaceFile(id, 'secret');
         const dirStat = await fs.stat(getWorkspaceDir());
@@ -116,29 +149,50 @@ describe('writeWorkspaceFile', () => {
         if (!(await canSymlink())) {
             return; // environment can't create symlinks; skip
         }
-        const dir = getWorkspaceDir();
+        // This test needs to delete-and-replace the base directory itself, so
+        // it uses its OWN fresh, never-before-existing path for the duration
+        // of the test rather than touching the shared sandboxDir (which other
+        // tests in this file rely on staying a real directory). The override
+        // is restored to sandboxDir in `finally`.
+        const priorOverride = process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+        const testDir = path.join(os.tmpdir(), `gtm-symlink-basedir-${uid()}`);
         const decoy = path.join(os.tmpdir(), `gtm-decoy-${uid()}`);
-        created.push(dir, decoy);
-        await fs.rm(dir, { recursive: true, force: true });
-        await fs.mkdir(decoy, { recursive: true });
-        await fs.symlink(decoy, dir, 'dir');
-        await expect(writeWorkspaceFile(`doc-${uid()}`, 'data')).rejects.toThrow(/symlink|not a regular directory/i);
+        process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = testDir;
+        try {
+            await fs.mkdir(decoy, { recursive: true });
+            await fs.symlink(decoy, testDir, 'dir');
+            await expect(writeWorkspaceFile(`doc-${uid()}`, 'data')).rejects.toThrow(/symlink|not a regular directory/i);
+        } finally {
+            process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = priorOverride;
+            // testDir/decoy are paths this test invented via uid() and never
+            // existed before this test created them -- safe to remove.
+            await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+            await fs.rm(decoy, { recursive: true, force: true }).catch(() => {});
+        }
     });
 
     (isWin ? it.skip : it)('does not follow a pre-planted symlink at the target path (POSIX)', async () => {
         if (!(await canSymlink())) {
             return;
         }
-        created.push(getWorkspaceDir());
         const id = `doc-${uid()}`;
         const victim = path.join(os.tmpdir(), `gtm-victim-${uid()}.txt`);
-        created.push(victim);
-        await fs.mkdir(getWorkspaceDir(), { recursive: true, mode: 0o700 });
+        const linkPath = getWorkspacePath(id);
         await fs.writeFile(victim, 'ORIGINAL VICTIM CONTENT');
-        // Plant a symlink at the exact path writeWorkspaceFile will target.
-        await fs.symlink(victim, getWorkspacePath(id));
-        await expect(writeWorkspaceFile(id, 'attacker-redirected data')).rejects.toThrow();
-        // Victim file must be untouched.
-        expect(await fs.readFile(victim, 'utf-8')).toBe('ORIGINAL VICTIM CONTENT');
+        // Plant a symlink at the exact path writeWorkspaceFile will target,
+        // inside the shared sandbox dir (which ensureSafeBaseDir() will have
+        // already created as a real directory by earlier tests in this block).
+        await fs.mkdir(getWorkspaceDir(), { recursive: true, mode: 0o700 });
+        await fs.symlink(victim, linkPath);
+        try {
+            await expect(writeWorkspaceFile(id, 'attacker-redirected data')).rejects.toThrow();
+            // Victim file must be untouched.
+            expect(await fs.readFile(victim, 'utf-8')).toBe('ORIGINAL VICTIM CONTENT');
+        } finally {
+            // Clean up only the specific symlink and victim file this test
+            // created -- never the shared sandbox directory itself.
+            await fs.rm(linkPath, { force: true }).catch(() => {});
+            await fs.rm(victim, { force: true }).catch(() => {});
+        }
     });
 });
