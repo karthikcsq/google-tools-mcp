@@ -194,9 +194,9 @@ describe('manageGmailSettings resource/action validation (issue #31)', () => {
         const server = createMockServer();
         registerSettings(server);
         const mgs = server.getTools().get('manageGmailSettings');
-        await expect(mgs.execute({ resource: 'sendAs', action: 'verify' })).rejects.toThrow(/requires payload field\(s\): sendAsEmail/);
+        await expect(mgs.execute({ resource: 'sendAs', action: 'verify' })).rejects.toThrow(/payload validation failed.*sendAsEmail: Required/);
         await expect(mgs.execute({ resource: 'delegate', action: 'create', payload: {} })).rejects.toThrow(/delegateEmail/);
-        await expect(mgs.execute({ resource: 'imap', action: 'update' })).rejects.toThrow(/requires payload field\(s\): enabled/);
+        await expect(mgs.execute({ resource: 'imap', action: 'update' })).rejects.toThrow(/payload validation failed.*enabled: Required/);
         expect(calls).toHaveLength(0);
     });
 
@@ -206,10 +206,10 @@ describe('manageGmailSettings resource/action validation (issue #31)', () => {
         const mgs = server.getTools().get('manageGmailSettings');
         // maxFolderSize alone is not enough — the original update_imap schema required `enabled`.
         await expect(mgs.execute({ resource: 'imap', action: 'update', payload: { maxFolderSize: 500 } }))
-            .rejects.toThrow(/requires payload field\(s\): enabled/);
+            .rejects.toThrow(/payload validation failed.*enabled: Required/);
         // autoForwarding update requires all three of enabled, emailAddress, disposition.
         await expect(mgs.execute({ resource: 'autoForwarding', action: 'update', payload: { enabled: true } }))
-            .rejects.toThrow(/emailAddress, disposition/);
+            .rejects.toThrow(/emailAddress: Required.*disposition: Required/);
         expect(calls).toHaveLength(0);
     });
 
@@ -281,5 +281,99 @@ describe('API-call fidelity for non-trivial reshapes', () => {
             sendAsEmail: 'alias@b.com',
             requestBody: { sendAsEmail: 'alias@b.com', encryptedKeyPassword: 'pw', pkcs12: 'base64data' },
         });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// manageGmailSettings payload TYPE/ENUM validation (regression: z.record(z.any())
+// previously accepted any shape, so malformed values like a string boolean or an
+// invalid enum reached the Gmail API instead of being rejected up front).
+// ---------------------------------------------------------------------------
+describe('manageGmailSettings rejects mistyped/invalid-enum payload values', () => {
+    it('execute() rejects a string where a boolean is required', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        await expect(
+            mgs.execute({ resource: 'imap', action: 'update', payload: { enabled: 'false' } })
+        ).rejects.toThrow(/enabled: Expected boolean, received string/);
+        expect(calls).toHaveLength(0);
+    });
+
+    it('execute() rejects an invalid enum value for disposition', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        await expect(
+            mgs.execute({
+                resource: 'autoForwarding',
+                action: 'update',
+                payload: { enabled: true, emailAddress: 'a@b.com', disposition: 'shredIt' },
+            })
+        ).rejects.toThrow(/disposition.*Invalid enum value/);
+        expect(calls).toHaveLength(0);
+    });
+
+    it('execute() rejects a non-number maxFolderSize', async () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        await expect(
+            mgs.execute({ resource: 'imap', action: 'update', payload: { enabled: true, maxFolderSize: 'lots' } })
+        ).rejects.toThrow(/maxFolderSize: Expected number, received string/);
+        expect(calls).toHaveLength(0);
+    });
+
+    // The regression specifically bypassed validation at the *schema* boundary,
+    // not just inside execute(): calling `parameters.parse(...)` (what fastmcp
+    // itself does with the arguments before ever reaching execute) must also
+    // reject bad resource/action combos and bad payload shapes on its own.
+    it('parameters.parse() rejects an invalid resource/action combo directly', () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        expect(() => mgs.parameters.parse({ resource: 'imap', action: 'create' })).toThrow(/Invalid resource\/action combination/);
+    });
+
+    it('parameters.parse() rejects an unknown resource/action enum value', () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        expect(() => mgs.parameters.parse({ resource: 'bogus', action: 'get' })).toThrow();
+        expect(() => mgs.parameters.parse({ resource: 'imap', action: 'nuke' })).toThrow();
+    });
+
+    it('parameters.parse() rejects a mistyped payload field before execute() is ever called', () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        expect(() =>
+            mgs.parameters.parse({ resource: 'imap', action: 'update', payload: { enabled: 'false' } })
+        ).toThrow(/payload[\s\S]*enabled/);
+    });
+
+    it('parameters.parse() rejects an invalid enum value inside payload', () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        expect(() =>
+            mgs.parameters.parse({
+                resource: 'pop',
+                action: 'update',
+                payload: { accessWindow: 'everything', disposition: 'archive' },
+            })
+        ).toThrow(/payload[\s\S]*accessWindow/);
+    });
+
+    it('parameters.parse() accepts a valid, fully-typed payload', () => {
+        const server = createMockServer();
+        registerSettings(server);
+        const mgs = server.getTools().get('manageGmailSettings');
+        const parsed = mgs.parameters.parse({
+            resource: 'imap',
+            action: 'update',
+            payload: { enabled: true, expungeBehavior: 'archive', maxFolderSize: 1000 },
+        });
+        expect(parsed.payload).toEqual({ enabled: true, expungeBehavior: 'archive', maxFolderSize: 1000 });
     });
 });

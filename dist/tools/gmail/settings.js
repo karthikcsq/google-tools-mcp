@@ -66,27 +66,113 @@ function validCombosText() {
         .join('\n');
 }
 
-// Required payload fields per resource/action. Mirrors the non-optional fields
-// of the former granular Zod schemas (identifiers AND request-body fields), so
-// callers get a clean validation error up front instead of an opaque Google API
-// error when a required field is missing. Optional fields are intentionally
-// absent. Booleans that are legitimately `false` (e.g. imap.enabled=false) pass.
-const REQUIRED_PAYLOAD_KEYS = {
-    imap: { update: ['enabled'] },
-    pop: { update: ['accessWindow', 'disposition'] },
-    vacation: { update: ['enableAutoReply', 'responseBodyPlainText'] },
-    language: { update: ['displayLanguage'] },
-    autoForwarding: { update: ['enabled', 'emailAddress', 'disposition'] },
-    forwardingAddress: { get: ['forwardingEmail'], create: ['forwardingEmail'], delete: ['forwardingEmail'] },
-    delegate: { get: ['delegateEmail'], create: ['delegateEmail'], delete: ['delegateEmail'] },
-    sendAs: { get: ['sendAsEmail'], create: ['sendAsEmail'], patch: ['sendAsEmail'], update: ['sendAsEmail'], delete: ['sendAsEmail'], verify: ['sendAsEmail'] },
+// Per-operation Zod payload schemas — mirror the exact fields (names, types,
+// enums, and required-ness) of the former granular tools' request schemas, so
+// a malformed payload (wrong type, invalid enum, missing required field) is
+// rejected before it ever reaches the Gmail API instead of only being checked
+// for key *presence*. Actions with no entry here (every "get"/"list" that
+// takes no identifier) take no payload.
+const sendAsProfileFields = {
+    displayName: z.string().optional().describe("Name for the 'From:' header"),
+    replyToAddress: z.string().optional().describe("Email for 'Reply-To:' header"),
+    signature: z.string().optional().describe('Optional HTML signature'),
+    isPrimary: z.boolean().optional().describe('Whether this is the primary address'),
+    treatAsAlias: z.boolean().optional().describe('Whether Gmail treats this as an alias'),
+};
+const PAYLOAD_SCHEMAS = {
+    imap: {
+        update: z.object({
+            enabled: z.boolean(),
+            expungeBehavior: z.enum(['archive', 'trash', 'deleteForever']).optional(),
+            maxFolderSize: z.number().optional(),
+        }),
+    },
+    pop: {
+        update: z.object({
+            accessWindow: z.enum(['disabled', 'allMail', 'fromNowOn']),
+            disposition: z.enum(['archive', 'trash', 'leaveInInbox']),
+        }),
+    },
+    vacation: {
+        update: z.object({
+            enableAutoReply: z.boolean(),
+            responseSubject: z.string().optional(),
+            responseBodyPlainText: z.string(),
+            restrictToContacts: z.boolean().optional(),
+            restrictToDomain: z.boolean().optional(),
+            startTime: z.string().optional(),
+            endTime: z.string().optional(),
+        }),
+    },
+    language: {
+        update: z.object({ displayLanguage: z.string() }),
+    },
+    autoForwarding: {
+        update: z.object({
+            enabled: z.boolean(),
+            emailAddress: z.string(),
+            disposition: z.enum(['leaveInInbox', 'archive', 'trash', 'markRead']),
+        }),
+    },
+    forwardingAddress: {
+        get: z.object({ forwardingEmail: z.string() }),
+        create: z.object({ forwardingEmail: z.string() }),
+        delete: z.object({ forwardingEmail: z.string() }),
+    },
+    delegate: {
+        get: z.object({ delegateEmail: z.string() }),
+        create: z.object({ delegateEmail: z.string() }),
+        delete: z.object({ delegateEmail: z.string() }),
+    },
+    sendAs: {
+        get: z.object({ sendAsEmail: z.string() }),
+        delete: z.object({ sendAsEmail: z.string() }),
+        verify: z.object({ sendAsEmail: z.string() }),
+        create: z.object({ sendAsEmail: z.string(), ...sendAsProfileFields }),
+        patch: z.object({ sendAsEmail: z.string(), ...sendAsProfileFields }),
+        update: z.object({ sendAsEmail: z.string(), ...sendAsProfileFields }),
+    },
 };
 
-function requirePayloadKeys(resource, action, payload) {
-    const keys = REQUIRED_PAYLOAD_KEYS[resource]?.[action] || [];
-    const missing = keys.filter((key) => payload[key] === undefined || payload[key] === '');
-    if (missing.length) {
-        throw new UserError(`resource="${resource}" action="${action}" requires payload field(s): ${missing.join(', ')}.`);
+function formatZodIssues(issues) {
+    return issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
+}
+
+// Validates+parses payload against the per-resource/action schema above.
+// Returns the typed payload on success; throws a UserError naming every
+// failing field on failure. Actions with no schema entry take no payload.
+function parsePayload(resource, action, payload) {
+    const schema = PAYLOAD_SCHEMAS[resource]?.[action];
+    if (!schema) return payload ?? {};
+    const result = schema.safeParse(payload ?? {});
+    if (!result.success) {
+        throw new UserError(
+            `resource="${resource}" action="${action}" payload validation failed: ${formatZodIssues(result.error.issues)}`
+        );
+    }
+    return result.data;
+}
+
+// Mirrors parsePayload's checks as Zod issues (rather than a thrown UserError)
+// so they surface directly from parameters.parse()/safeParse(), not only from
+// execute(). This is what restores the enum/type guidance a caller building
+// the raw MCP request sees, on top of the runtime check in execute() below.
+function addPayloadIssues(resource, action, payload, ctx) {
+    const resourceOps = SETTINGS_OPS[resource];
+    if (!resourceOps || !resourceOps[action]) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Invalid resource/action combination: resource="${resource}" action="${action}".\nValid combinations:\n${validCombosText()}`,
+        });
+        return;
+    }
+    const schema = PAYLOAD_SCHEMAS[resource]?.[action];
+    if (!schema) return;
+    const result = schema.safeParse(payload ?? {});
+    if (!result.success) {
+        for (const issue of result.error.issues) {
+            ctx.addIssue({ ...issue, path: ['payload', ...issue.path] });
+        }
     }
 }
 
@@ -110,9 +196,9 @@ export function register(server) {
                 .describe('The settings resource to operate on'),
             action: z.enum(['get', 'update', 'list', 'create', 'delete', 'patch', 'verify'])
                 .describe('The operation to perform (must be valid for the chosen resource)'),
-            payload: z.record(z.any()).optional()
+            payload: z.record(z.string(), z.unknown()).optional()
                 .describe('Resource/action-specific fields (request body or identifier). See the description for valid keys per resource.'),
-        }),
+        }).superRefine((data, ctx) => addPayloadIssues(data.resource, data.action, data.payload, ctx)),
         execute: async ({ resource, action, payload = {} }) => {
             const resourceOps = SETTINGS_OPS[resource];
             const handler = resourceOps && resourceOps[action];
@@ -122,9 +208,9 @@ export function register(server) {
                     `Valid combinations:\n${validCombosText()}`
                 );
             }
-            requirePayloadKeys(resource, action, payload);
+            const parsedPayload = parsePayload(resource, action, payload);
             const gmail = await getGmailClient();
-            const { data } = await handler(gmail, payload);
+            const { data } = await handler(gmail, parsedPayload);
             return JSON.stringify(data || { success: true });
         },
     });
