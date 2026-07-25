@@ -92,6 +92,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
     const overallStart = performance.now();
     const startIndex = options?.startIndex ?? 1;
     const tabId = options?.tabId;
+    const writeControl = options?.writeControl;
     // Fetch the document's default text style so we can explicitly set
     // foreground color on inserted text (fixes issue #14 — text without
     // explicit color shows "no color selected" in the Docs color picker).
@@ -143,7 +144,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
             totalElapsedMs: Math.round(performance.now() - overallStart),
         };
     }
-    const batchUpdate = await executeBatchUpdateWithSplitting(docs, documentId, requests);
+    const batchUpdate = await executeBatchUpdateWithSplitting(docs, documentId, requests, undefined, writeControl);
     return {
         warnings,
         totalRequests: requests.length,

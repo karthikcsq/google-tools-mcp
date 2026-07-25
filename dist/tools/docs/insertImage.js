@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient, getDriveClient, getScriptClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { getLastReadRevisionId, requireRereadBeforeMutation, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'insertImage',
@@ -75,7 +76,17 @@ export function register(server) {
                     const driveFileId = await GDocsHelpers.uploadImageToDrive(drive, args.localImagePath, parentFolderId, true // skipPublicSharing
                     );
                     log.info(`[AppsScript] Inserting image via marker at index ${args.index} (fileId: ${driveFileId})`);
-                    await GDocsHelpers.insertImageViaAppsScript(docs, scriptClient, appsScriptDeploymentId, args.documentId, driveFileId, args.index, args.tabId);
+                    const appsScriptRevisionId = getLastReadRevisionId(args.documentId);
+                    await GDocsHelpers.insertImageViaAppsScript(docs, scriptClient, appsScriptDeploymentId, args.documentId, driveFileId, args.index, args.tabId, appsScriptRevisionId ? { requiredRevisionId: appsScriptRevisionId } : undefined);
+                    // The Apps Script call that replaces the marker with the image mutates
+                    // the document outside our batchUpdate visibility, so we have no way to
+                    // learn the true post-write revision here. trackMutation would clear the
+                    // revision and the modifiedTime, which leaves the next write with nothing
+                    // to check against and sends it out unguarded on a pre-image baseline.
+                    // Require a fresh read instead.
+                    log.warn(`Document ${args.documentId} must be read again before the next write ` +
+                        '(the Apps Script mutates the doc outside batchUpdate visibility, so no true post-write revision is available).');
+                    requireRereadBeforeMutation(args.documentId, 'an Apps Script inserted an image and its resulting revision is not visible to us.');
                     const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                     return `${docUrl}\nSuccessfully inserted local image at index ${args.index} via Apps Script${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
                 }
@@ -105,7 +116,9 @@ export function register(server) {
                     resolvedUrl = args.imageUrl;
                     log.info(`Inserting image from URL ${resolvedUrl} at index ${args.index} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 }
-                await GDocsHelpers.insertInlineImage(docs, args.documentId, resolvedUrl, args.index, args.width, args.height, args.tabId);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                const writeResponse = await GDocsHelpers.insertInlineImage(docs, args.documentId, resolvedUrl, args.index, args.width, args.height, args.tabId, revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 let sizeInfo = '';
                 if (args.width && args.height) {
                     sizeInfo = ` with size ${args.width}x${args.height}pt`;

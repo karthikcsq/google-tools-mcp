@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'renameTab',
@@ -28,22 +29,19 @@ export function register(server) {
                     throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
                 }
                 const oldTitle = targetTab.tabProperties?.title || '(untitled)';
-                await docs.documents.batchUpdate({
-                    documentId: args.documentId,
-                    requestBody: {
-                        requests: [
-                            {
-                                updateDocumentTabProperties: {
-                                    tabProperties: {
-                                        tabId: args.tabId,
-                                        title: args.newTitle,
-                                    },
-                                    fields: 'title',
-                                },
+                const revisionId = getLastReadRevisionId(args.documentId);
+                const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                    {
+                        updateDocumentTabProperties: {
+                            tabProperties: {
+                                tabId: args.tabId,
+                                title: args.newTitle,
                             },
-                        ],
+                            fields: 'title',
+                        },
                     },
-                });
+                ], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, response?.writeControl?.requiredRevisionId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully renamed tab from "${oldTitle}" to "${args.newTitle}".`;
             }

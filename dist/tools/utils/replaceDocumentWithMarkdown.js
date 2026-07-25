@@ -5,7 +5,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 import { writeWorkspaceFile } from '../../workspace.js';
 export function register(server) {
     server.addTool({
@@ -40,7 +40,11 @@ export function register(server) {
             await guardMutation(args.documentId, {
                 contentFetcher: async () => {
                     const current = await docs.documents.get({ documentId: args.documentId });
-                    return docsJsonToMarkdown(current.data);
+                    // Return the revision this content came from alongside the
+                    // content itself so guardMutation can refresh both together
+                    // instead of leaving revisionId stale after a diff (see
+                    // readTracker.js guardMutation for why that matters).
+                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
                 },
             });
             // Resolve markdown content from filePath or inline parameter
@@ -58,6 +62,14 @@ export function register(server) {
             }
             log.info(`Replacing doc ${args.documentId} with markdown (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
+                const revisionId = getLastReadRevisionId(args.documentId);
+                // Optimistic-concurrency guard. The first write carries the revision
+                // from our last read; each subsequent write advances to the revision the
+                // previous write produced (returned by batchUpdate). This keeps every
+                // write in the operation (delete → cleanup → insert) guarded against
+                // concurrent edits instead of dropping the guard after the first write
+                // (PR #42 review).
+                const writeControlChain = GDocsHelpers.createWriteControlChain(revisionId);
                 // 1. Get document structure
                 const doc = await docs.documents.get({
                     documentId: args.documentId,
@@ -100,11 +112,12 @@ export function register(server) {
                         deleteRange.tabId = args.tabId;
                     }
                     log.info(`Deleting content from index ${startIndex} to ${endIndex}`);
-                    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                    const deleteResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
                         {
                             deleteContentRange: { range: deleteRange },
                         },
-                    ]);
+                    ], writeControlChain.current);
+                    writeControlChain.advance(deleteResult);
                     log.info(`Delete complete.`);
                 }
                 // 4. Clean the surviving trailing paragraph.
@@ -152,11 +165,29 @@ export function register(server) {
                             },
                         },
                     ];
+                    // This cleanup is the operation's first write when the delete step
+                    // was skipped (empty document), so it must carry the current guard —
+                    // otherwise it bumps the revision and the insert below fails with a
+                    // spurious conflict against the revision from the read. Peek (don't
+                    // advance yet): the cleanup is best-effort, and only a SUCCESSFUL
+                    // cleanup changes the revision.
+                    const cleanupWriteControl = writeControlChain.current;
                     try {
-                        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests);
+                        const cleanupResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests, cleanupWriteControl);
+                        // Advance only after success, so the insert requires the revision
+                        // the cleanup produced.
+                        writeControlChain.advance(cleanupResult);
                         log.info(`Cleaned surviving paragraph (bullets + text style) at range ${startIndex}-${survivorEnd}`);
                     }
                     catch (e) {
+                        // A revision conflict is a genuine concurrent edit — surface it
+                        // instead of proceeding to clobber the document unguarded.
+                        if (cleanupWriteControl && e instanceof UserError && /changed since you last read/i.test(e.message)) {
+                            throw e;
+                        }
+                        // Non-conflict failure: the cleanup did not modify the document,
+                        // so the revision is unchanged and writeControlChain.current still
+                        // guards the insert below (we deliberately did NOT advance it).
                         log.info(`Survivor cleanup skipped: ${e.message}`);
                     }
                 }
@@ -166,10 +197,18 @@ export function register(server) {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
+                    // Carries the current guard; insertMarkdown chains it across its own
+                    // split batches so the whole insert stays guarded.
+                    writeControl: writeControlChain.current,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
-                trackMutation(args.documentId);
+                // insertMarkdown chains the guard across its own internal split batches
+                // and returns the final revision as batchUpdate.finalWriteControl; fold
+                // that into our chain so trackMutation re-arms the guard against the
+                // TRUE post-write revision instead of the pre-insert (delete/cleanup) one.
+                writeControlChain.advance({ writeControl: result.batchUpdate?.finalWriteControl });
+                trackMutation(args.documentId, writeControlChain.current?.requiredRevisionId);
                 // Mirror the pushed markdown to the local workspace only now that the
                 // Docs mutation has actually succeeded and been tracked. Writing this
                 // earlier (before the fetch/delete/cleanup/insert sequence above)
