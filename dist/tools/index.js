@@ -13,6 +13,7 @@ import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js
 import { logger } from '../logger.js';
 import { runWithSession } from '../sessionContext.js';
 import { google } from 'googleapis';
+import { registerLegacyAliases } from './legacyAliases.js';
 
 const execAsync = promisify(exec);
 
@@ -192,6 +193,12 @@ const CATEGORIES = {
             registerTasksTools(server);
         },
     },
+    maps: {
+        async loader(server) {
+            const { registerMapsTools } = await import('./maps/index.js');
+            registerMapsTools(server);
+        },
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -201,11 +208,34 @@ export async function registerAllTools(server) {
     // Wrap server so every tool auto-retries on invalid_grant (expired refresh token)
     const wrappedServer = wrapServerWithAuthRetry(server);
 
+    // Capture each registered tool so the legacy alias layer can look up the
+    // new tools' implementations to forward to. We snapshot a shallow copy of
+    // toolDef *before* handing it to wrappedAddTool: wrapServerWithAuthRetry
+    // mutates toolDef.execute in place to add the auth-retry wrapper, and since
+    // registeredTools would otherwise hold a reference to that same (mutated)
+    // object, aliases would forward to an already-retry-wrapped execute. Then,
+    // because each alias is itself registered through this same addTool (which
+    // gets retry-wrapped again), a persistent invalid_grant would invoke the
+    // real handler up to 4x and reauthorize repeatedly instead of the
+    // documented single retry. The snapshot keeps the map pointing at the raw,
+    // unwrapped implementation so the outer (alias-level) wrapper is the only
+    // retry layer applied.
+    const registeredTools = new Map();
+    const wrappedAddTool = wrappedServer.addTool.bind(wrappedServer);
+    wrappedServer.addTool = function (toolDef) {
+        registeredTools.set(toolDef.name, { ...toolDef });
+        return wrappedAddTool(toolDef);
+    };
+
     // Load every category
     for (const [name, { loader }] of Object.entries(CATEGORIES)) {
         await loader(wrappedServer);
     }
     logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories at startup.`);
+
+    // Register backward-compatible snake_case aliases for the renamed/consolidated
+    // tools. Opt-in: set GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true to register them.
+    registerLegacyAliases(wrappedServer, registeredTools);
 
     // --- Help tool (always available) ---
     server.addTool({

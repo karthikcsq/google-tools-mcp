@@ -2,7 +2,7 @@
 
 The **easiest way** to connect your AI agent to Google Workspace.
 
-**153 tools** for Drive, Docs, Sheets, Gmail, Calendar, and Forms — all in one package. One install, one auth, and you're done.
+**159 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, and Maps — all in one package. One install, one auth, and you're done.
 
 ```bash
 npx -y google-tools-mcp setup
@@ -14,7 +14,7 @@ npx -y google-tools-mcp setup
 - **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, and Forms. No juggling multiple tokens or servers.
 - **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
 - **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
-- **153 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms — it's all there.
+- **159 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms, search places — it's all there.
 - **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
 - **No telemetry. No tracking. Fully open source.**
 
@@ -239,6 +239,51 @@ Set the `GOOGLE_MCP_PROFILE` env var to use separate tokens per profile:
 
 This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default directory.
 
+## Development / Contributing
+
+`dist/` is the hand-edited source for this repository. It contains plain JavaScript; there is no TypeScript, bundler, or build step.
+
+A few files under `dist/` still carry a leftover header comment naming a `src/*.ts` path (for example, `dist/types.js` starts with `// src/types.ts`) from before this repo was forked. No such source file exists here; treat the comment as stale and edit the `.js` file directly.
+
+Run the server directly from a clone:
+
+```bash
+npm install
+npm start
+# Equivalent: node dist/index.js
+```
+
+To make an MCP client run the clone instead of the published package, use an absolute path in its configuration. Pin `command` to the absolute Node executable too, not a bare `node`: desktop and GUI MCP clients often launch with a minimal PATH that doesn't include `node` (this is especially common with nvm, volta, or fnm), even when `node` resolves fine in your own shell. Confirming `node` works in a terminal doesn't prove what the GUI client's process can resolve, since it may not inherit your shell's PATH at all, so hand it the resolved path directly. Get that path with:
+
+```bash
+node -p "process.execPath"
+```
+
+Then use that output as `command`:
+
+```json
+{
+  "mcpServers": {
+    "google": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/google-tools-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+On Windows, write both paths with forward slashes (`C:/Users/you/google-tools-mcp/dist/index.js`) or escape backslashes (`C:\\Users\\...`) — a bare `C:\Users\...` is invalid JSON.
+
+Alternatively, link the clone into npm's global executable directory, then configure the client with `"command": "google-tools-mcp"`. This has the same bare-command risk described above: a GUI client's PATH doesn't have to match your shell's, so after linking, resolve the absolute path once with `command -v google-tools-mcp` (macOS/Linux) or `where google-tools-mcp` (Windows) and put that path in `command` instead of the bare name.
+
+```bash
+cd /absolute/path/to/google-tools-mcp
+npm install
+npm link
+```
+
+Watch for source/runtime drift: editing a clone has no effect while the MCP client still launches `npx google-tools-mcp` or a separately installed global copy. Check the client's configured command and arguments, then use `command -v google-tools-mcp` (macOS/Linux) or `where google-tools-mcp` (Windows) to see which executable is selected. Restart the MCP client after changing its configuration or relinking.
+
 ## Tool Categories
 
 ### `files` (18 tools)
@@ -256,35 +301,52 @@ Google Sheets operations.
 
 `readSpreadsheet`, `writeSpreadsheet`, `batchWrite`, `appendRows`, `clearRange`, `createSpreadsheet`, `getSpreadsheetInfo`, `addSheet`, `deleteSheet`, `duplicateSheet`, `renameSheet`, `formatCells`, `readCellFormat`, `autoResizeColumns`, `freezeRowsAndColumns`, `setColumnWidths`, `addConditionalFormatting`, `copyFormatting`, `setDropdownValidation`, `createTable`, `deleteTable`, `getTable`, `listTables`, `appendTableRows`, `updateTableRange`, `insertChart`, `deleteChart`, `groupRows`, `ungroupAllRows`
 
-### `email` (19 tools)
-Gmail messages and drafts.
+### `email` (16 tools)
+Gmail messages and drafts (hot-path tools stay granular).
 
-`send_message`, `reply_message`, `forward_message`, `get_message`, `list_messages`, `modify_message`, `delete_message`, `trash_message`, `untrash_message`, `batch_delete_messages`, `batch_modify_messages`, `batch_get_messages`, `get_attachment`, `create_draft`, `update_draft`, `delete_draft`, `get_draft`, `list_drafts`, `send_draft`
+`sendMessage`, `replyMessage`, `forwardMessage`, `getMessage`, `listMessages`, `modifyMessage`, `deleteMessage`, `trashMessage`, `batchGetMessages`, `getAttachment`, `createDraft`, `updateDraft`, `deleteDraft`, `getDraft`, `listDrafts`, `sendDraft`
 
-### `email_threads` (7 tools)
+### `email_threads` (6 tools)
 Gmail thread-level operations.
 
-`get_thread`, `list_threads`, `batch_get_threads`, `modify_thread`, `delete_thread`, `trash_thread`, `untrash_thread`
+`getThread`, `listThreads`, `batchGetThreads`, `modifyThread`, `deleteThread`, `trashThread`
 
-### `email_labels` (6 tools)
-Gmail label management.
+### `email_labels` (1 tool)
+Gmail label management, consolidated into one dispatch tool.
 
-`create_label`, `delete_label`, `get_label`, `list_labels`, `patch_label`, `update_label`
+`manageLabel` (action: `create` | `patch` | `delete` | `get` | `list`)
 
-### `email_settings` (37 tools)
-Gmail admin and configuration.
+### `email_settings` (6 tools)
+Gmail admin and configuration, consolidated into dispatch tools.
 
-`get_auto_forwarding`, `update_auto_forwarding`, `get_imap`, `update_imap`, `get_language`, `update_language`, `get_pop`, `update_pop`, `get_vacation`, `update_vacation`, `add_delegate`, `remove_delegate`, `get_delegate`, `list_delegates`, `create_filter`, `delete_filter`, `get_filter`, `list_filters`, `create_forwarding_address`, `delete_forwarding_address`, `get_forwarding_address`, `list_forwarding_addresses`, `create_send_as`, `delete_send_as`, `get_send_as`, `list_send_as`, `patch_send_as`, `update_send_as`, `verify_send_as`, `delete_smime_info`, `get_smime_info`, `insert_smime_info`, `list_smime_info`, `set_default_smime_info`, `get_profile`, `watch_mailbox`, `stop_mail_watch`
+`manageGmailSettings` (resource: `imap` | `pop` | `vacation` | `language` | `autoForwarding` | `forwardingAddress` | `delegate` | `sendAs`), `manageSmime`, `manageFilter`, `getProfile`, `watchMailbox`, `stopMailWatch`
 
 ### `calendar` (8 tools)
 Google Calendar — events, availability, and calendar management.
 
-`list_calendars`, `get_events`, `manage_event`, `get_busy`, `get_free`, `move_event`, `list_recurring_event_instances`, `manage_calendar`
+`listCalendars`, `getEvents`, `manageEvent`, `getBusy`, `getFree`, `moveEvent`, `listRecurringEventInstances`, `manageCalendar`
+
+> **Backward compatibility:** every former snake_case tool name (`get_imap`, `list_messages`, `manage_event`, …) is still available as a deprecated alias that forwards to its new implementation, but they are **opt-in, not loaded by default** — registering them by default would grow the tool surface these issues exist to shrink. Set `GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true` to register them. See [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase).
 
 ### `forms` (6 tools)
 Google Forms — create/read forms, manage responses, and publish settings.
 
 `create_form`, `get_form`, `batch_update_form`, `get_form_response`, `list_form_responses`, `set_publish_settings`
+
+### `maps` (6 tools)
+Google Maps and Places tools for geocoding, reverse geocoding, nearby and text search, place details, and directions.
+
+`mapsGeocode`, `mapsReverseGeocode`, `mapsSearchNearby`, `mapsSearchPlaces`, `mapsPlaceDetails`, `mapsDirections`
+
+These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separate from the Google OAuth credentials used everywhere else and not covered by the setup wizard or by [Step 1](#step-1-create-google-oauth-credentials) above. To get one: enable the **Geocoding API**, **Places API (New)**, and **Routes API** for your Google Cloud project, then go to **Credentials** → **Create Credentials** → **API key**, and set it as `GOOGLE_MAPS_API_KEY`. Without it, the `maps` tools are still listed, but calling any of them fails with a clear error telling you to set the key.
+
+## Local Working Copies
+
+`readDocument` (markdown format) saves what it reads to a local working-copy file, keyed by document ID and tab, so you can edit that file directly and push it back with `replaceDocumentWithMarkdown` using `filePath` instead of pasting content inline. `replaceDocumentWithMarkdown` also mirrors any inline `markdown=` push into that same file, so it always reflects what's actually on the document.
+
+If the document contains content markdown can't represent (images, footnotes, a generated table of contents, or other Docs elements with no markdown equivalent), `readDocument` appends a warning after the markdown listing exactly what a full `replaceDocumentWithMarkdown` push would permanently remove. Use `modifyText` or `appendMarkdown` instead for those documents.
+
+These files live in a per-user directory under the OS temp dir (`google-tools-mcp-<user>`), created with restrictive permissions and checked on every write so a planted symlink is refused rather than followed. Set `GOOGLE_MCP_WORKSPACE_DIR` to use a different directory instead.
 
 ## Environment Variables
 
@@ -302,8 +364,11 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_HTTP_NO_AUTH` | No | Set to `1` to disable the bearer-token requirement. Only safe when you fully trust every process on the machine |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
+| `GOOGLE_MCP_ENABLE_LEGACY_ALIASES` | No | Set to `true` to register the deprecated snake_case tool aliases (off by default; see [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase)) |
+| `GOOGLE_MCP_WORKSPACE_DIR` | No | Overrides where local working copies of Google Docs are saved (see [Local working copies](#local-working-copies)). Defaults to a per-user directory under the OS temp dir |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
+| `GOOGLE_MAPS_API_KEY` | No | Google Maps Platform API key (separate from OAuth). Without it, `maps` tools remain listed but fail with a clear error when called |
 
 \* Not required as env vars if you provide credentials via `.env` file or `credentials.json` (see [Step 2](#step-2-provide-your-credentials)).
 
@@ -379,6 +444,76 @@ This package replaces both [`gdrive-tools-mcp`](https://www.npmjs.com/package/gd
 2. Re-authenticate (the combined server uses its own config dir at `~/.config/google-tools-mcp/`)
 3. All tools are available immediately — no discovery step needed
 
+## Gmail tool migration (snake_case → camelCase)
+
+Gmail and Calendar tools were unified to camelCase, and the rarely-used Gmail
+account-config tools were consolidated into dispatch tools. **Every old name
+still works** as a deprecated alias that forwards to the new implementation,
+but the aliases are **opt-in** — they are not registered by default, since
+loading all 72 of them alongside the new camelCase + dispatch tools would grow
+the default tool surface instead of shrinking it. Set
+`GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true` if you still depend on the old
+snake_case names.
+
+### Renamed (behavior and parameters unchanged)
+
+| Old name | New name |
+|---|---|
+| `send_message` | `sendMessage` |
+| `reply_message` | `replyMessage` |
+| `forward_message` | `forwardMessage` |
+| `get_message` | `getMessage` |
+| `list_messages` | `listMessages` |
+| `modify_message` | `modifyMessage` |
+| `delete_message` | `deleteMessage` |
+| `trash_message` | `trashMessage` |
+| `batch_get_messages` | `batchGetMessages` |
+| `get_attachment` | `getAttachment` |
+| `create_draft` | `createDraft` |
+| `update_draft` | `updateDraft` |
+| `delete_draft` | `deleteDraft` |
+| `get_draft` | `getDraft` |
+| `list_drafts` | `listDrafts` |
+| `send_draft` | `sendDraft` |
+| `get_thread` | `getThread` |
+| `list_threads` | `listThreads` |
+| `batch_get_threads` | `batchGetThreads` |
+| `modify_thread` | `modifyThread` |
+| `delete_thread` | `deleteThread` |
+| `trash_thread` | `trashThread` |
+| `get_profile` | `getProfile` |
+| `watch_mailbox` | `watchMailbox` |
+| `stop_mail_watch` | `stopMailWatch` |
+| `list_calendars` | `listCalendars` |
+| `get_events` | `getEvents` |
+| `manage_event` | `manageEvent` |
+| `get_busy` | `getBusy` |
+| `get_free` | `getFree` |
+| `move_event` | `moveEvent` |
+| `list_recurring_event_instances` | `listRecurringEventInstances` |
+| `manage_calendar` | `manageCalendar` |
+
+### Consolidated into dispatch tools
+
+| Old name(s) | New dispatch call |
+|---|---|
+| `get_imap` / `update_imap` | `manageGmailSettings` resource=`imap` action=`get`/`update` |
+| `get_pop` / `update_pop` | `manageGmailSettings` resource=`pop` action=`get`/`update` |
+| `get_vacation` / `update_vacation` | `manageGmailSettings` resource=`vacation` action=`get`/`update` |
+| `get_language` / `update_language` | `manageGmailSettings` resource=`language` action=`get`/`update` |
+| `get_auto_forwarding` / `update_auto_forwarding` | `manageGmailSettings` resource=`autoForwarding` action=`get`/`update` |
+| `list_forwarding_addresses` / `get_forwarding_address` / `create_forwarding_address` / `delete_forwarding_address` | `manageGmailSettings` resource=`forwardingAddress` action=`list`/`get`/`create`/`delete` |
+| `list_delegates` / `get_delegate` / `add_delegate` / `remove_delegate` | `manageGmailSettings` resource=`delegate` action=`list`/`get`/`create`/`delete` |
+| `list_send_as` / `get_send_as` / `create_send_as` / `patch_send_as` / `update_send_as` / `delete_send_as` / `verify_send_as` | `manageGmailSettings` resource=`sendAs` action=`list`/`get`/`create`/`patch`/`update`/`delete`/`verify` |
+| `list_smime_info` / `get_smime_info` / `insert_smime_info` / `delete_smime_info` / `set_default_smime_info` | `manageSmime` action=`list`/`get`/`insert`/`delete`/`setDefault` |
+| `list_filters` / `get_filter` / `create_filter` / `delete_filter` | `manageFilter` action=`list`/`get`/`create`/`delete` |
+| `list_labels` / `get_label` / `create_label` / `patch_label` / `delete_label` | `manageLabel` action=`list`/`get`/`create`/`patch`/`delete` |
+
 ## License
 
 MIT
+
+## Releasing
+
+Maintainers: see [RELEASING.md](RELEASING.md) for the tag-triggered npm
+publishing workflow and its one-time trusted-publisher setup.
