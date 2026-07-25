@@ -349,8 +349,12 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
+| `GOOGLE_MCP_NO_UPDATE_CHECK` | No | Set to any value to skip the background check for a newer published version |
+| `NO_UPDATE_NOTIFIER` | No | Same effect as `GOOGLE_MCP_NO_UPDATE_CHECK`, following the npm-ecosystem-standard opt-out name from the `update-notifier` package |
 
 \* Not required as env vars if you provide credentials via `.env` file or `credentials.json` (see [Step 2](#step-2-provide-your-credentials)).
+
+The background version check is also skipped automatically when `CI` is set to anything other than `false`, so automated test runs never make an unannounced outbound call.
 
 ## Migrating from gdrive-tools-mcp / gmail-tools-mcp
 

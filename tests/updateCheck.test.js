@@ -15,6 +15,7 @@ import {
     shouldCheckNow,
     fetchLatestVersion,
     checkForUpdate,
+    isUpdateCheckDisabled,
 } from '../dist/updateCheck.js';
 
 // ---------------------------------------------------------------------------
@@ -147,6 +148,12 @@ describe('fetchLatestVersion', () => {
 // ---------------------------------------------------------------------------
 describe('checkForUpdate', () => {
     const configDir = '/home/user/.config/google-tools-mcp';
+    // Every case in this describe block is exercising the "not opted out"
+    // path, so each passes an explicit empty env rather than relying on
+    // `process.env`. The real environment (e.g. a CI runner, which sets
+    // CI=true) must never change what these assertions expect. The opt-out
+    // paths themselves are covered in the "update check opt-out" block below.
+    const env = {};
 
     it('checks the network and reports updateAvailable when behind, on a cold cache', async () => {
         const readFile = jest.fn().mockRejectedValue(new Error('ENOENT'));
@@ -162,6 +169,7 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile,
             mkdir,
+            env,
         });
 
         expect(fetchLatest).toHaveBeenCalledTimes(1);
@@ -184,6 +192,7 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile: jest.fn(),
             mkdir: jest.fn(),
+            env,
         });
 
         expect(result).toEqual({ checked: true, latestVersion: '1.2.12', updateAvailable: false });
@@ -203,6 +212,7 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile: jest.fn(),
             mkdir: jest.fn(),
+            env,
         });
 
         expect(fetchLatest).not.toHaveBeenCalled();
@@ -224,6 +234,7 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile: jest.fn(),
             mkdir: jest.fn(),
+            env,
         });
 
         expect(fetchLatest).toHaveBeenCalledTimes(1);
@@ -241,6 +252,7 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile: jest.fn(),
             mkdir: jest.fn(),
+            env,
         });
 
         expect(fetchLatest).toHaveBeenCalledTimes(1);
@@ -258,6 +270,7 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile: jest.fn(),
             mkdir: jest.fn(),
+            env,
         });
 
         expect(result).toEqual({ checked: true, latestVersion: null, updateAvailable: false });
@@ -276,6 +289,7 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile,
             mkdir,
+            env,
         })).resolves.toEqual({ checked: true, latestVersion: '1.2.13', updateAvailable: true });
         expect(writeFile).not.toHaveBeenCalled();
     });
@@ -291,6 +305,133 @@ describe('checkForUpdate', () => {
             readFile,
             writeFile: jest.fn(),
             mkdir: jest.fn(),
+            env,
         })).resolves.toEqual({ checked: false, latestVersion: null, updateAvailable: false });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// isUpdateCheckDisabled / checkForUpdate opt-out
+// ---------------------------------------------------------------------------
+// Every opt-out path must be honored before any disk read or network call,
+// so each case below asserts that `readFile` (and therefore `fetchLatest`,
+// which can only run after a cache read) is never invoked when opted out.
+describe('update check opt-out', () => {
+    const configDir = '/home/user/.config/google-tools-mcp';
+
+    describe('isUpdateCheckDisabled', () => {
+        it('is false for a clean env', () => {
+            expect(isUpdateCheckDisabled({})).toBe(false);
+        });
+
+        it('is true when NO_UPDATE_NOTIFIER is set, regardless of its value', () => {
+            expect(isUpdateCheckDisabled({ NO_UPDATE_NOTIFIER: '' })).toBe(true);
+            expect(isUpdateCheckDisabled({ NO_UPDATE_NOTIFIER: '1' })).toBe(true);
+            expect(isUpdateCheckDisabled({ NO_UPDATE_NOTIFIER: 'false' })).toBe(true);
+        });
+
+        it('is true when GOOGLE_MCP_NO_UPDATE_CHECK is set, regardless of its value', () => {
+            expect(isUpdateCheckDisabled({ GOOGLE_MCP_NO_UPDATE_CHECK: '' })).toBe(true);
+            expect(isUpdateCheckDisabled({ GOOGLE_MCP_NO_UPDATE_CHECK: '1' })).toBe(true);
+        });
+
+        it('is true when CI is truthy', () => {
+            expect(isUpdateCheckDisabled({ CI: 'true' })).toBe(true);
+            expect(isUpdateCheckDisabled({ CI: '1' })).toBe(true);
+        });
+
+        it('is false when CI is explicitly "false"', () => {
+            expect(isUpdateCheckDisabled({ CI: 'false' })).toBe(false);
+        });
+
+        it('is false when CI is unset or empty', () => {
+            expect(isUpdateCheckDisabled({})).toBe(false);
+            expect(isUpdateCheckDisabled({ CI: '' })).toBe(false);
+        });
+
+        it('defaults to process.env when no env is given, without throwing', () => {
+            expect(() => isUpdateCheckDisabled()).not.toThrow();
+        });
+    });
+
+    describe('checkForUpdate', () => {
+        it('skips entirely when NO_UPDATE_NOTIFIER is set, before touching disk or network', async () => {
+            const readFile = jest.fn();
+            const writeFile = jest.fn();
+            const mkdir = jest.fn();
+            const fetchLatest = jest.fn();
+
+            const result = await checkForUpdate({
+                currentVersion: '1.2.12',
+                configDir,
+                fetchLatest,
+                readFile,
+                writeFile,
+                mkdir,
+                env: { NO_UPDATE_NOTIFIER: '1' },
+            });
+
+            expect(result).toEqual({ checked: false, latestVersion: null, updateAvailable: false, skipped: true });
+            expect(readFile).not.toHaveBeenCalled();
+            expect(writeFile).not.toHaveBeenCalled();
+            expect(mkdir).not.toHaveBeenCalled();
+            expect(fetchLatest).not.toHaveBeenCalled();
+        });
+
+        it('skips entirely when GOOGLE_MCP_NO_UPDATE_CHECK is set, before touching disk or network', async () => {
+            const readFile = jest.fn();
+            const fetchLatest = jest.fn();
+
+            const result = await checkForUpdate({
+                currentVersion: '1.2.12',
+                configDir,
+                fetchLatest,
+                readFile,
+                writeFile: jest.fn(),
+                mkdir: jest.fn(),
+                env: { GOOGLE_MCP_NO_UPDATE_CHECK: '1' },
+            });
+
+            expect(result).toEqual({ checked: false, latestVersion: null, updateAvailable: false, skipped: true });
+            expect(readFile).not.toHaveBeenCalled();
+            expect(fetchLatest).not.toHaveBeenCalled();
+        });
+
+        it('skips entirely when CI is set, before touching disk or network', async () => {
+            const readFile = jest.fn();
+            const fetchLatest = jest.fn();
+
+            const result = await checkForUpdate({
+                currentVersion: '1.2.12',
+                configDir,
+                fetchLatest,
+                readFile,
+                writeFile: jest.fn(),
+                mkdir: jest.fn(),
+                env: { CI: 'true' },
+            });
+
+            expect(result).toEqual({ checked: false, latestVersion: null, updateAvailable: false, skipped: true });
+            expect(readFile).not.toHaveBeenCalled();
+            expect(fetchLatest).not.toHaveBeenCalled();
+        });
+
+        it('still runs the check when CI is explicitly "false" and nothing else opts out', async () => {
+            const readFile = jest.fn().mockRejectedValue(new Error('ENOENT'));
+            const fetchLatest = jest.fn().mockResolvedValue('1.2.13');
+
+            const result = await checkForUpdate({
+                currentVersion: '1.2.12',
+                configDir,
+                fetchLatest,
+                readFile,
+                writeFile: jest.fn(),
+                mkdir: jest.fn(),
+                env: { CI: 'false' },
+            });
+
+            expect(fetchLatest).toHaveBeenCalledTimes(1);
+            expect(result).toEqual({ checked: true, latestVersion: '1.2.13', updateAvailable: true });
+        });
     });
 });

@@ -75,6 +75,38 @@ export function shouldCheckNow(lastCheckedAt, now, intervalMs = DEFAULT_INTERVAL
     return now - last >= intervalMs;
 }
 
+// Should the update check be skipped entirely, without touching the network
+// or disk? Three ways to opt out:
+//   - NO_UPDATE_NOTIFIER: the npm-ecosystem-standard opt-out env var, used by
+//     the widely-adopted `update-notifier` package (the library most CLIs,
+//     including npm itself, build this exact "is a newer version out"
+//     nudge on top of). Per its README: "Users can also opt-out by setting
+//     the environment variable NO_UPDATE_NOTIFIER with any value" (see
+//     https://github.com/yeoman/update-notifier#readme, fetched 2026-07-25).
+//     That is a presence check, not a truthiness check, so it is honored
+//     here the same way: any value, including an empty string, counts.
+//   - GOOGLE_MCP_NO_UPDATE_CHECK: this repo's own opt-out, following the
+//     existing GOOGLE_MCP_* naming already used for GOOGLE_MCP_PROFILE and
+//     GOOGLE_MCP_LOG_FILE. Same presence-check semantics as above.
+//   - CI: nearly every CI system sets this, and it is the de facto standard
+//     generic "am I running in CI" signal in the npm ecosystem (see the
+//     `ci-info` package, which is what `is-ci`/many CLIs use to detect it,
+//     and which treats CI=false as an explicit escape hatch back to "not
+//     CI"; see https://github.com/watson/ci-info#readme, fetched 2026-07-25).
+//     Automated/CI runs should never make an unannounced outbound call.
+//
+// This check is intentionally the very first thing checkForUpdate() does,
+// before reading the cache file or touching the network, and it is a handful
+// of object-property lookups, so it costs nothing even when the check would
+// otherwise run.
+export function isUpdateCheckDisabled(env = process.env) {
+    if (!env) return false;
+    if ('NO_UPDATE_NOTIFIER' in env) return true;
+    if ('GOOGLE_MCP_NO_UPDATE_CHECK' in env) return true;
+    if (env.CI && env.CI !== 'false') return true;
+    return false;
+}
+
 async function readState(configDir, { readFile }) {
     try {
         const raw = await readFile(stateFilePath(configDir), 'utf8');
@@ -135,7 +167,13 @@ export async function checkForUpdate({
     readFile,
     writeFile,
     mkdir,
+    env = process.env,
 } = {}) {
+    // Opt-out check comes first, before any disk read or network call. See
+    // isUpdateCheckDisabled() above for the three ways to trigger this.
+    if (isUpdateCheckDisabled(env)) {
+        return { checked: false, latestVersion: null, updateAvailable: false, skipped: true };
+    }
     try {
         const cached = await readState(configDir, { readFile });
         if (cached && !shouldCheckNow(cached.lastCheckedAt, now, intervalMs)) {
