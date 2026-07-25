@@ -36,6 +36,15 @@ const CONSENT_SCREEN_URL =
 const AUDIENCE_URL =
     'https://console.cloud.google.com/auth/audience';
 
+// The command a global-install user needs to run to pick up a new release.
+// Unlike `npx -y google-tools-mcp`, a direct `node <global-path>` launch
+// command (see the fast-launch block below) never re-resolves to the latest
+// version on its own, so we surface this explicitly wherever we point a
+// client at a fixed path. Exported so the regression test can assert the
+// wizard actually tells the user about it instead of just asserting a
+// hardcoded string.
+export const UPDATE_COMMAND = 'npm install -g google-tools-mcp@latest';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -516,6 +525,11 @@ export async function runSetup() {
 
     if (fastLaunch.ok) {
         installSpinner.stop(chalk.green('Installed globally — MCP clients will launch it directly via node.'));
+        p.log.message(chalk.dim(
+            'Note: unlike npx, this direct launch path does not auto-update. The server checks for new ' +
+            'releases at startup and will log a line if one is available, without slowing down connection. ' +
+            `To update whenever you like, run: `
+        ) + chalk.cyan(UPDATE_COMMAND));
     } else if (!launch) {
         installSpinner.stop(chalk.red('Could not work out any way to launch the server on this machine.'));
         p.log.warn(fastLaunch.reason);
@@ -536,6 +550,9 @@ export async function runSetup() {
             `Your MCP client will launch ${runningIndexPath} directly. That works as long as this copy stays ` +
             'where it is; if it was run from a temporary npx cache, install the package properly and run setup again.'
         ));
+        p.log.message(chalk.dim(
+            'This path does not auto-update either. Once npm is available, run: '
+        ) + chalk.cyan(UPDATE_COMMAND) + chalk.dim(' to update, or re-run this wizard.'));
     }
 
     const hasCodex = hasCli('codex');

@@ -8,9 +8,20 @@
 //   google-tools-mcp          Start the MCP server (default)
 //   google-tools-mcp auth     Run the interactive OAuth flow
 //   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
+import { createRequire } from 'module';
 import { FastMCP } from 'fastmcp';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
+import { getConfigDir } from './auth.js';
+import { checkForUpdate } from './updateCheck.js';
+
+// Read our own published version straight from package.json rather than
+// hardcoding it. `files: ["dist"]` in package.json only restricts what npm
+// packs; package.json itself always ships at the package root (npm
+// includes it unconditionally), so this resolves the same way both in this
+// checkout and once installed globally.
+const require = createRequire(import.meta.url);
+const { version: packageVersion } = require('../package.json');
 
 // --- Setup subcommand ---
 if (process.argv[2] === 'setup') {
@@ -94,6 +105,29 @@ try {
             'see the README troubleshooting section for a fix.');
     }
     logger.info('Google auth will run automatically on first tool call.');
+
+    // Best-effort update nudge. This runs AFTER the stdio connection above is
+    // already established, and is deliberately not awaited: a slow or
+    // unreachable registry can never delay or block the MCP handshake this
+    // way. checkForUpdate() is itself time-boxed and caches its result, so
+    // most launches don't even make a network call. See updateCheck.js for
+    // why this exists: pointing MCP clients at a fixed global-install path
+    // (see setup.js) fixed the npx timeout race but also means nothing else
+    // ever re-runs `npm install -g` to pick up new releases.
+    checkForUpdate({ currentVersion: packageVersion, configDir: getConfigDir() })
+        .then((result) => {
+            if (result?.updateAvailable) {
+                logger.warn(
+                    `A newer version of google-tools-mcp is available: ${result.latestVersion} ` +
+                    `(currently running ${packageVersion}). Update with: npm install -g google-tools-mcp@latest`
+                );
+            }
+        })
+        .catch(() => {
+            // checkForUpdate() already swallows its own errors; this catch
+            // only guards against a truly unexpected throw so it can never
+            // surface as an unhandled rejection.
+        });
 } catch (startError) {
     logger.error('FATAL: Server failed to start:', startError.message || startError);
     process.exit(1);

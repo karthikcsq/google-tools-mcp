@@ -279,6 +279,18 @@ npm install -g google-tools-mcp
 
 Then use `google-tools-mcp` (no `npx`) as the MCP `command`: see [Step 3](#step-3-add-to-your-mcp-client) for exact commands per client. Running `npx -y google-tools-mcp setup` does this for you automatically: the guided setup wizard installs the package globally and points the MCP entry straight at it. If the global install isn't possible on your machine (e.g. no write access to the global npm directory), it falls back to `npx`, but only if `npx` is actually on PATH, since a machine that can't reach npm usually can't reach npx either. If `npx` isn't there either, it falls back to launching whichever copy of the package is running the wizard right now. If none of the three works, it stops, explains why, and writes nothing to your MCP config rather than leaving you with a command that can't run.
 
+### Updates stop arriving after switching off `npx`
+
+**Cause:** `npx -y google-tools-mcp` re-resolves to whatever is currently published on every launch, so it auto-updates by accident. The global-install path above trades that away for startup speed: your MCP client launches a fixed `node <path>` command that points at whatever was installed the moment you ran setup, and nothing else ever runs `npm install -g` again on its own. Left alone, a global-install user keeps running that same version forever, missing every release after it.
+
+**Fix:** Update it yourself whenever you like:
+
+```bash
+npm install -g google-tools-mcp@latest
+```
+
+(or just re-run `npx -y google-tools-mcp setup`, which does the same install and re-points your MCP config). The server also helps you notice: on startup, after the MCP connection is already established, it makes a strictly time-boxed (2s), non-blocking, at-most-once-per-24-hours check against the npm registry for the latest published version, and logs a one-line warning if you're behind. This check runs after the connection handshake and is never awaited, so a slow or unreachable network can't delay or reintroduce the `npx` startup-timeout race this section is about; worst case, it just never gets to print the notice.
+
 ## Tool Categories
 
 ### `files` (18 tools)
