@@ -5,17 +5,20 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { writeWorkspaceFile } from '../../workspace.js';
 export function register(server) {
     server.addTool({
         name: 'replaceDocumentWithMarkdown',
         description: "Best for rewriting entire sections or full documents. Replaces the entire document body with content parsed from markdown. " +
             "Supports headings, bold, italic, strikethrough, links, tables, bullet/numbered lists, and rich markdown HTML extensions for underline, color, highlight, font, alignment, and blockquotes. " +
+            "Does not support markdown images or raw HTML outside those listed extensions; unsupported content is omitted and reported as warnings in the result. Use insertImage for images. " +
             "Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes. " +
+            "PREFERRED WORKFLOW for large edits: readDocument saves the content to a local working-copy file and returns its path — edit that file, then pass it here as filePath instead of inline markdown, to avoid truncation and get a reviewable diff before pushing. " +
             "For small single-location edits (one line or paragraph), use modifyText instead. " +
             "To add content without rewriting, use appendMarkdown.",
         parameters: DocumentIdParameter.extend({
-            markdown: z.string().optional().describe('The markdown content to apply to the document. For content longer than ~2000 characters, prefer writing to a local file first and passing filePath instead.'),
+            markdown: z.string().optional().describe('Inline markdown content. Prefer filePath instead for content longer than ~2000 characters — use the working-copy path returned by readDocument, edit that file, then pass it here.'),
             filePath: z.string().optional().describe('Path to a local markdown file to use as content. Takes precedence over the markdown parameter. Use this for large documents to avoid truncation.'),
             preserveTitle: z
                 .boolean()
@@ -37,7 +40,11 @@ export function register(server) {
             await guardMutation(args.documentId, {
                 contentFetcher: async () => {
                     const current = await docs.documents.get({ documentId: args.documentId });
-                    return docsJsonToMarkdown(current.data);
+                    // Return the revision this content came from alongside the
+                    // content itself so guardMutation can refresh both together
+                    // instead of leaving revisionId stale after a diff (see
+                    // readTracker.js guardMutation for why that matters).
+                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
                 },
             });
             // Resolve markdown content from filePath or inline parameter
@@ -55,6 +62,14 @@ export function register(server) {
             }
             log.info(`Replacing doc ${args.documentId} with markdown (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
+                const revisionId = getLastReadRevisionId(args.documentId);
+                // Optimistic-concurrency guard. The first write carries the revision
+                // from our last read; each subsequent write advances to the revision the
+                // previous write produced (returned by batchUpdate). This keeps every
+                // write in the operation (delete → cleanup → insert) guarded against
+                // concurrent edits instead of dropping the guard after the first write
+                // (PR #42 review).
+                const writeControlChain = GDocsHelpers.createWriteControlChain(revisionId);
                 // 1. Get document structure
                 const doc = await docs.documents.get({
                     documentId: args.documentId,
@@ -97,11 +112,12 @@ export function register(server) {
                         deleteRange.tabId = args.tabId;
                     }
                     log.info(`Deleting content from index ${startIndex} to ${endIndex}`);
-                    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                    const deleteResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
                         {
                             deleteContentRange: { range: deleteRange },
                         },
-                    ]);
+                    ], writeControlChain.current);
+                    writeControlChain.advance(deleteResult);
                     log.info(`Delete complete.`);
                 }
                 // 4. Clean the surviving trailing paragraph.
@@ -149,11 +165,29 @@ export function register(server) {
                             },
                         },
                     ];
+                    // This cleanup is the operation's first write when the delete step
+                    // was skipped (empty document), so it must carry the current guard —
+                    // otherwise it bumps the revision and the insert below fails with a
+                    // spurious conflict against the revision from the read. Peek (don't
+                    // advance yet): the cleanup is best-effort, and only a SUCCESSFUL
+                    // cleanup changes the revision.
+                    const cleanupWriteControl = writeControlChain.current;
                     try {
-                        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests);
+                        const cleanupResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests, cleanupWriteControl);
+                        // Advance only after success, so the insert requires the revision
+                        // the cleanup produced.
+                        writeControlChain.advance(cleanupResult);
                         log.info(`Cleaned surviving paragraph (bullets + text style) at range ${startIndex}-${survivorEnd}`);
                     }
                     catch (e) {
+                        // A revision conflict is a genuine concurrent edit — surface it
+                        // instead of proceeding to clobber the document unguarded.
+                        if (cleanupWriteControl && e instanceof UserError && /changed since you last read/i.test(e.message)) {
+                            throw e;
+                        }
+                        // Non-conflict failure: the cleanup did not modify the document,
+                        // so the revision is unchanged and writeControlChain.current still
+                        // guards the insert below (we deliberately did NOT advance it).
                         log.info(`Survivor cleanup skipped: ${e.message}`);
                     }
                 }
@@ -163,12 +197,41 @@ export function register(server) {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
+                    // Carries the current guard; insertMarkdown chains it across its own
+                    // split batches so the whole insert stays guarded.
+                    writeControl: writeControlChain.current,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
-                trackMutation(args.documentId);
+                // insertMarkdown chains the guard across its own internal split batches
+                // and returns the final revision as batchUpdate.finalWriteControl; fold
+                // that into our chain so trackMutation re-arms the guard against the
+                // TRUE post-write revision instead of the pre-insert (delete/cleanup) one.
+                writeControlChain.advance({ writeControl: result.batchUpdate?.finalWriteControl });
+                trackMutation(args.documentId, writeControlChain.current?.requiredRevisionId);
+                // Mirror the pushed markdown to the local workspace only now that the
+                // Docs mutation has actually succeeded and been tracked. Writing this
+                // earlier (before the fetch/delete/cleanup/insert sequence above)
+                // meant that if any of those steps failed, the local file held content
+                // that was never committed to the document; worse, if the delete
+                // succeeded but the insert failed, the workspace file would show the
+                // full intended result while the document itself was left partial.
+                // Scoped by tabId so it lines up with the per-tab file readDocument
+                // created. Non-fatal: a failure to save the mirror doesn't undo an
+                // already-successful Docs write, so we log and continue.
+                if (!args.filePath) {
+                    try {
+                        const workspacePath = await writeWorkspaceFile(args.documentId, markdown, args.tabId);
+                        log.info(`Saved working copy to ${workspacePath}`);
+                    } catch (e) {
+                        log.info(`Could not save working copy: ${e.message}`);
+                    }
+                }
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
-                return `${docUrl}\nSuccessfully replaced document content with ${markdown.length} characters of markdown.\n\n${debugSummary}`;
+                const warningNote = result.warnings?.length
+                    ? ` with ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (content dropped — see below)`
+                    : '';
+                return `${docUrl}\nSuccessfully replaced document content with ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error replacing document with markdown: ${error.message}`);

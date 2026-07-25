@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'insertTable',
@@ -39,7 +40,9 @@ export function register(server) {
                         throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
-                await GDocsHelpers.createTable(docs, args.documentId, args.rows, args.columns, args.index, args.tabId);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                const writeResponse = await GDocsHelpers.createTable(docs, args.documentId, args.rows, args.columns, args.index, args.tabId, revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully inserted a ${args.rows}x${args.columns} table at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }

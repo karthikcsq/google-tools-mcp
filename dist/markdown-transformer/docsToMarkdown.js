@@ -4,6 +4,134 @@
  * When these are detected on a text run, we render backtick code in markdown.
  */
 const CODE_FONT_FAMILIES = new Set(['Roboto Mono', 'Courier New', 'Consolas', 'monospace']);
+/**
+ * Inspects the body content that replaceDocumentWithMarkdown will delete and
+ * re-insert, and reports anything docsJsonToMarkdown cannot represent at all.
+ * Returns an array of human-readable warning strings (empty if the content
+ * converts losslessly). Call before replaceDocumentWithMarkdown to warn the AI
+ * about what a body replacement will permanently lose.
+ *
+ * Checked: inline/positioned images and footnote references, neither of which
+ * has any markdown representation in either direction of this converter; a
+ * generated table of contents; and, generically, every OTHER Docs API
+ * `ParagraphElement` variant that `extractFormattedText()` does not render.
+ *
+ * `extractFormattedText()` only ever renders `textRun` (see below). The Docs
+ * API `ParagraphElement` union also defines `autoText`, `pageBreak`,
+ * `columnBreak`, `horizontalRule`, `equation`, `person`, `richLink`, and
+ * `dateElement` (https://developers.google.com/workspace/docs/api/reference/rest/v1/documents#ParagraphElement).
+ * None of those has a markdown representation, so a body replacement deletes
+ * them permanently and the current markdown output never mentions they were
+ * there. Rather than enumerate that list (and silently miss whatever variant
+ * Google adds next), this scanner is deny-by-default: any paragraph-element
+ * key other than `startIndex`/`endIndex` (position metadata) and the three
+ * keys explicitly handled elsewhere in this function (`textRun`, rendered;
+ * `inlineObjectElement`/`footnoteReference`, already counted above) is
+ * treated as an unhandled content variant and reported by name.
+ *
+ * NOT checked (intentionally): custom text/highlight colors and non-default
+ * paragraph alignment. Those round-trip losslessly through the rich-markdown
+ * HTML extensions this converter emits by default (`<span style="color:...">`,
+ * `<p align="...">`, table alignment markers) and their inverse parsing in
+ * markdownToDocs.js, so warning about them here would be inaccurate.
+ *
+ * IMPORTANT — accuracy: every warning is derived from `bodyContent` itself,
+ * i.e. the exact body (a specific tab's body in tab mode, the document body
+ * otherwise) that the replacement mutates. This deliberately does NOT inspect
+ * document-level `headers`/`footers`, which are separate document segments a
+ * body-content replacement does not delete, nor the global `inlineObjects`/
+ * `footnotes` maps, which can include content belonging to OTHER tabs that a
+ * scoped replacement never touches.
+ *
+ * @param {Array} bodyContent structural elements of the body being replaced
+ *   (e.g. `contentSource.body.content`).
+ * @returns {string[]} warnings
+ */
+// ParagraphElement keys this converter already accounts for: startIndex/
+// endIndex are position metadata (not content); textRun is rendered by
+// extractFormattedText(); inlineObjectElement/footnoteReference are counted
+// as their own dedicated warnings below. Any other key on a ParagraphElement
+// is, by the Docs API's own union contract, an unhandled content-bearing
+// variant (autoText, pageBreak, columnBreak, horizontalRule, equation,
+// person, richLink, dateElement, or a future addition) that extractFormattedText
+// silently drops.
+const HANDLED_PARAGRAPH_ELEMENT_KEYS = new Set([
+    'startIndex',
+    'endIndex',
+    'textRun',
+    'inlineObjectElement',
+    'footnoteReference',
+]);
+export function checkMarkdownFidelity(bodyContent) {
+    const warnings = [];
+    let imageCount = 0;
+    let footnoteCount = 0;
+    let tocCount = 0;
+    const unhandledElementCounts = {};
+    function scanParagraphElements(elements) {
+        for (const pe of elements) {
+            // Inline images embedded in the body flow — deleted with the body.
+            if (pe.inlineObjectElement) {
+                imageCount++;
+            }
+            // Footnote references live in the body; deleting the body removes them
+            // (and Docs then drops the orphaned footnote).
+            if (pe.footnoteReference) {
+                footnoteCount++;
+            }
+            // Deny-by-default: anything that isn't a key we explicitly handle is an
+            // unhandled ParagraphElement variant. Grouped and named below rather
+            // than warning per element.
+            for (const key of Object.keys(pe)) {
+                if (!HANDLED_PARAGRAPH_ELEMENT_KEYS.has(key)) {
+                    unhandledElementCounts[key] = (unhandledElementCounts[key] ?? 0) + 1;
+                }
+            }
+        }
+    }
+    function scanBodyContent(content) {
+        for (const element of content) {
+            if (element.paragraph) {
+                // Positioned (floating) images anchored to this paragraph are also
+                // removed when the paragraph is deleted.
+                if (Array.isArray(element.paragraph.positionedObjectIds)) {
+                    imageCount += element.paragraph.positionedObjectIds.length;
+                }
+                scanParagraphElements(element.paragraph.elements ?? []);
+            }
+            else if (element.table) {
+                for (const row of (element.table.tableRows ?? [])) {
+                    for (const cell of (row.tableCells ?? [])) {
+                        scanBodyContent(cell.content ?? []);
+                    }
+                }
+            }
+            // A generated table of contents sits in the body, so the replacement
+            // deletes it, and markdown has no way to express one, so the importer
+            // cannot put it back. Without this the whole round trip drops the TOC
+            // with nothing said about it.
+            else if (element.tableOfContents) {
+                tocCount++;
+            }
+        }
+    }
+    scanBodyContent(bodyContent ?? []);
+    if (imageCount > 0) {
+        warnings.push(`${imageCount} image(s) — will be removed`);
+    }
+    if (footnoteCount > 0) {
+        warnings.push(`${footnoteCount} footnote(s) — will be removed`);
+    }
+    if (tocCount > 0) {
+        warnings.push(`${tocCount} table(s) of contents — will be removed (markdown cannot express a generated TOC; reinsert it in Docs afterward)`);
+    }
+    const unhandledKeys = Object.keys(unhandledElementCounts).sort();
+    if (unhandledKeys.length > 0) {
+        const parts = unhandledKeys.map((key) => `${unhandledElementCounts[key]} ${key}`).join(', ');
+        warnings.push(`${parts} — unsupported content type(s) with no markdown representation; will be removed`);
+    }
+    return warnings;
+}
 // --- Main Conversion ---
 /**
  * Converts Google Docs JSON structure to a markdown string.

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'insertPageBreak',
@@ -44,7 +45,9 @@ export function register(server) {
                 const request = {
                     insertPageBreak: { location },
                 };
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully inserted page break at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }

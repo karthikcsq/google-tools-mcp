@@ -40,6 +40,7 @@ export function register(server) {
                 });
                 const document = response.data;
                 // Add initial content if provided
+                let contentWarnings;
                 if (args.initialContent) {
                     try {
                         const docs = await getDocsClient();
@@ -64,6 +65,13 @@ export function register(server) {
                                 firstHeadingAsTitle: true,
                             });
                             log.info(formatInsertResult(result));
+                            // Surface dropped-content warnings in the tool response itself —
+                            // logging alone leaves the caller believing the initial content
+                            // rendered faithfully (the same failure mode this warnings
+                            // feature exists to close for appendMarkdown/replaceDocumentWithMarkdown).
+                            if (result.warnings?.length) {
+                                contentWarnings = result.warnings;
+                            }
                         }
                     }
                     catch (contentError) {
@@ -74,6 +82,10 @@ export function register(server) {
                     id: document.id,
                     name: document.name,
                     url: document.webViewLink,
+                    ...(contentWarnings && {
+                        warnings: contentWarnings,
+                        warningNote: `${contentWarnings.length} item${contentWarnings.length === 1 ? '' : 's'} of initialContent could not be converted and ${contentWarnings.length === 1 ? 'was' : 'were'} dropped — see warnings.`,
+                    }),
                 }, null, 2);
             }
             catch (error) {

@@ -7,23 +7,57 @@ import { UserError } from 'fastmcp';
 import { createPatch } from 'diff';
 import { getDriveClient } from './clients.js';
 import { logger } from './logger.js';
+import { currentSessionKey } from './sessionContext.js';
 
-// Map of fileId → { readAt: Date, modifiedTime: string|null, content: string|null }
-// content is only populated for file types that opt in (currently Google Docs).
-// Sheets and raw Drive files still track read/modifiedTime only.
-const readLog = new Map();
+// Per-session read logs.
+//
+// Each session has its own Map of fileId → { readAt, modifiedTime, content }.
+// content is only populated for file types that opt in (currently Google Docs);
+// Sheets and raw Drive files track read/modifiedTime only.
+//
+// Namespacing by session is what makes shared HTTP mode safe: two clients
+// reading or mutating the same file no longer clobber each other's tracked
+// content, modifiedTime, and revision guard (PR #36 review). In stdio mode the
+// ambient session key is null, so there is a single namespace and behavior is
+// identical to the original single-Map implementation.
+const sessions = new Map(); // sessionKey (string|null) → Map<fileId, entry>
+
+// Sentinel for the stdio / no-request namespace (Map keys can't be null-safe
+// across distinct absent values, so normalize null → this string).
+const DEFAULT_SESSION = '\0default';
+
+function logForCurrentSession() {
+    const key = currentSessionKey() ?? DEFAULT_SESSION;
+    let log = sessions.get(key);
+    if (!log) {
+        log = new Map();
+        sessions.set(key, log);
+    }
+    return log;
+}
+
+/**
+ * Drop all tracked state for a session. Called when an HTTP session disconnects
+ * so a long-lived shared server doesn't accumulate tracker entries forever.
+ * @param {string|null|undefined} sessionKey
+ */
+export function clearSession(sessionKey) {
+    sessions.delete(sessionKey ?? DEFAULT_SESSION);
+}
 
 /**
  * Record that a file was read. Call from all read tools.
  * @param fileId
  * @param modifiedTime Drive API modifiedTime (ISO string) at read time, or null
  * @param content Optional content snapshot (e.g. markdown for docs) used for diffs
+ * @param revisionId Optional Google Docs revision ID used for optimistic concurrency
  */
-export function trackRead(fileId, modifiedTime, content) {
-    readLog.set(fileId, {
+export function trackRead(fileId, modifiedTime, content, revisionId) {
+    logForCurrentSession().set(fileId, {
         readAt: new Date(),
         modifiedTime: modifiedTime || null,
         content: typeof content === 'string' ? content : null,
+        revisionId: typeof revisionId === 'string' ? revisionId : null,
     });
 }
 
@@ -33,18 +67,38 @@ export function trackRead(fileId, modifiedTime, content) {
  *
  * @param fileId - The file/document/spreadsheet ID
  * @param opts.skipExternalCheck - If true, skip the Drive API modifiedTime check (for performance)
- * @param opts.contentFetcher - Optional async () => string. If provided and an
- *   external-change conflict is detected, the fetcher is used to grab current
- *   content and the UserError message will include a unified diff plus rebase
- *   instructions rather than a plain error.
+ * @param opts.contentFetcher - Optional async () => (string | { content: string, revisionId?: string|null }).
+ *   If provided and an external-change conflict is detected, the fetcher is used to grab current
+ *   content (and, for Google Docs, the revision that content came from) and the UserError message
+ *   will include a unified diff plus rebase instructions rather than a plain error. When the fetcher
+ *   returns an object with `revisionId`, that revision is stored as the new baseline atomically with
+ *   the content/modifiedTime refresh below, so a subsequent rebased write is guarded against the
+ *   version the diff was actually taken from rather than the pre-external-edit revision. When the
+ *   fetcher returns a bare string (or omits revisionId), the revision can't be known to be current,
+ *   so it is cleared instead of left stale — the next write then goes out unguarded rather than with
+ *   a guaranteed-stale requiredRevisionId.
  */
 export async function guardMutation(fileId, opts) {
+    const readLog = logForCurrentSession();
     const entry = readLog.get(fileId);
     if (!entry) {
         throw new UserError(
             `This file (${fileId}) has not been read in this session. ` +
             'Read it first before making changes to ensure you have current content. ' +
             'Use readDocument, readSpreadsheet, readFile, or readDriveFile.'
+        );
+    }
+
+    // A previous write left the document in a state we can't describe: no
+    // revision to guard against and no content snapshot to diff. Refuse rather
+    // than let this write go out against a stale baseline. The modifiedTime
+    // check below cannot cover this, because it is skipped when modifiedTime
+    // is null and would just re-baseline on the post-write value.
+    if (entry.requiresReread) {
+        throw new UserError(
+            `This file (${fileId}) must be read again before it can be edited: ${entry.requiresReread} ` +
+            'Read it again (readDocument, readSpreadsheet, readFile, or readDriveFile) and rebase your edit ' +
+            'on the current content.'
         );
     }
 
@@ -65,8 +119,22 @@ export async function guardMutation(fileId, opts) {
                 // model can rebase its edit on top of the new version.
                 if (entry.content && typeof opts?.contentFetcher === 'function') {
                     let currentContent;
+                    let currentRevisionId;
                     try {
-                        currentContent = await opts.contentFetcher();
+                        const fetched = await opts.contentFetcher();
+                        if (fetched && typeof fetched === 'object') {
+                            currentContent = fetched.content;
+                            currentRevisionId = typeof fetched.revisionId === 'string' ? fetched.revisionId : null;
+                        } else {
+                            currentContent = fetched;
+                            // A bare-string fetcher can't tell us the revision the
+                            // content came from. Clear rather than keep the
+                            // pre-external-edit revisionId around: a cleared
+                            // revision sends the next write out unguarded, which
+                            // is safe; a stale one sends it out with a
+                            // requiredRevisionId that is guaranteed to conflict.
+                            currentRevisionId = null;
+                        }
                     } catch (fetchError) {
                         logger.warn(`contentFetcher failed for ${fileId}: ${fetchError.message}`);
                     }
@@ -79,10 +147,16 @@ export async function guardMutation(fileId, opts) {
                             'current',
                             { context: 3 }
                         );
-                        // Refresh the snapshot so a subsequent read/mutation
-                        // works against the new baseline.
+                        // Refresh content, modifiedTime, AND revisionId together
+                        // (atomically, in the same tick) so a subsequent rebased
+                        // write is guarded against the version this diff was
+                        // actually taken from — not the pre-external-edit
+                        // revision, which would otherwise cause a second,
+                        // confusing conflict even when the caller correctly
+                        // rebuilt its edit from the diff above.
                         entry.content = currentContent;
                         entry.modifiedTime = currentModifiedTime;
+                        entry.revisionId = currentRevisionId;
                         throw new UserError(
                             `This file was modified externally since you last read it ` +
                             `(last read: ${readAt}, last modified: ${currentModifiedTime}).\n\n` +
@@ -115,9 +189,22 @@ export async function guardMutation(fileId, opts) {
 /**
  * Update the read tracker after a successful mutation (so subsequent mutations
  * don't fail the external-change check against our own changes).
+ *
+ * @param fileId
+ * @param newRevisionId Optional Google Docs revision ID produced by the write
+ *   that just succeeded (the API's batchUpdate response echoes this back as
+ *   `writeControl.requiredRevisionId` — "the updated write control after
+ *   applying the request"). When provided, the WriteControl guard is
+ *   re-armed against this fresh revision instead of being disabled, so a
+ *   second write to the same document later in the same session (with no
+ *   re-read in between) is still guarded against a genuine concurrent edit —
+ *   rather than either (a) silently going out unguarded, or (b) reusing the
+ *   now-stale pre-mutation revision and spuriously conflicting with our own
+ *   prior write. When omitted, the revision is cleared (legacy/unknown
+ *   behavior, same as before).
  */
-export function trackMutation(fileId) {
-    const entry = readLog.get(fileId);
+export function trackMutation(fileId, newRevisionId) {
+    const entry = logForCurrentSession().get(fileId);
     if (entry) {
         entry.readAt = new Date();
         // Clear modifiedTime — it will be stale after our mutation.
@@ -126,6 +213,33 @@ export function trackMutation(fileId) {
         // Content is also stale after our mutation; clear so a future diff
         // doesn't show our own edits as "external" changes.
         entry.content = null;
+        entry.revisionId = typeof newRevisionId === 'string' ? newRevisionId : null;
+    }
+}
+
+/**
+ * Mark a file as needing a fresh read before any further mutation.
+ *
+ * Use this instead of trackMutation after a write whose resulting revision we
+ * cannot learn (an Apps Script call that edits the document outside our
+ * batchUpdate visibility, for example). trackMutation on its own clears the
+ * revision and the modifiedTime, which leaves the next write with nothing to
+ * guard against: it sends no writeControl and the external-change check is
+ * skipped because modifiedTime is null. That write would then be based on a
+ * pre-mutation read without anyone noticing. Blocking it and asking for a
+ * re-read is the only safe option when the post-write revision is unknown.
+ *
+ * @param fileId
+ * @param reason Sentence fragment explaining what happened, shown to the caller.
+ */
+export function requireRereadBeforeMutation(fileId, reason) {
+    const entry = logForCurrentSession().get(fileId);
+    if (entry) {
+        entry.readAt = new Date();
+        entry.modifiedTime = null;
+        entry.content = null;
+        entry.revisionId = null;
+        entry.requiresReread = reason || 'a previous write changed it in a way we could not track.';
     }
 }
 
@@ -133,13 +247,18 @@ export function trackMutation(fileId) {
  * Check if a file has been read (without throwing).
  */
 export function hasBeenRead(fileId) {
-    return readLog.has(fileId);
+    return logForCurrentSession().has(fileId);
 }
 
 /**
  * Return the content snapshot from the last read, or null if none stored.
  */
 export function getLastReadContent(fileId) {
-    const entry = readLog.get(fileId);
+    const entry = logForCurrentSession().get(fileId);
     return entry?.content ?? null;
+}
+
+/** Return the Google Docs revision ID from the last read, or null. */
+export function getLastReadRevisionId(fileId) {
+    return logForCurrentSession().get(fileId)?.revisionId ?? null;
 }

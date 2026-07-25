@@ -2,6 +2,7 @@ import { UserError } from 'fastmcp';
 import { getDocsClient } from '../../../clients.js';
 import { ApplyParagraphStyleToolParameters, NotImplementedError, } from '../../../types.js';
 import * as GDocsHelpers from '../../../googleDocsApiHelpers.js';
+import { getLastReadRevisionId, trackMutation } from '../../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'applyParagraphStyle',
@@ -64,7 +65,9 @@ export function register(server) {
                     return 'No valid paragraph styling options were provided.';
                 }
                 log.info(`Applying styles: ${requestInfo.fields.join(', ')}`);
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully applied paragraph styles (${requestInfo.fields.join(', ')}) to the paragraph${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }

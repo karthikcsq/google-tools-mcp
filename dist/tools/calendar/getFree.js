@@ -4,7 +4,7 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'get_free',
+        name: 'getFree',
         description:
             'Finds available time slots where all specified people are free. ' +
             'Takes a duration and working hours as boundaries, then returns open slots. ' +

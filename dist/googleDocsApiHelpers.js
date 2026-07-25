@@ -4,7 +4,7 @@ import { logger } from './logger.js';
 // --- Constants ---
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
 // --- Core Helper to Execute Batch Updates ---
-export async function executeBatchUpdate(docs, documentId, requests) {
+export async function executeBatchUpdate(docs, documentId, requests, writeControl) {
     if (!requests || requests.length === 0) {
         // console.warn("executeBatchUpdate called with no requests.");
         return {}; // Nothing to do
@@ -16,13 +16,25 @@ export async function executeBatchUpdate(docs, documentId, requests) {
     try {
         const response = await docs.documents.batchUpdate({
             documentId: documentId,
-            requestBody: { requests },
+            requestBody: { requests, ...(writeControl && { writeControl }) },
         });
         return response.data;
     }
     catch (error) {
         logger.error(`Google API batchUpdate Error for doc ${documentId}:`, error.response?.data || error.message);
         // Translate common API errors to UserErrors
+        const apiMessage = error.response?.data?.error?.message || error.message || '';
+        const apiStatus = error.response?.data?.error?.status;
+        // A write sent with writeControl that fails on the revision is a
+        // concurrency conflict. Don't rely on message wording alone —
+        // FAILED_PRECONDITION is Google's canonical status for this.
+        const isRevisionConflict = writeControl && (
+            apiStatus === 'FAILED_PRECONDITION' ||
+            ((error.code === 400 || error.code === 409) && /revision|write\s*control|updated since/i.test(apiMessage))
+        );
+        if (isRevisionConflict) {
+            throw new UserError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`);
+        }
         if (error.code === 400 && error.message.includes('Invalid requests')) {
             // Try to extract more specific info if available
             const details = error.response?.data?.error?.details;
@@ -41,6 +53,40 @@ export async function executeBatchUpdate(docs, documentId, requests) {
     }
 }
 /**
+ * Creates a small stateful helper for chaining an optimistic-concurrency guard
+ * across a sequence of writes that make up a single logical operation (e.g.
+ * delete -> cleanup -> insert). The first write carries the revision from the
+ * caller's last read; each subsequent write must require the revision the
+ * previous write produced (returned as `writeControl` on a successful
+ * batchUpdate response), so a collaborator edit landing between any two of
+ * our own batches is rejected as a conflict instead of silently applied
+ * against (PR #42 review).
+ *
+ * Guarding is opt-in: when `revisionId` is null/undefined (a legacy read that
+ * never captured a revision), `current` stays undefined for the life of the
+ * chain and `advance` is a no-op, so the flow remains unguarded.
+ *
+ * @param revisionId - The revisionId from the caller's last tracked read, or null/undefined
+ * @returns { get current(), advance(response) }
+ */
+export function createWriteControlChain(revisionId) {
+    let pendingWriteControl = revisionId ? { requiredRevisionId: revisionId } : undefined;
+    return {
+        get current() {
+            return pendingWriteControl;
+        },
+        // Advance the chain to the revision produced by a successful write.
+        // Only advances when the chain is armed and the response carried a new
+        // writeControl — a best-effort write that fails (and is swallowed by the
+        // caller) must NOT advance the chain, since the document was not modified.
+        advance(response) {
+            if (pendingWriteControl && response?.writeControl) {
+                pendingWriteControl = response.writeControl;
+            }
+        },
+    };
+}
+/**
  * Executes batch updates with automatic splitting for large request arrays.
  * Separates insert and format operations, executing inserts first.
  *
@@ -50,7 +96,7 @@ export async function executeBatchUpdate(docs, documentId, requests) {
  * @param log - Optional logger for progress tracking
  * @returns Metadata about the execution (request counts, API calls, timing)
  */
-export async function executeBatchUpdateWithSplitting(docs, documentId, requests, log) {
+export async function executeBatchUpdateWithSplitting(docs, documentId, requests, log, writeControl) {
     const overallStart = performance.now();
     if (!requests || requests.length === 0) {
         return {
@@ -80,6 +126,21 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
             'insertInlineImage' in r ||
             'insertSectionBreak' in r));
     let totalApiCalls = 0;
+    // Chain the optimistic-concurrency guard across every batch this operation
+    // sends. When markdown is split into delete/insert/format phases (or a phase
+    // exceeds 50 requests), each successful batchUpdate returns the document's new
+    // head revision in its writeControl. Requiring that revision on the next batch
+    // means a collaborator edit landing between our batches is rejected as a
+    // conflict instead of having our precomputed ranges applied to their content
+    // (PR #42 review). Only chain when we started guarded, so legacy flows that
+    // never captured a revision stay unguarded.
+    let chainedWriteControl = writeControl;
+    const executeBatch = async (batch) => {
+        const data = await executeBatchUpdate(docs, documentId, batch, chainedWriteControl);
+        if (chainedWriteControl && data?.writeControl) {
+            chainedWriteControl = data.writeControl;
+        }
+    };
     // Execute delete batches first (must happen before inserts)
     const deleteStart = performance.now();
     if (deleteRequests.length > 0) {
@@ -91,7 +152,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
             if (log) {
                 log.info(`Delete batch content: ${JSON.stringify(batch)}`);
             }
-            await executeBatchUpdate(docs, documentId, batch);
+            await executeBatch(batch);
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -109,7 +170,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (insertRequests.length > 0) {
         for (let i = 0; i < insertRequests.length; i += MAX_BATCH) {
             const batch = insertRequests.slice(i, i + MAX_BATCH);
-            await executeBatchUpdate(docs, documentId, batch);
+            await executeBatch(batch);
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -124,7 +185,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (formatRequests.length > 0) {
         for (let i = 0; i < formatRequests.length; i += MAX_BATCH) {
             const batch = formatRequests.slice(i, i + MAX_BATCH);
-            await executeBatchUpdate(docs, documentId, batch);
+            await executeBatch(batch);
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -156,6 +217,9 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
         },
         totalApiCalls,
         totalElapsedMs: Math.round(totalElapsedMs),
+        // The revision guard after the last batch, so a caller that writes again
+        // after this call can keep the chain intact.
+        finalWriteControl: chainedWriteControl,
     };
 }
 // --- Text Finding Helper ---
@@ -676,7 +740,7 @@ export function buildUpdateParagraphStyleRequest(startIndex, endIndex, style, ta
     return { request, fields: fieldsToUpdate };
 }
 // --- Specific Feature Helpers ---
-export async function createTable(docs, documentId, rows, columns, index, tabId) {
+export async function createTable(docs, documentId, rows, columns, index, tabId, writeControl) {
     if (rows < 1 || columns < 1) {
         throw new UserError('Table must have at least 1 row and 1 column.');
     }
@@ -691,7 +755,7 @@ export async function createTable(docs, documentId, rows, columns, index, tabId)
             columns: columns,
         },
     };
-    return executeBatchUpdate(docs, documentId, [request]);
+    return executeBatchUpdate(docs, documentId, [request], writeControl);
 }
 export async function insertText(docs, documentId, text, index) {
     if (!text)
@@ -824,7 +888,7 @@ export async function addCommentHelper(docs, documentId, text, startIndex, endIn
  * @param height - Optional height in points
  * @returns Promise with batch update response
  */
-export async function insertInlineImage(docs, documentId, imageUrl, index, width, height, tabId) {
+export async function insertInlineImage(docs, documentId, imageUrl, index, width, height, tabId, writeControl) {
     // Validate URL format
     try {
         new URL(imageUrl);
@@ -850,7 +914,7 @@ export async function insertInlineImage(docs, documentId, imageUrl, index, width
             }),
         },
     };
-    return executeBatchUpdate(docs, documentId, [request]);
+    return executeBatchUpdate(docs, documentId, [request], writeControl);
 }
 /**
  * Uploads a local image file to Google Drive.
@@ -933,14 +997,14 @@ localFilePath, parentFolderId, skipPublicSharing = false) {
  *      with the actual image blob from Drive (no public sharing needed).
  */
 export async function insertImageViaAppsScript(docs, scriptClient, // script_v1.Script type
-deploymentId, documentId, driveFileId, charIndex, tabId) {
+deploymentId, documentId, driveFileId, charIndex, tabId, writeControl) {
     const marker = `[mcp-img-${driveFileId}]`;
     // Step 1: Insert marker at the requested position via Docs API
     const location = { index: charIndex };
     if (tabId) {
         location.tabId = tabId;
     }
-    await executeBatchUpdate(docs, documentId, [{ insertText: { location, text: marker } }]);
+    await executeBatchUpdate(docs, documentId, [{ insertText: { location, text: marker } }], writeControl);
     // Step 2: Call Apps Script to replace the marker with the image
     const response = await scriptClient.scripts.run({
         scriptId: deploymentId,

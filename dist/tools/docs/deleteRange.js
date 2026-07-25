@@ -4,7 +4,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'deleteRange',
@@ -33,7 +33,11 @@ export function register(server) {
             await guardMutation(args.documentId, {
                 contentFetcher: async () => {
                     const current = await docs.documents.get({ documentId: args.documentId });
-                    return docsJsonToMarkdown(current.data);
+                    // Return the revision this content came from alongside the
+                    // content itself so guardMutation can refresh both together
+                    // instead of leaving revisionId stale after a diff (see
+                    // readTracker.js guardMutation for why that matters).
+                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
                 },
             });
             log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
@@ -66,8 +70,9 @@ export function register(server) {
                 const request = {
                     deleteContentRange: { range },
                 };
-                await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-                trackMutation(args.documentId);
+                const revisionId = getLastReadRevisionId(args.documentId);
+                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
+                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }

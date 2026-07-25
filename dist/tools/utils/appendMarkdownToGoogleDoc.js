@@ -5,12 +5,13 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, trackMutation } from '../../readTracker.js';
+import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'appendMarkdown',
         description: 'Best for adding new formatted content to the end of a document. ' +
             'Supports headings, bold, italic, strikethrough, links, tables, bullet/numbered lists, and rich markdown HTML extensions for underline, color, highlight, font, alignment, and blockquotes. ' +
+            'Does not support markdown images or raw HTML outside those listed extensions; unsupported content is omitted and reported as warnings in the result. Use insertImage for images. ' +
             'Use this instead of appendText when you need formatting. ' +
             'To edit existing content, use modifyText (single-location) or replaceDocumentWithMarkdown (section/full rewrite).',
         parameters: DocumentIdParameter.extend({
@@ -36,7 +37,11 @@ export function register(server) {
             await guardMutation(args.documentId, {
                 contentFetcher: async () => {
                     const current = await docs.documents.get({ documentId: args.documentId });
-                    return docsJsonToMarkdown(current.data);
+                    // Return the revision this content came from alongside the
+                    // content itself so guardMutation can refresh both together
+                    // instead of leaving revisionId stale after a diff (see
+                    // readTracker.js guardMutation for why that matters).
+                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
                 },
             });
             // Resolve markdown content from filePath or inline parameter
@@ -54,6 +59,13 @@ export function register(server) {
             }
             log.info(`Appending markdown to doc ${args.documentId} (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
+                const revisionId = getLastReadRevisionId(args.documentId);
+                // Optimistic-concurrency guard. The first write carries the revision
+                // from our last read; each subsequent write advances to the revision the
+                // previous write produced (returned by batchUpdate). This keeps every
+                // write in the operation guarded against concurrent edits instead of
+                // dropping the guard after the first write (PR #42 review).
+                const writeControlChain = GDocsHelpers.createWriteControlChain(revisionId);
                 // 1. Get document end index
                 const doc = await docs.documents.get({
                     documentId: args.documentId,
@@ -85,14 +97,15 @@ export function register(server) {
                     if (args.tabId) {
                         location.tabId = args.tabId;
                     }
-                    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                    const spacingResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
                         {
                             insertText: {
                                 location,
                                 text: '\n\n',
                             },
                         },
-                    ]);
+                    ], writeControlChain.current);
+                    writeControlChain.advance(spacingResult);
                     startIndex += 2;
                     log.info(`Added spacing, new start index: ${startIndex}`);
                 }
@@ -101,12 +114,23 @@ export function register(server) {
                     startIndex,
                     tabId: args.tabId,
                     firstHeadingAsTitle: args.firstHeadingAsTitle,
+                    // Carries the current guard; insertMarkdown chains it across its own
+                    // split batches so the whole insert stays guarded.
+                    writeControl: writeControlChain.current,
                 });
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
-                trackMutation(args.documentId);
-                return `${docUrl}\nSuccessfully appended ${markdown.length} characters of markdown.\n\n${debugSummary}`;
+                // insertMarkdown chains the guard across its own internal split batches
+                // and returns the final revision as batchUpdate.finalWriteControl; fold
+                // that into our chain so trackMutation re-arms the guard against the
+                // TRUE post-write revision instead of the pre-insert (spacing-only) one.
+                writeControlChain.advance({ writeControl: result.batchUpdate?.finalWriteControl });
+                trackMutation(args.documentId, writeControlChain.current?.requiredRevisionId);
+                const warningNote = result.warnings?.length
+                    ? ` with ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (content dropped — see below)`
+                    : '';
+                return `${docUrl}\nSuccessfully appended ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error appending markdown: ${error.message}`);
