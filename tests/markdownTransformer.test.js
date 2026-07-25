@@ -329,14 +329,14 @@ describe('docsJsonToMarkdown', () => {
 // convertMarkdownToRequests — markdown to Docs API requests
 // ---------------------------------------------------------------------------
 describe('convertMarkdownToRequests', () => {
-    it('returns empty array for empty/whitespace markdown', () => {
-        expect(convertMarkdownToRequests('')).toEqual([]);
-        expect(convertMarkdownToRequests('   ')).toEqual([]);
-        expect(convertMarkdownToRequests(null)).toEqual([]);
+    it('returns empty requests and warnings for empty/whitespace markdown', () => {
+        expect(convertMarkdownToRequests('')).toEqual({ requests: [], warnings: [] });
+        expect(convertMarkdownToRequests('   ')).toEqual({ requests: [], warnings: [] });
+        expect(convertMarkdownToRequests(null)).toEqual({ requests: [], warnings: [] });
     });
 
     it('generates insertText for plain text', () => {
-        const requests = convertMarkdownToRequests('Hello world', 1);
+        const { requests } = convertMarkdownToRequests('Hello world', 1);
         const inserts = requests.filter(r => 'insertText' in r);
         expect(inserts.length).toBeGreaterThan(0);
         // The inserted text should contain 'Hello world'
@@ -345,7 +345,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('generates heading style for # heading', () => {
-        const requests = convertMarkdownToRequests('# My Heading', 1);
+        const { requests } = convertMarkdownToRequests('# My Heading', 1);
         const paragraphStyles = requests.filter(r => 'updateParagraphStyle' in r);
         expect(paragraphStyles.length).toBeGreaterThan(0);
         // At least one should set HEADING_1 or TITLE
@@ -357,7 +357,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('generates bold formatting for **text**', () => {
-        const requests = convertMarkdownToRequests('**bold text**', 1);
+        const { requests } = convertMarkdownToRequests('**bold text**', 1);
         const textStyles = requests.filter(r => 'updateTextStyle' in r);
         const boldRequest = textStyles.find(r =>
             r.updateTextStyle?.textStyle?.bold === true
@@ -366,21 +366,21 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('uses the provided startIndex for insertions', () => {
-        const requests = convertMarkdownToRequests('Text', 42);
+        const { requests } = convertMarkdownToRequests('Text', 42);
         const inserts = requests.filter(r => 'insertText' in r);
         // First insert should be at index 42
         expect(inserts[0].insertText.location.index).toBe(42);
     });
 
     it('includes tabId in requests when provided', () => {
-        const requests = convertMarkdownToRequests('Text', 1, 'tab-99');
+        const { requests } = convertMarkdownToRequests('Text', 1, 'tab-99');
         const inserts = requests.filter(r => 'insertText' in r);
         expect(inserts[0].insertText.location.tabId).toBe('tab-99');
     });
 
     it('handles multiple paragraphs', () => {
         const md = 'Paragraph one\n\nParagraph two';
-        const requests = convertMarkdownToRequests(md, 1);
+        const { requests } = convertMarkdownToRequests(md, 1);
         const inserts = requests.filter(r => 'insertText' in r);
         const allText = inserts.map(r => r.insertText.text).join('');
         expect(allText).toContain('Paragraph one');
@@ -389,7 +389,7 @@ describe('convertMarkdownToRequests', () => {
 
     it('handles bullet lists', () => {
         const md = '- Item 1\n- Item 2\n- Item 3';
-        const requests = convertMarkdownToRequests(md, 1);
+        const { requests } = convertMarkdownToRequests(md, 1);
         const inserts = requests.filter(r => 'insertText' in r);
         const allText = inserts.map(r => r.insertText.text).join('');
         expect(allText).toContain('Item 1');
@@ -398,7 +398,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('parses rich inline HTML formatting into text style requests', () => {
-        const requests = convertMarkdownToRequests('<u><span style="color:#ff0000; background-color:#ffff00; font-size:14pt; font-family:Arial">Styled</span></u>', 1);
+        const { requests, warnings } = convertMarkdownToRequests('<u><span style="color:#ff0000; background-color:#ffff00; font-size:14pt; font-family:Arial">Styled</span></u>', 1);
         const richRequest = requests.find(r =>
             r.updateTextStyle?.textStyle?.underline === true &&
             r.updateTextStyle?.textStyle?.foregroundColor?.color?.rgbColor?.red === 1 &&
@@ -407,10 +407,12 @@ describe('convertMarkdownToRequests', () => {
             r.updateTextStyle?.textStyle?.weightedFontFamily?.fontFamily === 'Arial'
         );
         expect(richRequest).toBeDefined();
+        // All four declarations are in a supported format, so nothing should warn.
+        expect(warnings).toEqual([]);
     });
 
     it('parses paragraph alignment wrappers', () => {
-        const requests = convertMarkdownToRequests('<p align="center">Centered text</p>', 1);
+        const { requests } = convertMarkdownToRequests('<p align="center">Centered text</p>', 1);
         const alignmentRequest = requests.find(r =>
             r.updateParagraphStyle?.paragraphStyle?.alignment === 'CENTER'
         );
@@ -418,7 +420,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('styles markdown blockquotes instead of dropping them', () => {
-        const requests = convertMarkdownToRequests('> Quoted text', 1);
+        const { requests } = convertMarkdownToRequests('> Quoted text', 1);
         const quoteRequest = requests.find(r =>
             r.updateParagraphStyle?.paragraphStyle?.indentStart?.magnitude === 36 &&
             r.updateParagraphStyle?.paragraphStyle?.borderLeft
@@ -427,7 +429,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('applies markdown table alignment to table cell paragraphs', () => {
-        const requests = convertMarkdownToRequests('| Left | Right |\n| --- | ---: |\n| a | b |', 1);
+        const { requests } = convertMarkdownToRequests('| Left | Right |\n| --- | ---: |\n| a | b |', 1);
         const alignmentRequest = requests.find(r =>
             r.updateParagraphStyle?.paragraphStyle?.alignment === 'END'
         );
@@ -436,7 +438,7 @@ describe('convertMarkdownToRequests', () => {
 
     // --- Issue #14: default foreground color ---
     it('adds base foreground color when defaultForegroundColor option is provided', () => {
-        const requests = convertMarkdownToRequests('Hello world', 1, undefined, {
+        const { requests } = convertMarkdownToRequests('Hello world', 1, undefined, {
             defaultForegroundColor: { red: 0, green: 0, blue: 0 },
         });
         const colorRequests = requests.filter(r =>
@@ -449,7 +451,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('base foreground color covers the full inserted range', () => {
-        const requests = convertMarkdownToRequests('Hello world', 5, undefined, {
+        const { requests } = convertMarkdownToRequests('Hello world', 5, undefined, {
             defaultForegroundColor: { red: 0, green: 0, blue: 0 },
         });
         const colorReq = requests.find(r =>
@@ -462,7 +464,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('does not add foreground color when option is not provided', () => {
-        const requests = convertMarkdownToRequests('Hello world', 1);
+        const { requests } = convertMarkdownToRequests('Hello world', 1);
         const colorRequests = requests.filter(r =>
             r.updateTextStyle?.fields === 'foregroundColor'
         );
@@ -470,7 +472,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('includes tabId in foreground color request when tabId is provided', () => {
-        const requests = convertMarkdownToRequests('Hello', 1, 'tab-42', {
+        const { requests } = convertMarkdownToRequests('Hello', 1, 'tab-42', {
             defaultForegroundColor: { red: 0, green: 0, blue: 0 },
         });
         const colorReq = requests.find(r =>
@@ -481,7 +483,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('supports non-black default colors (e.g. document with dark theme)', () => {
-        const requests = convertMarkdownToRequests('Hello', 1, undefined, {
+        const { requests } = convertMarkdownToRequests('Hello', 1, undefined, {
             defaultForegroundColor: { red: 1, green: 1, blue: 1 },
         });
         const colorReq = requests.find(r =>
@@ -492,12 +494,204 @@ describe('convertMarkdownToRequests', () => {
         });
     });
 
+    it('warns when a markdown image is dropped', () => {
+        const { requests, warnings } = convertMarkdownToRequests('Before ![architecture diagram](https://example.com/diagram.png) after');
+        // Surrounding text still converts; the image is the only thing dropped.
+        expect(requests.some(r => 'insertText' in r)).toBe(true);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('architecture diagram');
+        expect(warnings[0]).toContain('https://example.com/diagram.png');
+    });
+
+    it('warns when unsupported HTML block content is dropped', () => {
+        const { warnings } = convertMarkdownToRequests('<details><summary>Notes</summary>Hidden details</details>');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('<details>');
+        expect(warnings[0]).toContain('Hidden details');
+    });
+
+    it('returns zero warnings for supported markdown constructs', () => {
+        const markdown = '# Heading\n\n- item\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n---\n\n```js\nconst ok = true;\n```';
+        const { warnings } = convertMarkdownToRequests(markdown);
+        expect(warnings).toEqual([]);
+    });
+
+    it('collapses repeated identical drops into one warning with an occurrence count', () => {
+        const md = '![logo](https://example.com/logo.png)\n\n![logo](https://example.com/logo.png)\n\n![logo](https://example.com/logo.png)';
+        const { warnings } = convertMarkdownToRequests(md);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('(3 occurrences)');
+    });
+
+    it('preserves warnings across array transformations (explicit object contract)', () => {
+        // The warnings live on a sibling field, not a hidden array property, so
+        // spreading/cloning the requests array cannot silently drop them.
+        const result = convertMarkdownToRequests('![diagram](https://example.com/d.png)');
+        const spreadRequests = [...result.requests];
+        const clonedResult = JSON.parse(JSON.stringify(result));
+        expect(spreadRequests).toEqual(result.requests);
+        expect(clonedResult.warnings).toEqual(result.warnings);
+        expect(result.warnings).toHaveLength(1);
+    });
+
+    it('warns when a self-closing unsupported inline HTML tag is dropped', () => {
+        const { warnings } = convertMarkdownToRequests('Look <img src="x.png"/> there');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('<img>');
+    });
+
+    it('warns and preserves text when an unsupported inline HTML opening tag is used', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<kbd>Ctrl</kbd>');
+        expect(warnings.some(w => w.includes('<kbd>'))).toBe(true);
+        // Text content between the tags is preserved even though the tag itself is ignored.
+        const allText = requests.filter(r => 'insertText' in r).map(r => r.insertText.text).join('');
+        expect(allText).toContain('Ctrl');
+    });
+
+    it('warns when an unparseable inline HTML fragment (e.g. a comment) is dropped', () => {
+        const { warnings } = convertMarkdownToRequests('Weird <!-- a comment --> tag');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatch(/Dropped unsupported inline HTML/);
+    });
+
+    // -----------------------------------------------------------------------
+    // Recognized-tag style fidelity (PR #61 review thread): <span>/<p>/<div>
+    // and table cells were silently discarding CSS declarations they didn't
+    // understand instead of warning like unsupported tags do.
+    // -----------------------------------------------------------------------
+    it('warns and drops the property for an unsupported CSS property inside a recognized <span>', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<span style="font-weight:bold">important</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('font-weight: bold');
+        expect(warnings[0]).toContain('<span>');
+        // Text is preserved even though the formatting is dropped.
+        const allText = requests.filter(r => 'insertText' in r).map(r => r.insertText.text).join('');
+        expect(allText).toContain('important');
+        // No bold text style request should have been generated.
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.bold === true)).toBe(false);
+    });
+
+    it('preserves outer span formatting after a nested unsupported span closes', () => {
+        const { requests } = convertMarkdownToRequests(
+            '<span style="color:#ff0000">before <span style="font-weight:bold">inner</span> after</span>',
+            1
+        );
+        const redRanges = requests
+            .filter(r => r.updateTextStyle?.textStyle?.foregroundColor?.color?.rgbColor?.red === 1)
+            .map(r => r.updateTextStyle.range);
+        expect(redRanges).toEqual([
+            { startIndex: 1, endIndex: 8 },
+            { startIndex: 8, endIndex: 13 },
+            { startIndex: 13, endIndex: 19 },
+        ]);
+    });
+
+    it('preserves outer span formatting around a nested supported span', () => {
+        const { requests } = convertMarkdownToRequests(
+            '<span style="color:#ff0000">before <span style="color:#00ff00">inner</span> after</span>',
+            1
+        );
+        const colorRanges = requests
+            .filter(r => r.updateTextStyle?.textStyle?.foregroundColor)
+            .map(r => ({
+                range: r.updateTextStyle.range,
+                color: r.updateTextStyle.textStyle.foregroundColor.color.rgbColor,
+            }));
+        expect(colorRanges).toEqual([
+            { range: { startIndex: 1, endIndex: 8 }, color: { red: 1, green: 0, blue: 0 } },
+            { range: { startIndex: 8, endIndex: 13 }, color: { red: 0, green: 1, blue: 0 } },
+            { range: { startIndex: 13, endIndex: 19 }, color: { red: 1, green: 0, blue: 0 } },
+        ]);
+    });
+
+    it('still warns for an unsupported declaration in a nested span', () => {
+        const { warnings } = convertMarkdownToRequests(
+            '<span style="color:#ff0000">before <span style="font-weight:bold">inner</span> after</span>',
+            1
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('font-weight: bold');
+        expect(warnings[0]).toContain('<span>');
+    });
+
+    it('warns for a recognized CSS property expressed in an unsupported format inside <span>', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<span style="color:red">important</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('color: red');
+        expect(warnings[0]).toContain('expected a 6-digit hex value');
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.foregroundColor)).toBe(false);
+    });
+
+    it('warns for font-size expressed in an unsupported unit inside <span>', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<span style="font-size:12px">important</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('font-size: 12px');
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.fontSize)).toBe(false);
+    });
+
+    it('reports multiple unhandled declarations on the same span separately', () => {
+        const { warnings } = convertMarkdownToRequests('<span style="font-weight:bold;text-decoration:underline">x</span>', 1);
+        expect(warnings).toHaveLength(2);
+        expect(warnings.some(w => w.includes('font-weight: bold'))).toBe(true);
+        expect(warnings.some(w => w.includes('text-decoration: underline'))).toBe(true);
+    });
+
+    it('warns when a recognized <p> block ignores an unsupported CSS property', () => {
+        const { warnings } = convertMarkdownToRequests('<p style="color:#ff0000">Colored paragraph</p>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('color: #ff0000');
+        expect(warnings[0]).toContain('<p>');
+    });
+
+    it('warns when a recognized <div> HTML block ignores an unsupported CSS property', () => {
+        const { warnings } = convertMarkdownToRequests('<div style="font-weight:bold">Block content</div>', 1);
+        expect(warnings.some(w => w.includes('font-weight: bold') && w.includes('<div>'))).toBe(true);
+    });
+
+    it('warns when a <p> with a validly formatted CSS property has it silently dropped', () => {
+        // The color IS in a supported format, but <p>/<div> wrappers never apply
+        // run-level formatting to their contained text (only <span> does), so
+        // this must still warn instead of being treated as "handled".
+        const { requests, warnings } = convertMarkdownToRequests('<p style="color:#ff0000">Colored paragraph</p>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('color: #ff0000');
+        expect(warnings[0]).toContain('only applied on inline elements like <span>');
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.foregroundColor)).toBe(false);
+    });
+
+    it('warns when text-align is used on an inline <span> where it cannot be applied', () => {
+        const { warnings } = convertMarkdownToRequests('<span style="text-align:center">x</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('text-align: center');
+        expect(warnings[0]).toContain('not <span>');
+    });
+
+    it('does not warn when text-align is used on a <p>, since it is applied there', () => {
+        const { warnings } = convertMarkdownToRequests('<p style="text-align:center">Centered</p>', 1);
+        expect(warnings).toEqual([]);
+    });
+
+    it('warns when a span with unsupported formatting appears inside a table cell', () => {
+        // Table cells route inline content (including HTML spans) through the same
+        // span handler, so the same fidelity warning must surface there too.
+        const { warnings } = convertMarkdownToRequests('| <span style="font-weight:bold">A</span> |\n| --- |\n| 1 |', 1);
+        expect(warnings.some(w => w.includes('font-weight: bold'))).toBe(true);
+    });
+
+    it('does not warn for markdown-generated table cell alignment styles', () => {
+        // markdown-it derives a `style="text-align:..."` attribute on th/td tokens
+        // straight from the `:---:`/`---:` separator syntax; that value must never
+        // trigger a false "unsupported CSS" warning.
+        const { warnings } = convertMarkdownToRequests('| Left | Center | Right |\n| :--- | :---: | ---: |\n| a | b | c |', 1);
+        expect(warnings).toEqual([]);
+    });
+
     // --- PR #30: horizontal rule border matches Google's native line ---
     // Guards the visual constant (#878787 / rgb 135/255 ≈ 0.5294, 1pt) so a
     // later formatter refactor can't silently revert it back to the lighter
     // 0.75 grey. See finalizeFormatting() in markdownToDocs.js.
     it('styles horizontal rules with the native rule color and 1pt width', () => {
-        const requests = convertMarkdownToRequests('Above\n\n---\n\nBelow', 1);
+        const { requests } = convertMarkdownToRequests('Above\n\n---\n\nBelow', 1);
         const hrRequest = requests.find(r =>
             r.updateParagraphStyle?.fields === 'borderBottom' &&
             r.updateParagraphStyle?.paragraphStyle?.borderBottom
@@ -512,7 +706,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('includes tabId in horizontal rule border request when provided', () => {
-        const requests = convertMarkdownToRequests('Above\n\n---\n\nBelow', 1, 'tab-7');
+        const { requests } = convertMarkdownToRequests('Above\n\n---\n\nBelow', 1, 'tab-7');
         const hrRequest = requests.find(r =>
             r.updateParagraphStyle?.fields === 'borderBottom' &&
             r.updateParagraphStyle?.paragraphStyle?.borderBottom
@@ -526,6 +720,19 @@ describe('convertMarkdownToRequests', () => {
 // formatInsertResult
 // ---------------------------------------------------------------------------
 describe('formatInsertResult', () => {
+    it('puts content-drop warnings before the success summary', () => {
+        const output = formatInsertResult({
+            warnings: ['Dropped image "diagram" (https://example.com/image.png).'],
+            totalElapsedMs: 1,
+            parseElapsedMs: 1,
+            totalRequests: 0,
+            requestsByType: {},
+            batchUpdate: { totalApiCalls: 0, totalElapsedMs: 0 },
+        });
+        expect(output).toMatch(/^WARNINGS \(content dropped\):/);
+        expect(output).toContain('Dropped image "diagram"');
+    });
+
     it('formats a complete result', () => {
         const result = {
             totalElapsedMs: 150,

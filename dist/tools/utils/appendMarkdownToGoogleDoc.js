@@ -11,6 +11,7 @@ export function register(server) {
         name: 'appendMarkdown',
         description: 'Best for adding new formatted content to the end of a document. ' +
             'Supports headings, bold, italic, strikethrough, links, tables, bullet/numbered lists, and rich markdown HTML extensions for underline, color, highlight, font, alignment, and blockquotes. ' +
+            'Does not support markdown images or raw HTML outside those listed extensions; unsupported content is omitted and reported as warnings in the result. Use insertImage for images. ' +
             'Use this instead of appendText when you need formatting. ' +
             'To edit existing content, use modifyText (single-location) or replaceDocumentWithMarkdown (section/full rewrite).',
         parameters: DocumentIdParameter.extend({
@@ -106,7 +107,10 @@ export function register(server) {
                 log.info(debugSummary);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 trackMutation(args.documentId);
-                return `${docUrl}\nSuccessfully appended ${markdown.length} characters of markdown.\n\n${debugSummary}`;
+                const warningNote = result.warnings?.length
+                    ? ` with ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (content dropped — see below)`
+                    : '';
+                return `${docUrl}\nSuccessfully appended ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error appending markdown: ${error.message}`);

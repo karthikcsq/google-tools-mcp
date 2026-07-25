@@ -16,20 +16,27 @@ export { docsJsonToMarkdown, checkMarkdownFidelity } from './docsToMarkdown.js';
 /** Formats InsertMarkdownResult into a concise human-readable debug summary. */
 export function formatInsertResult(result) {
     const lines = [];
+    if (result.warnings?.length) {
+        lines.push('WARNINGS (content dropped):');
+        for (const warning of result.warnings) {
+            lines.push(`  - ${warning}`);
+        }
+        lines.push('');
+    }
     lines.push(`Markdown insert completed in ${result.totalElapsedMs}ms`);
     lines.push(`  Parse: ${result.parseElapsedMs}ms`);
     lines.push(`  Requests: ${result.totalRequests} total (${Object.entries(result.requestsByType)
         .map(([k, v]) => `${v} ${k}`)
         .join(', ')})`);
     lines.push(`  API calls: ${result.batchUpdate.totalApiCalls} batchUpdate calls in ${result.batchUpdate.totalElapsedMs}ms`);
-    const { phases } = result.batchUpdate;
-    if (phases.delete.requests > 0) {
+    const phases = result.batchUpdate.phases;
+    if (phases?.delete?.requests > 0) {
         lines.push(`    Delete phase: ${phases.delete.requests} requests, ${phases.delete.apiCalls} calls, ${phases.delete.elapsedMs}ms`);
     }
-    if (phases.insert.requests > 0) {
+    if (phases?.insert?.requests > 0) {
         lines.push(`    Insert phase: ${phases.insert.requests} requests, ${phases.insert.apiCalls} calls, ${phases.insert.elapsedMs}ms`);
     }
-    if (phases.format.requests > 0) {
+    if (phases?.format?.requests > 0) {
         lines.push(`    Format phase: ${phases.format.requests} requests, ${phases.format.apiCalls} calls, ${phases.format.elapsedMs}ms`);
     }
     return lines.join('\n');
@@ -109,7 +116,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
         ...(options?.firstHeadingAsTitle && { firstHeadingAsTitle: true }),
         ...(defaultForegroundColor && { defaultForegroundColor }),
     };
-    const requests = convertMarkdownToRequests(markdown, startIndex, tabId, conversionOptions);
+    const { requests, warnings } = convertMarkdownToRequests(markdown, startIndex, tabId, conversionOptions);
     const parseElapsedMs = Math.round(performance.now() - parseStart);
     // Count requests by type
     const requestsByType = {};
@@ -119,6 +126,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
     }
     if (requests.length === 0) {
         return {
+            warnings,
             totalRequests: 0,
             requestsByType,
             parseElapsedMs,
@@ -137,6 +145,7 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
     }
     const batchUpdate = await executeBatchUpdateWithSplitting(docs, documentId, requests);
     return {
+        warnings,
         totalRequests: requests.length,
         requestsByType,
         parseElapsedMs,
