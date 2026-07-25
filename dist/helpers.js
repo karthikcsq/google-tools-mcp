@@ -441,29 +441,54 @@ export const capArrayByResponseBudget = (items, maxChars, dropFrom = 'start', ma
 // on each attempt and shrinks the array's own budget by the exact overshoot,
 // converging on a final payload that fits maxChars including its metadata.
 //
-// attachMetadata(cappedItems, truncated, totalCount, includedCount) must
-// return the exact value the caller will JSON.stringify and return: a full
-// object for get_thread/list_threads, or a full array for batch_get_threads.
+// attachMetadata(cappedItems, truncated, totalCount, includedCount, maxChars)
+// must return the exact value the caller will JSON.stringify and return: a
+// full object for get_thread/list_threads, or a full array for
+// batch_get_threads. It receives the target maxChars too, so it can measure
+// its own note text against whatever room is actually left (the same
+// "measure, don't guess" approach makeOmissionStub uses for its reason text)
+// instead of always emitting a fixed-length note that might not fit once the
+// array is down to a single stubbed item.
+//
+// maxChars here is the caller's real, external budget. It must never be
+// confused with the internal per-attempt array budget below: capArrayByResponseBudget
+// treats <= 0 as "no cap" (the documented opt-out), so once the internal
+// budget is squeezed toward 0 while chasing an oversized metadata cost, handing
+// it 0 or a negative number would silently flip back into "unlimited" and
+// return the oversized item in full, the inverse of what a tight budget asked
+// for. The loop below floors the internal budget at 1 specifically so it can
+// never collide with that sentinel; only the caller's original maxChars is
+// ever checked against <= 0 for the real opt-out.
+//
+// If even the smallest achievable payload (every item stubbed to its bare
+// skeleton, metadata note dropped to nothing) still exceeds maxChars, there is
+// no honest payload that both fits and means anything. Returning it anyway
+// would silently exceed the caller's budget, in the worst case by orders of
+// magnitude relative to what they asked for. This returns { ok: false,
+// minimumViableChars } instead so the caller can reject the request with a
+// concrete number rather than pretend the budget was honored.
 export const capToResponseBudget = (items, maxChars, dropFrom, makeStub, attachMetadata) => {
     const totalCount = items?.length ?? 0;
-    const untouched = attachMetadata(items || [], false, totalCount, totalCount);
+    const untouched = attachMetadata(items || [], false, totalCount, totalCount, maxChars);
     if (!maxChars || maxChars <= 0 || !totalCount || JSON.stringify(untouched).length <= maxChars) {
-        return untouched;
+        return { ok: true, payload: untouched };
     }
     let arrayBudget = maxChars;
     let payload = untouched;
+    let size = JSON.stringify(untouched).length;
     // Six attempts is generous headroom: each attempt measures the real
     // overshoot and shrinks the array's budget by exactly that much, so this
     // converges in one or two attempts in practice (metadata size only
     // shifts by a digit or two between attempts) and never loops needlessly.
     for (let attempt = 0; attempt < 6; attempt++) {
         const budget = capArrayByResponseBudget(items, arrayBudget, dropFrom, makeStub);
-        payload = attachMetadata(budget.items, true, totalCount, budget.includedCount);
-        const size = JSON.stringify(payload).length;
-        if (size <= maxChars || arrayBudget <= 0) return payload;
-        arrayBudget = Math.max(0, arrayBudget - (size - maxChars));
+        payload = attachMetadata(budget.items, true, totalCount, budget.includedCount, maxChars);
+        size = JSON.stringify(payload).length;
+        if (size <= maxChars) return { ok: true, payload };
+        if (arrayBudget <= 1) break; // already at the floor; further looping cannot shrink this further
+        arrayBudget = Math.max(1, arrayBudget - (size - maxChars));
     }
-    return payload;
+    return { ok: false, minimumViableChars: size, payload };
 };
 
 export const formatMessageMetadata = (message) => {

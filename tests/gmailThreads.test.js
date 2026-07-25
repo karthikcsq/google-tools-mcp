@@ -480,4 +480,190 @@ describe('Gmail thread output controls', () => {
         expect(result.messages[0].body).toHaveLength(50000);
         expect(result.responseTruncated).toBeUndefined();
     });
+
+    // -----------------------------------------------------------------------
+    // Boundary sweep (third merge-blocking review finding on PR #63): the
+    // second fix (0db2dda) held for the reported cases but inverted at small
+    // budgets. capArrayByResponseBudget treats maxChars <= 0 as its own
+    // "caller opted out" sentinel, and once the internal per-attempt budget
+    // in the convergence loop was squeezed toward 0 chasing an oversized
+    // metadata cost, it collided with that sentinel and silently returned
+    // the full, unbounded item, worse the tighter the caller's budget was
+    // set. A spot check at one or two budgets would not have caught this;
+    // only a sweep across the full range would. These sweep every
+    // maxResponseChars from 1 to 2000 against a real oversized single
+    // message/thread through the actual tool, for all three tools (their
+    // metadata attachment shapes all differ), and assert the invariant
+    // holds at every step: either the exact returned string fits maxChars,
+    // or the tool rejects the request naming a minimum larger than what was
+    // asked for. Neither outcome may ever be "the full oversized payload".
+    // -----------------------------------------------------------------------
+    const SWEEP_STEP = 41; // coprime-ish with common round numbers, covers the 1-2000 range in ~49 steps per tool
+
+    it('get_thread: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
+        for (let maxResponseChars = 1; maxResponseChars <= 2000; maxResponseChars += SWEEP_STEP) {
+            getThread.mockResolvedValueOnce({
+                data: {
+                    id: 'thread-sweep',
+                    messages: [
+                        {
+                            id: 'sweep-message-1',
+                            payload: {
+                                mimeType: 'text/plain',
+                                headers: [],
+                                body: { data: Buffer.from('y'.repeat(50000)).toString('base64') },
+                            },
+                        },
+                    ],
+                },
+            });
+
+            try {
+                const raw = await getThreadTool.execute({
+                    id: 'thread-sweep',
+                    format: 'clean',
+                    maxBodyChars: 0,
+                    maxResponseChars,
+                });
+                expect(raw.length).toBeLessThanOrEqual(maxResponseChars);
+                expect(raw).not.toContain('yyyyyyyyyy');
+            } catch (err) {
+                // Honest refusal is acceptable; silently exceeding is not.
+                expect(err.message).toMatch(/maxResponseChars/);
+                expect(err.message).not.toContain('yyyyyyyyyy');
+            }
+        }
+    });
+
+    it('list_threads: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
+        for (let maxResponseChars = 1; maxResponseChars <= 2000; maxResponseChars += SWEEP_STEP) {
+            listThreads.mockResolvedValueOnce({ data: { threads: [{ id: 'sweep-t1' }] } });
+            getThread.mockResolvedValueOnce({
+                data: {
+                    id: 'sweep-t1',
+                    messages: [
+                        {
+                            id: 'sweep-m1',
+                            payload: {
+                                mimeType: 'text/plain',
+                                headers: [],
+                                body: { data: Buffer.from('y'.repeat(50000)).toString('base64') },
+                            },
+                        },
+                    ],
+                },
+            });
+
+            try {
+                const raw = await listThreadsTool.execute({
+                    format: 'clean',
+                    maxBodyChars: 0,
+                    maxResponseChars,
+                });
+                expect(raw.length).toBeLessThanOrEqual(maxResponseChars);
+                expect(raw).not.toContain('yyyyyyyyyy');
+            } catch (err) {
+                expect(err.message).toMatch(/maxResponseChars/);
+                expect(err.message).not.toContain('yyyyyyyyyy');
+            }
+        }
+    });
+
+    it('batch_get_threads: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
+        for (let maxResponseChars = 1; maxResponseChars <= 2000; maxResponseChars += SWEEP_STEP) {
+            getThread.mockResolvedValueOnce({
+                data: {
+                    id: 'sweep-bt1',
+                    messages: [
+                        {
+                            id: 'sweep-bm1',
+                            payload: {
+                                mimeType: 'text/plain',
+                                headers: [],
+                                body: { data: Buffer.from('y'.repeat(50000)).toString('base64') },
+                            },
+                        },
+                    ],
+                },
+            });
+
+            try {
+                const raw = await batchGetThreadsTool.execute({
+                    ids: ['sweep-bt1'],
+                    format: 'clean',
+                    maxBodyChars: 0,
+                    maxResponseChars,
+                });
+                expect(raw.length).toBeLessThanOrEqual(maxResponseChars);
+                expect(raw).not.toContain('yyyyyyyyyy');
+            } catch (err) {
+                expect(err.message).toMatch(/maxResponseChars/);
+                expect(err.message).not.toContain('yyyyyyyyyy');
+            }
+        }
+    });
+
+    it('get_thread: maxResponseChars: 0 remains genuinely unbounded after the sentinel fix, even for an oversized message', async () => {
+        getThread.mockResolvedValueOnce({
+            data: {
+                id: 'thread-still-unbounded',
+                messages: [
+                    {
+                        id: 'message-1',
+                        payload: {
+                            mimeType: 'text/plain',
+                            headers: [],
+                            body: { data: Buffer.from('y'.repeat(50000)).toString('base64') },
+                        },
+                    },
+                ],
+            },
+        });
+
+        const raw = await getThreadTool.execute({
+            id: 'thread-still-unbounded',
+            format: 'clean',
+            maxBodyChars: 0,
+            maxResponseChars: 0,
+        });
+
+        const result = JSON.parse(raw);
+        expect(result.messages[0].body).toHaveLength(50000);
+        expect(result.messages[0].responseOmitted).toBeUndefined();
+        expect(result.responseTruncated).toBeUndefined();
+    });
+
+    it('get_thread: rejects with a UserError naming a concrete minimum when maxResponseChars is too small for any valid payload', async () => {
+        getThread.mockResolvedValueOnce({
+            data: {
+                id: 'thread-impossible',
+                messages: [
+                    {
+                        id: 'message-1',
+                        payload: {
+                            mimeType: 'text/plain',
+                            headers: [],
+                            body: { data: Buffer.from('y'.repeat(50000)).toString('base64') },
+                        },
+                    },
+                ],
+            },
+        });
+
+        let thrown;
+        try {
+            await getThreadTool.execute({
+                id: 'thread-impossible',
+                format: 'clean',
+                maxBodyChars: 0,
+                maxResponseChars: 5,
+            });
+        } catch (err) {
+            thrown = err;
+        }
+        expect(thrown).toBeDefined();
+        expect(thrown.message).toContain('maxResponseChars (5)');
+        expect(thrown.message).toMatch(/too small/i);
+        expect(thrown.message).toMatch(/\d+ characters/);
+    });
 });

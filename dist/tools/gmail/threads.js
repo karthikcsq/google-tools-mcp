@@ -1,5 +1,6 @@
 // Gmail Thread tools
 import { z } from 'zod';
+import { UserError } from 'fastmcp';
 import { getGmailClient } from '../../clients.js';
 import { processMessagePart, formatMessageClean, formatMessageMetadata, capToResponseBudget, makeOmissionStub, DEFAULT_MAX_RESPONSE_CHARS } from '../../helpers.js';
 
@@ -18,27 +19,57 @@ const messageOmissionStub = (maxResponseChars) => (message, budgetForStub) => ma
 const threadOmissionStub = (maxResponseChars) => (thread, budgetForStub) => makeOmissionStub(thread, budgetForStub, id =>
     `This thread alone is larger than maxResponseChars (${maxResponseChars}), even after per-message capping. Fetch it directly with get_thread using id: "${id}" and a larger maxResponseChars, a smaller maxMessages, or format: 'metadata'.`);
 
+// Truncates fullNote to whatever room remains so that adding it to an object
+// already measured at baseSize (before the note key exists) keeps the whole
+// thing at or under maxChars. The same "measure the real remaining room,
+// don't guess a constant" approach makeOmissionStub already uses for its
+// reason text. Returns '' when there is no room left at all, so the caller
+// can skip attaching the key entirely rather than add a useless empty note.
+const boundedNote = (fullNote, baseSize, maxChars) => {
+    if (!maxChars || maxChars <= 0) return fullNote;
+    // Reserve a little extra for the "truncationNote" key, its quotes, and
+    // the comma joining it to what is already in the object.
+    const room = Math.max(0, maxChars - baseSize - 20);
+    return room > 0 ? fullNote.slice(0, room) : '';
+};
+
 // Applies the whole-response character budget to a thread's formatted
 // messages array, keeping the latest messages (dropping oldest-first),
-// stamping truncation metadata directly on the thread object, and replacing
-// a still-oversized last message with a bounded stub. Caps against the real
-// serialized size of the whole thread object (not just its messages array),
-// so headers, snippet, and every other field the Gmail API attaches are
-// accounted for too, and reserves room for its own truncation metadata by
-// measuring it rather than guessing a constant.
+// stamping truncation metadata directly on the thread object (degrading its
+// own note text to whatever room is left rather than a fixed length), and
+// replacing a still-oversized last message with a bounded stub. Caps against
+// the real serialized size of the whole thread object (not just its messages
+// array), so headers, snippet, and every other field the Gmail API attaches
+// are accounted for too.
+//
+// If even the smallest possible response for this thread, every message
+// stubbed, the note dropped, still cannot fit maxResponseChars, there is no
+// honest payload to return: this throws a UserError naming the measured
+// minimum instead of silently shipping something far larger than requested.
 const capThreadMessages = (thread, maxResponseChars) => {
     if (!thread.messages) return thread;
     const items = thread.messages;
-    capToResponseBudget(items, maxResponseChars, 'start', messageOmissionStub(maxResponseChars), (capped, truncated, totalCount, includedCount) => {
+    const result = capToResponseBudget(items, maxResponseChars, 'start', messageOmissionStub(maxResponseChars), (capped, truncated, totalCount, includedCount, maxChars) => {
         thread.messages = capped;
         if (truncated) {
             thread.responseTruncated = true;
             thread.totalMessages = totalCount;
             thread.includedMessages = includedCount;
-            thread.truncationNote = `Showing the latest ${includedCount} of ${totalCount} messages to stay under maxResponseChars (${maxResponseChars}). Use maxMessages, messageIds, format:'metadata', or a smaller maxBodyChars to fetch specific messages, or raise/zero maxResponseChars for the rest.`;
+            const fullNote = `Showing the latest ${includedCount} of ${totalCount} messages to stay under maxResponseChars (${maxResponseChars}). Use maxMessages, messageIds, format:'metadata', or a smaller maxBodyChars to fetch specific messages, or raise/zero maxResponseChars for the rest.`;
+            const note = boundedNote(fullNote, JSON.stringify(thread).length, maxChars);
+            if (note) thread.truncationNote = note;
+            else delete thread.truncationNote;
+        } else {
+            delete thread.responseTruncated;
+            delete thread.totalMessages;
+            delete thread.includedMessages;
+            delete thread.truncationNote;
         }
         return thread;
     });
+    if (!result.ok) {
+        throw new UserError(`maxResponseChars (${maxResponseChars}) is too small to return this thread, even with every message reduced to a bare size-omission stub. The smallest possible response for this thread is about ${result.minimumViableChars} characters. Retry with a larger maxResponseChars (at least ${result.minimumViableChars}), or use format: 'metadata' for a much smaller response.`);
+    }
     return thread;
 };
 
@@ -122,16 +153,22 @@ export function register(server) {
                     })
                 );
                 const threads = data.threads;
-                capToResponseBudget(threads, params.maxResponseChars, 'end', threadOmissionStub(params.maxResponseChars), (capped, truncated, totalCount, includedCount) => {
+                const threadsResult = capToResponseBudget(threads, params.maxResponseChars, 'end', threadOmissionStub(params.maxResponseChars), (capped, truncated, totalCount, includedCount, maxChars) => {
                     data.threads = capped;
                     if (truncated) {
                         data.responseTruncated = true;
                         data.totalThreads = totalCount;
                         data.includedThreads = includedCount;
-                        data.truncationNote = `Showing ${includedCount} of ${totalCount} threads fetched this call to stay under maxResponseChars (${params.maxResponseChars}). Use pageToken to continue, a smaller maxResults/maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`;
+                        const fullNote = `Showing ${includedCount} of ${totalCount} threads fetched this call to stay under maxResponseChars (${params.maxResponseChars}). Use pageToken to continue, a smaller maxResults/maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`;
+                        const note = boundedNote(fullNote, JSON.stringify(data).length, maxChars);
+                        if (note) data.truncationNote = note;
+                        else delete data.truncationNote;
                     }
                     return data;
                 });
+                if (!threadsResult.ok) {
+                    throw new UserError(`maxResponseChars (${params.maxResponseChars}) is too small to return any threads for this call, even a single thread reduced to a bare size-omission stub. The smallest possible response is about ${threadsResult.minimumViableChars} characters. Retry with a larger maxResponseChars, fewer maxResults, or format: 'metadata'.`);
+                }
             }
             return JSON.stringify(data);
         },
@@ -171,7 +208,7 @@ export function register(server) {
                     }
                 })
             );
-            const output = capToResponseBudget(results, params.maxResponseChars, 'end', threadOmissionStub(params.maxResponseChars), (capped, truncated, totalCount, includedCount) => {
+            const batchResult = capToResponseBudget(results, params.maxResponseChars, 'end', threadOmissionStub(params.maxResponseChars), (capped, truncated, totalCount, includedCount, maxChars) => {
                 if (!truncated) return capped;
                 const withMetadata = capped.slice();
                 const lastIndex = withMetadata.length - 1;
@@ -180,11 +217,16 @@ export function register(server) {
                     batchResponseTruncated: true,
                     totalThreadsRequested: totalCount,
                     includedThreads: includedCount,
-                    truncationNote: `Only ${includedCount} of ${totalCount} requested threads are included to stay under maxResponseChars (${params.maxResponseChars}). Re-run with fewer ids, a smaller maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`,
                 };
+                const fullNote = `Only ${includedCount} of ${totalCount} requested threads are included to stay under maxResponseChars (${params.maxResponseChars}). Re-run with fewer ids, a smaller maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`;
+                const note = boundedNote(fullNote, JSON.stringify(withMetadata).length, maxChars);
+                if (note) withMetadata[lastIndex] = { ...withMetadata[lastIndex], truncationNote: note };
                 return withMetadata;
             });
-            return JSON.stringify(output);
+            if (!batchResult.ok) {
+                throw new UserError(`maxResponseChars (${params.maxResponseChars}) is too small to return any of the requested threads, even a single thread reduced to a bare size-omission stub. The smallest possible response is about ${batchResult.minimumViableChars} characters. Retry with a larger maxResponseChars, fewer ids, or format: 'metadata'.`);
+            }
+            return JSON.stringify(batchResult.payload);
         },
     });
 
