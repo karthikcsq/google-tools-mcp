@@ -291,7 +291,7 @@ Google Maps and Places tools for geocoding, reverse geocoding, nearby and text s
 
 `mapsGeocode`, `mapsReverseGeocode`, `mapsSearchNearby`, `mapsSearchPlaces`, `mapsPlaceDetails`, `mapsDirections`
 
-These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key separate from Google OAuth. Enable the Geocoding API, Places API (New), and Routes API for the key.
+These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separate from the Google OAuth credentials used everywhere else and not covered by the setup wizard or by [Step 1](#step-1-create-google-oauth-credentials) above. To get one: enable the **Geocoding API**, **Places API (New)**, and **Routes API** for your Google Cloud project, then go to **Credentials** → **Create Credentials** → **API key**, and set it as `GOOGLE_MAPS_API_KEY`. Without it, the `maps` tools are still listed, but calling any of them fails with a clear error telling you to set the key.
 
 ## Environment Variables
 
@@ -304,7 +304,7 @@ These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key separa
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
-| `GOOGLE_MAPS_API_KEY` | For Maps tools | Google Maps Platform API key (separate from OAuth) |
+| `GOOGLE_MAPS_API_KEY` | No | Google Maps Platform API key (separate from OAuth). Without it, `maps` tools remain listed but fail with a clear error when called |
 
 \* Not required as env vars if you provide credentials via `.env` file or `credentials.json` (see [Step 2](#step-2-provide-your-credentials)).
 
