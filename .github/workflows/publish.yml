@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: publish
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # npm Trusted Publishing exchanges this short-lived GitHub Actions identity for
 # publish access. No npm token is stored in this repository.
@@ -18,6 +18,13 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Requires a "npm-publish" GitHub environment with at least one required
+    # reviewer (see RELEASING.md). The ancestry check below only proves the
+    # tagged commit is reachable from main, not that a release was approved;
+    # this environment gate adds that approval step, and its name must match
+    # the "Environment name" configured on npm's trusted publisher so the
+    # OIDC identity npm expects lines up with the one this job presents.
+    environment: npm-publish
 
     steps:
       - name: Checkout
