@@ -243,6 +243,8 @@ This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default 
 
 `dist/` is the hand-edited source for this repository. It contains plain JavaScript; there is no TypeScript, bundler, or build step.
 
+A few files under `dist/` still carry a leftover header comment naming a `src/*.ts` path (for example, `dist/types.js` starts with `// src/types.ts`) from before this repo was forked. No such source file exists here; treat the comment as stale and edit the `.js` file directly.
+
 Run the server directly from a clone:
 
 ```bash
