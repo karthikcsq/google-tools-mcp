@@ -266,8 +266,8 @@ Launching directly (`node dist/index.js`, or the global-install path below) is f
 **Where to look:** MCP clients that log per-server connection attempts will show the exact timing. For Claude Code, per-server logs live at:
 
 - **Windows:** `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project-slug>\mcp-logs-google\*.jsonl`
-- **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (inferred from Claude Code's per-OS cache convention, not independently confirmed)
-- **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir — likewise inferred, not independently confirmed; if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
+- **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` — the `claude-cli-nodejs` cache root and per-server log folder are corroborated by an independent user report ([anthropics/claude-code#18869](https://github.com/anthropics/claude-code/issues/18869)), though not confirmed with this exact server name
+- **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir — unconfirmed; if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
 
 Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. google-tools-mcp itself also logs its own startup time on the server's first ready line (e.g. `MCP Server running using stdio in 1123ms`), so if the server logs a fast startup but the client still reports a near-30000ms connection time, the delay is happening before the server process even starts — i.e. in `npx`, not in the server.
 
