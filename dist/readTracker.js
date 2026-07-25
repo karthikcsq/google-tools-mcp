@@ -35,10 +35,16 @@ export function trackRead(fileId, modifiedTime, content, revisionId) {
  *
  * @param fileId - The file/document/spreadsheet ID
  * @param opts.skipExternalCheck - If true, skip the Drive API modifiedTime check (for performance)
- * @param opts.contentFetcher - Optional async () => string. If provided and an
- *   external-change conflict is detected, the fetcher is used to grab current
- *   content and the UserError message will include a unified diff plus rebase
- *   instructions rather than a plain error.
+ * @param opts.contentFetcher - Optional async () => (string | { content: string, revisionId?: string|null }).
+ *   If provided and an external-change conflict is detected, the fetcher is used to grab current
+ *   content (and, for Google Docs, the revision that content came from) and the UserError message
+ *   will include a unified diff plus rebase instructions rather than a plain error. When the fetcher
+ *   returns an object with `revisionId`, that revision is stored as the new baseline atomically with
+ *   the content/modifiedTime refresh below, so a subsequent rebased write is guarded against the
+ *   version the diff was actually taken from rather than the pre-external-edit revision. When the
+ *   fetcher returns a bare string (or omits revisionId), the revision can't be known to be current,
+ *   so it is cleared instead of left stale — the next write then goes out unguarded rather than with
+ *   a guaranteed-stale requiredRevisionId.
  */
 export async function guardMutation(fileId, opts) {
     const entry = readLog.get(fileId);
@@ -80,8 +86,22 @@ export async function guardMutation(fileId, opts) {
                 // model can rebase its edit on top of the new version.
                 if (entry.content && typeof opts?.contentFetcher === 'function') {
                     let currentContent;
+                    let currentRevisionId;
                     try {
-                        currentContent = await opts.contentFetcher();
+                        const fetched = await opts.contentFetcher();
+                        if (fetched && typeof fetched === 'object') {
+                            currentContent = fetched.content;
+                            currentRevisionId = typeof fetched.revisionId === 'string' ? fetched.revisionId : null;
+                        } else {
+                            currentContent = fetched;
+                            // A bare-string fetcher can't tell us the revision the
+                            // content came from. Clear rather than keep the
+                            // pre-external-edit revisionId around: a cleared
+                            // revision sends the next write out unguarded, which
+                            // is safe; a stale one sends it out with a
+                            // requiredRevisionId that is guaranteed to conflict.
+                            currentRevisionId = null;
+                        }
                     } catch (fetchError) {
                         logger.warn(`contentFetcher failed for ${fileId}: ${fetchError.message}`);
                     }
@@ -94,10 +114,16 @@ export async function guardMutation(fileId, opts) {
                             'current',
                             { context: 3 }
                         );
-                        // Refresh the snapshot so a subsequent read/mutation
-                        // works against the new baseline.
+                        // Refresh content, modifiedTime, AND revisionId together
+                        // (atomically, in the same tick) so a subsequent rebased
+                        // write is guarded against the version this diff was
+                        // actually taken from — not the pre-external-edit
+                        // revision, which would otherwise cause a second,
+                        // confusing conflict even when the caller correctly
+                        // rebuilt its edit from the diff above.
                         entry.content = currentContent;
                         entry.modifiedTime = currentModifiedTime;
+                        entry.revisionId = currentRevisionId;
                         throw new UserError(
                             `This file was modified externally since you last read it ` +
                             `(last read: ${readAt}, last modified: ${currentModifiedTime}).\n\n` +

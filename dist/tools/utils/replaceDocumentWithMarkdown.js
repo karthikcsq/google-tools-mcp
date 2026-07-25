@@ -37,7 +37,11 @@ export function register(server) {
             await guardMutation(args.documentId, {
                 contentFetcher: async () => {
                     const current = await docs.documents.get({ documentId: args.documentId });
-                    return docsJsonToMarkdown(current.data);
+                    // Return the revision this content came from alongside the
+                    // content itself so guardMutation can refresh both together
+                    // instead of leaving revisionId stale after a diff (see
+                    // readTracker.js guardMutation for why that matters).
+                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
                 },
             });
             // Resolve markdown content from filePath or inline parameter
