@@ -6,16 +6,18 @@ import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
+import { writeWorkspaceFile } from '../../workspace.js';
 export function register(server) {
     server.addTool({
         name: 'replaceDocumentWithMarkdown',
         description: "Best for rewriting entire sections or full documents. Replaces the entire document body with content parsed from markdown. " +
             "Supports headings, bold, italic, strikethrough, links, tables, bullet/numbered lists, and rich markdown HTML extensions for underline, color, highlight, font, alignment, and blockquotes. " +
             "Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes. " +
+            "PREFERRED WORKFLOW for large edits: readDocument saves the content to a local working-copy file and returns its path — edit that file, then pass it here as filePath instead of inline markdown, to avoid truncation and get a reviewable diff before pushing. " +
             "For small single-location edits (one line or paragraph), use modifyText instead. " +
             "To add content without rewriting, use appendMarkdown.",
         parameters: DocumentIdParameter.extend({
-            markdown: z.string().optional().describe('The markdown content to apply to the document. For content longer than ~2000 characters, prefer writing to a local file first and passing filePath instead.'),
+            markdown: z.string().optional().describe('Inline markdown content. Prefer filePath instead for content longer than ~2000 characters — use the working-copy path returned by readDocument, edit that file, then pass it here.'),
             filePath: z.string().optional().describe('Path to a local markdown file to use as content. Takes precedence over the markdown parameter. Use this for large documents to avoid truncation.'),
             preserveTitle: z
                 .boolean()
@@ -167,6 +169,24 @@ export function register(server) {
                 const debugSummary = formatInsertResult(result);
                 log.info(debugSummary);
                 trackMutation(args.documentId);
+                // Mirror the pushed markdown to the local workspace only now that the
+                // Docs mutation has actually succeeded and been tracked. Writing this
+                // earlier (before the fetch/delete/cleanup/insert sequence above)
+                // meant that if any of those steps failed, the local file held content
+                // that was never committed to the document; worse, if the delete
+                // succeeded but the insert failed, the workspace file would show the
+                // full intended result while the document itself was left partial.
+                // Scoped by tabId so it lines up with the per-tab file readDocument
+                // created. Non-fatal: a failure to save the mirror doesn't undo an
+                // already-successful Docs write, so we log and continue.
+                if (!args.filePath) {
+                    try {
+                        const workspacePath = await writeWorkspaceFile(args.documentId, markdown, args.tabId);
+                        log.info(`Saved working copy to ${workspacePath}`);
+                    } catch (e) {
+                        log.info(`Could not save working copy: ${e.message}`);
+                    }
+                }
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully replaced document content with ${markdown.length} characters of markdown.\n\n${debugSummary}`;
             }

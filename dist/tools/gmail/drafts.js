@@ -6,7 +6,7 @@ import { processMessagePart, constructRawMessage, constructRawMessageWithAttachm
 
 export function register(server) {
     server.addTool({
-        name: 'create_draft',
+        name: 'createDraft',
         description: 'Create a draft email in Gmail. Note the mechanics of the raw parameter.',
         parameters: z.object({
             raw: z.string().optional().describe("The entire email message in base64url encoded RFC 2822 format, ignores params.to, cc, bcc, subject, body, includeBodyHtml if provided"),
@@ -46,7 +46,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'update_draft',
+        name: 'updateDraft',
         description: 'Update an existing draft\'s content. Replaces the draft message with new content.',
         parameters: z.object({
             id: z.string().describe("The ID of the draft to update"),
@@ -87,7 +87,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'delete_draft',
+        name: 'deleteDraft',
         description: 'Delete a draft',
         parameters: z.object({
             id: z.string().describe("The ID of the draft to delete"),
@@ -100,7 +100,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'get_draft',
+        name: 'getDraft',
         description: 'Get a specific draft by ID',
         parameters: z.object({
             id: z.string().describe("The ID of the draft to retrieve"),
@@ -117,7 +117,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'list_drafts',
+        name: 'listDrafts',
         description: 'List drafts in the user\'s mailbox',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of drafts to return (1-500)"),
@@ -147,7 +147,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'send_draft',
+        name: 'sendDraft',
         description: 'Send an existing draft',
         parameters: z.object({
             id: z.string().describe("The ID of the draft to send"),

@@ -50,6 +50,7 @@
   ],
   "scripts": {
     "local:tool": "node scripts/call-local-tool.js",
+    "start": "node dist/index.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:ci": "node --experimental-vm-modules node_modules/jest/bin/jest.js --ci --coverage"
   },

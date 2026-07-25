@@ -4,7 +4,7 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'list_calendars',
+        name: 'listCalendars',
         description:
             'Lists all calendars accessible to the authenticated user. Returns calendar name, ID, access role, and whether it is the primary calendar.',
         parameters: z.object({}),

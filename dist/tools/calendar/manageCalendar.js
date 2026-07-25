@@ -4,7 +4,7 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'manage_calendar',
+        name: 'manageCalendar',
         description:
             'Create, update, or delete a calendar. Use this to create project-specific calendars, ' +
             'rename calendars, change timezone/description, or remove calendars you own.',
@@ -107,7 +107,7 @@ export function register(server) {
                 throw new UserError(`Unknown action: ${args.action}`);
             } catch (error) {
                 if (error instanceof UserError) throw error;
-                log.error(`Error in manage_calendar (${args.action}): ${error.message || error}`);
+                log.error(`Error in manageCalendar (${args.action}): ${error.message || error}`);
                 if (error.code === 404)
                     throw new UserError('Calendar not found. Check the calendar_id.');
                 if (error.code === 403)
