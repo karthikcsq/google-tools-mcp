@@ -239,6 +239,51 @@ Set the `GOOGLE_MCP_PROFILE` env var to use separate tokens per profile:
 
 This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default directory.
 
+## Development / Contributing
+
+`dist/` is the hand-edited source for this repository. It contains plain JavaScript; there is no TypeScript, bundler, or build step.
+
+A few files under `dist/` still carry a leftover header comment naming a `src/*.ts` path (for example, `dist/types.js` starts with `// src/types.ts`) from before this repo was forked. No such source file exists here; treat the comment as stale and edit the `.js` file directly.
+
+Run the server directly from a clone:
+
+```bash
+npm install
+npm start
+# Equivalent: node dist/index.js
+```
+
+To make an MCP client run the clone instead of the published package, use an absolute path in its configuration. Pin `command` to the absolute Node executable too, not a bare `node`: desktop and GUI MCP clients often launch with a minimal PATH that doesn't include `node` (this is especially common with nvm, volta, or fnm), even when `node` resolves fine in your own shell. Confirming `node` works in a terminal doesn't prove what the GUI client's process can resolve, since it may not inherit your shell's PATH at all, so hand it the resolved path directly. Get that path with:
+
+```bash
+node -p "process.execPath"
+```
+
+Then use that output as `command`:
+
+```json
+{
+  "mcpServers": {
+    "google": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/google-tools-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+On Windows, write both paths with forward slashes (`C:/Users/you/google-tools-mcp/dist/index.js`) or escape backslashes (`C:\\Users\\...`) — a bare `C:\Users\...` is invalid JSON.
+
+Alternatively, link the clone into npm's global executable directory, then configure the client with `"command": "google-tools-mcp"`. This has the same bare-command risk described above: a GUI client's PATH doesn't have to match your shell's, so after linking, resolve the absolute path once with `command -v google-tools-mcp` (macOS/Linux) or `where google-tools-mcp` (Windows) and put that path in `command` instead of the bare name.
+
+```bash
+cd /absolute/path/to/google-tools-mcp
+npm install
+npm link
+```
+
+Watch for source/runtime drift: editing a clone has no effect while the MCP client still launches `npx google-tools-mcp` or a separately installed global copy. Check the client's configured command and arguments, then use `command -v google-tools-mcp` (macOS/Linux) or `where google-tools-mcp` (Windows) to see which executable is selected. Restart the MCP client after changing its configuration or relinking.
+
 ## Tool Categories
 
 ### `files` (18 tools)
@@ -286,6 +331,14 @@ Google Forms — create/read forms, manage responses, and publish settings.
 
 `create_form`, `get_form`, `batch_update_form`, `get_form_response`, `list_form_responses`, `set_publish_settings`
 
+## Local Working Copies
+
+`readDocument` (markdown format) saves what it reads to a local working-copy file, keyed by document ID and tab, so you can edit that file directly and push it back with `replaceDocumentWithMarkdown` using `filePath` instead of pasting content inline. `replaceDocumentWithMarkdown` also mirrors any inline `markdown=` push into that same file, so it always reflects what's actually on the document.
+
+If the document contains content markdown can't represent (images, footnotes, a generated table of contents, or other Docs elements with no markdown equivalent), `readDocument` appends a warning after the markdown listing exactly what a full `replaceDocumentWithMarkdown` push would permanently remove. Use `modifyText` or `appendMarkdown` instead for those documents.
+
+These files live in a per-user directory under the OS temp dir (`google-tools-mcp-<user>`), created with restrictive permissions and checked on every write so a planted symlink is refused rather than followed. Set `GOOGLE_MCP_WORKSPACE_DIR` to use a different directory instead.
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -295,6 +348,7 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
+| `GOOGLE_MCP_WORKSPACE_DIR` | No | Overrides where local working copies of Google Docs are saved (see [Local working copies](#local-working-copies)). Defaults to a per-user directory under the OS temp dir |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
 
@@ -311,3 +365,8 @@ This package replaces both [`gdrive-tools-mcp`](https://www.npmjs.com/package/gd
 ## License
 
 MIT
+
+## Releasing
+
+Maintainers: see [RELEASING.md](RELEASING.md) for the tag-triggered npm
+publishing workflow and its one-time trusted-publisher setup.

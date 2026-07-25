@@ -189,6 +189,10 @@ const CODE_BACKGROUND_HEX = '#F1F3F4';
 // These constants define the visual style for programmatically created code blocks.
 const CODE_BLOCK_BG_RGB = { red: 0.937, green: 0.945, blue: 0.953 }; // #EFF1F3
 const CODE_BLOCK_BORDER_RGB = { red: 0.855, green: 0.863, blue: 0.878 }; // #DADCE0
+// Google's native horizontal-rule color, #878787 (rgb 135/255) — measured by
+// rasterizing a PDF export of a doc containing a native (Insert > Horizontal
+// line) rule. See the horizontal rule styling comment below for context.
+const HR_BORDER_RGB = { red: 0.5294117647, green: 0.5294117647, blue: 0.5294117647 }; // #878787
 // IMPORTANT: The Google Docs API always inserts a newline character ("\n") BEFORE
 // the table when processing an insertTable request. So calling insertTable at index T
 // produces the following document structure:
@@ -1186,7 +1190,18 @@ function finalizeFormatting(context) {
             },
         });
     }
-    // Horizontal rule styling (bottom border on empty paragraphs)
+    // Horizontal rule styling (bottom border on empty paragraphs).
+    //
+    // The Google Docs REST API cannot insert a true native horizontal rule
+    // (the `horizontalRule` ParagraphElement produced by Insert > Horizontal
+    // line); that remains an open API limitation
+    // (https://issuetracker.google.com/issues/152996327). A bottom border on
+    // an empty paragraph is the closest achievable emulation.
+    //
+    // Color/weight are matched to Google's native rule, which renders at
+    // #878787 (rgb 135/255) and 1pt thick — measured by rasterizing a PDF
+    // export of a doc containing native rules. The previous value (0.75 grey,
+    // #bfbfbf) rendered noticeably lighter than the real thing.
     for (const hrRange of context.hrRanges) {
         const range = {
             startIndex: hrRange.startIndex,
@@ -1201,7 +1216,7 @@ function finalizeFormatting(context) {
                 paragraphStyle: {
                     borderBottom: {
                         color: {
-                            color: { rgbColor: { red: 0.75, green: 0.75, blue: 0.75 } },
+                            color: { rgbColor: HR_BORDER_RGB },
                         },
                         width: { magnitude: 1, unit: 'PT' },
                         padding: { magnitude: 6, unit: 'PT' },

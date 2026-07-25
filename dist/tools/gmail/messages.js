@@ -1,7 +1,7 @@
 // Gmail Message tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
+import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, foldHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
 
 export function register(server) {
     server.addTool({
@@ -111,12 +111,12 @@ export function register(server) {
             const fullBody = params.body + quotedContent;
             // Build raw message
             const msgHeaders = [];
-            if (to?.length) msgHeaders.push(`To: ${to.join(', ')}`);
-            if (cc?.length) msgHeaders.push(`Cc: ${cc.join(', ')}`);
-            if (params.bcc?.length) msgHeaders.push(`Bcc: ${params.bcc.join(', ')}`);
-            msgHeaders.push(`Subject: ${subject}`);
-            if (messageIdHeader) msgHeaders.push(`In-Reply-To: ${messageIdHeader}`);
-            if (references.length) msgHeaders.push(`References: ${references.join(' ')}`);
+            if (to?.length) msgHeaders.push(foldHeader('To', to.join(', ')));
+            if (cc?.length) msgHeaders.push(foldHeader('Cc', cc.join(', ')));
+            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', params.bcc.join(', ')));
+            msgHeaders.push(foldHeader('Subject', subject));
+            if (messageIdHeader) msgHeaders.push(foldHeader('In-Reply-To', messageIdHeader));
+            if (references.length) msgHeaders.push(foldHeader('References', references.join(' ')));
             const htmlMode = isHtmlBody(params.body);
             let raw;
             if (params.attachments?.length) {
@@ -229,10 +229,10 @@ export function register(server) {
             }
             // Build raw message
             const msgHeaders = [];
-            msgHeaders.push(`To: ${params.to.join(', ')}`);
-            if (params.cc?.length) msgHeaders.push(`Cc: ${params.cc.join(', ')}`);
-            if (params.bcc?.length) msgHeaders.push(`Bcc: ${params.bcc.join(', ')}`);
-            msgHeaders.push(`Subject: ${subject}`);
+            msgHeaders.push(foldHeader('To', params.to.join(', ')));
+            if (params.cc?.length) msgHeaders.push(foldHeader('Cc', params.cc.join(', ')));
+            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', params.bcc.join(', ')));
+            msgHeaders.push(foldHeader('Subject', subject));
             const fwdHtmlMode = params.body && isHtmlBody(params.body);
             let raw;
             if (attachmentParts.length) {
@@ -279,26 +279,27 @@ export function register(server) {
 
     server.addTool({
         name: 'get_message',
-        description: 'Get a specific message by ID. format="clean" (default) returns from/to/subject/date/body as a flat object. format="metadata" returns headers only, no body. format="full" returns the raw MIME tree (current legacy behavior).',
+        description: 'Get a specific message by ID. Clean mode removes quoted reply history by default. Full mode returns the raw MIME tree with decoded text bodies limited by maxBodyChars.',
         parameters: z.object({
             id: z.string().describe("The ID of the message to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format: clean (default), metadata (headers only), or full (raw MIME tree)"),
-            maxBodyChars: z.number().optional().default(3000).describe("Max body characters in clean mode. 0 = unlimited. Truncated responses include bodyTruncated: true."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — the message body in clean mode, each MIME text part in full mode; not a whole-response cap. Truncated text carries bodyTruncated + totalChars; oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
+            includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
             const { data } = await gmail.users.messages.get({ userId: 'me', id: params.id, format: 'full' });
-            if (params.format === 'clean') return JSON.stringify(formatMessageClean(data, params.maxBodyChars));
+            if (params.format === 'clean') return JSON.stringify(formatMessageClean(data, params.maxBodyChars, params.includeQuoted));
             if (params.format === 'metadata') return JSON.stringify(formatMessageMetadata(data));
-            if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml);
+            if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml, params.maxBodyChars);
             return JSON.stringify(data);
         },
     });
 
     server.addTool({
         name: 'list_messages',
-        description: 'List messages in the user\'s mailbox with optional filtering. format="metadata" (default) auto-fetches message details for each result. format="clean" includes the message body. format="full" returns raw MIME data. Omit format to get bare IDs only.',
+        description: 'List messages with optional filtering. Clean mode removes quoted reply history by default. Full mode limits decoded text bodies with maxBodyChars. Omit format to get bare IDs only.',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of messages to return (1-500)"),
             pageToken: z.string().optional().describe("Page token to retrieve a specific page of results"),
@@ -306,7 +307,8 @@ export function register(server) {
             labelIds: z.array(z.string()).optional().describe("Only return messages with labels that match all specified label IDs"),
             includeSpamTrash: z.boolean().optional().describe("Include messages from SPAM and TRASH"),
             format: z.enum(['full', 'clean', 'metadata']).optional().describe("When set, auto-fetches full message details. metadata=headers only (default when set), clean=with body, full=raw MIME tree."),
-            maxBodyChars: z.number().optional().default(3000).describe("Max body characters in clean mode. 0 = unlimited."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
+            includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
@@ -324,9 +326,9 @@ export function register(server) {
                     data.messages.map(async ({ id }) => {
                         try {
                             const { data: msg } = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
-                            if (params.format === 'clean') return formatMessageClean(msg, params.maxBodyChars);
+                            if (params.format === 'clean') return formatMessageClean(msg, params.maxBodyChars, params.includeQuoted);
                             if (params.format === 'metadata') return formatMessageMetadata(msg);
-                            if (msg.payload) msg.payload = processMessagePart(msg.payload, params.includeBodyHtml);
+                            if (msg.payload) msg.payload = processMessagePart(msg.payload, params.includeBodyHtml, params.maxBodyChars);
                             return msg;
                         } catch (e) {
                             return { id, error: e.message || 'Failed to retrieve message' };
@@ -399,11 +401,12 @@ export function register(server) {
 
     server.addTool({
         name: 'batch_get_messages',
-        description: 'Get multiple messages by ID in parallel. More efficient than calling get_message multiple times.',
+        description: 'Get multiple messages by ID in parallel. Clean mode removes quoted reply history; full mode limits decoded text bodies with maxBodyChars.',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the messages to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format: clean (default), metadata (headers only), or full (raw MIME tree)"),
-            maxBodyChars: z.number().optional().default(3000).describe("Max body characters in clean mode. 0 = unlimited."),
+            maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
+            includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
         }),
         execute: async (params) => {
@@ -412,9 +415,9 @@ export function register(server) {
                 params.ids.map(async (id) => {
                     try {
                         const { data } = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
-                        if (params.format === 'clean') return formatMessageClean(data, params.maxBodyChars);
+                        if (params.format === 'clean') return formatMessageClean(data, params.maxBodyChars, params.includeQuoted);
                         if (params.format === 'metadata') return formatMessageMetadata(data);
-                        if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml);
+                        if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml, params.maxBodyChars);
                         return data;
                     } catch (error) {
                         return { id, error: error.message || 'Failed to retrieve message' };

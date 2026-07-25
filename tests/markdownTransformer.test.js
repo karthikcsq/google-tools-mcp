@@ -642,6 +642,35 @@ describe('convertMarkdownToRequests', () => {
         const { warnings } = convertMarkdownToRequests('| Left | Center | Right |\n| :--- | :---: | ---: |\n| a | b | c |', 1);
         expect(warnings).toEqual([]);
     });
+
+    // --- PR #30: horizontal rule border matches Google's native line ---
+    // Guards the visual constant (#878787 / rgb 135/255 ≈ 0.5294, 1pt) so a
+    // later formatter refactor can't silently revert it back to the lighter
+    // 0.75 grey. See finalizeFormatting() in markdownToDocs.js.
+    it('styles horizontal rules with the native rule color and 1pt width', () => {
+        const { requests } = convertMarkdownToRequests('Above\n\n---\n\nBelow', 1);
+        const hrRequest = requests.find(r =>
+            r.updateParagraphStyle?.fields === 'borderBottom' &&
+            r.updateParagraphStyle?.paragraphStyle?.borderBottom
+        );
+        expect(hrRequest).toBeDefined();
+        const border = hrRequest.updateParagraphStyle.paragraphStyle.borderBottom;
+        expect(border.color.color.rgbColor).toEqual({
+            red: 0.5294117647, green: 0.5294117647, blue: 0.5294117647,
+        });
+        expect(border.width).toEqual({ magnitude: 1, unit: 'PT' });
+        expect(border.dashStyle).toBe('SOLID');
+    });
+
+    it('includes tabId in horizontal rule border request when provided', () => {
+        const { requests } = convertMarkdownToRequests('Above\n\n---\n\nBelow', 1, 'tab-7');
+        const hrRequest = requests.find(r =>
+            r.updateParagraphStyle?.fields === 'borderBottom' &&
+            r.updateParagraphStyle?.paragraphStyle?.borderBottom
+        );
+        expect(hrRequest).toBeDefined();
+        expect(hrRequest.updateParagraphStyle.range.tabId).toBe('tab-7');
+    });
 });
 
 // ---------------------------------------------------------------------------
