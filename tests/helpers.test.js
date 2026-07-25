@@ -532,83 +532,71 @@ describe('quoted history stripping', () => {
 
     it('strips Gmail On ... wrote attribution and quoted lines', () => {
         const body = 'Current reply\n\nOn Mon, Jul 1, 2024 at 9:00 AM Alice <a@example.com> wrote:\n> Earlier message';
-        expect(stripQuotedHistory(body)).toBe('Current reply');
-        expect(formatMessageClean(message(body))).toMatchObject({
-            body: 'Current reply',
-            quotedHistoryStripped: true,
-        });
+        expect(stripQuotedHistory(body)).toMatchObject({ text: 'Current reply', quotedHistoryAmbiguous: false });
+        const result = formatMessageClean(message(body));
+        expect(result).toMatchObject({ body: 'Current reply', quotedHistoryStripped: true });
+        expect(result.quotedHistoryAmbiguous).toBeUndefined();
     });
 
     it('keeps a trailing ">" block the sender authored (no attribution marker)', () => {
         const body = 'Here is a quote I like:\n> To be or not to be';
-        expect(stripQuotedHistory(body)).toBe(body);
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: false });
     });
 
     it('keeps a trailing block of bare header-like lines (pasted invite)', () => {
         const body = "Let's meet. Details below:\nFrom: Conf Room A\nSent: Projector\nTo: All staff\nSubject: Q3\nDate: Tuesday";
-        expect(stripQuotedHistory(body)).toBe(body);
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: false });
     });
 
     it('does not strip when a quote block is not preceded by an attribution', () => {
         const body = '> old quoted\nFrom: Me\nTo: Team\nSubject: Weekly Update';
-        expect(stripQuotedHistory(body)).toBe(body);
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: false });
     });
 
     it('keeps a wrapped attribution whose quote it cannot safely attribute', () => {
         const body = 'Thanks!\nOn Mon, Jul 1, 2024 at 9:00 AM John Smith\n<john@example.com> wrote:\n> previous message';
-        expect(stripQuotedHistory(body)).toBe(body);
-    });
-
-    it('strips everything after an Original Message delimiter, prefixed or not', () => {
-        // "-----Original Message-----" is an unambiguous hard delimiter: Outlook
-        // emits it on its own line, and the quoted original commonly runs to the
-        // end of the message with no ">" prefixes.
-        const prefixed = 'Reply here\n-----Original Message-----\n> the original text';
-        expect(stripQuotedHistory(prefixed)).toBe('Reply here');
-        const unprefixed = 'Reply here\n-----Original Message-----\nFrom: A\nSent: B\nUnquoted original body';
-        expect(stripQuotedHistory(unprefixed)).toBe('Reply here');
-    });
-
-    it('strips a multi-line Outlook quoted body with no trailing content', () => {
-        // The quoted body itself can span several lines with no blank-line gap;
-        // as long as nothing follows it, the whole tail is still quoted history.
-        const body = 'Reply\n-----Original Message-----\nFrom: A\nSent: B\nTo: C\nSubject: D\nLine one of body\nLine two of body\nLine three of body';
-        expect(stripQuotedHistory(body)).toBe('Reply');
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: false });
     });
 
     // -------------------------------------------------------------------
     // Hard delimiter (Outlook "-----Original Message-----") table.
     //
-    // An earlier version of this fix tried to detect a genuine trailing
-    // reply after the delimiter by treating the body's first paragraph as
-    // quoted and anything past a following blank line as authored. That
-    // heuristic broke on the single most common real shape: a top-posted
-    // reply where Outlook puts a blank line directly after the header
-    // block. Because the "first paragraph" scan starts on that blank line
-    // and finds it immediately, it consumes zero lines of quoted body, so
-    // the entire original (all of it, not just extra paragraphs) came back
-    // as "authored" and leaked into the clean output. That is worse than
-    // the bug it was meant to fix: it happens silently on every top-posted
-    // Outlook reply, not just the rare bottom-posted one.
+    // Two earlier attempts at this got it wrong in opposite directions:
+    // stripping the tail unconditionally silently deleted a real reply typed
+    // below the delimiter, and a later heuristic that tried to preserve a
+    // trailing paragraph instead leaked whole multi-paragraph quotes into the
+    // clean body, because Outlook puts a blank line right after the header
+    // block, so the "first paragraph is quoted" scan matched nothing and the
+    // entire original came back as "authored".
     //
-    // Outlook's pasted original has no ">" prefix, so there is no reliable
-    // marker to tell quoted body from authored text after the delimiter.
-    // We therefore strip the tail unconditionally and accept that a rare
-    // bottom-posted reply is lost the same way a soft-marker false
-    // negative would be; callers who need the untouched body can pass
-    // includeQuoted: true.
+    // The fix asks a different, answerable question: can quotedness be
+    // established at all, the same way the soft-marker path already
+    // requires at least one ">"-quoted line before it strips anything? If
+    // the tail after the delimiter has no ">" prefixes, quotedness cannot be
+    // established (Outlook's pasted original never has them), so nothing is
+    // stripped, the full body is preserved, and the response says so via
+    // quotedHistoryAmbiguous/quotedHistoryNote instead of silently guessing
+    // in either direction. Only a tail that positively verifies as quoted
+    // (blank/attribution/">"-quoted lines only, with at least one ">" line)
+    // is stripped, exactly like the soft-marker path.
     // -------------------------------------------------------------------
 
-    it('strips a single-paragraph top-posted original with a blank line after the header block', () => {
-        const body = 'Sounds good, will do.\n-----Original Message-----\nFrom: Alice\nSent: Monday\nTo: Bob\nSubject: Q3 planning\n\nHi Bob, can you confirm the Q3 numbers?';
-        expect(stripQuotedHistory(body)).toBe('Sounds good, will do.');
+    it('strips a hard delimiter body once quotedness is established by a ">" prefix', () => {
+        const body = 'Reply here\n-----Original Message-----\n> the original text';
+        expect(stripQuotedHistory(body)).toMatchObject({ text: 'Reply here', quotedHistoryAmbiguous: false });
     });
 
-    it('strips a multi-paragraph top-posted original in full, not just its first paragraph (regression)', () => {
+    it('leaves a single-paragraph top-posted original in place when it has no ">" prefixes (quotedness not established)', () => {
+        const body = 'Sounds good, will do.\n-----Original Message-----\nFrom: Alice\nSent: Monday\nTo: Bob\nSubject: Q3 planning\n\nHi Bob, can you confirm the Q3 numbers?';
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: true });
+    });
+
+    it('leaves a multi-paragraph top-posted original in place rather than leak or guess (regression repro)', () => {
         // This is the exact shape that broke the earlier "preserve trailing
-        // paragraph" heuristic: a blank line after the headers, then a
-        // quoted body spanning several paragraphs. Every paragraph must be
-        // stripped, not just the first one.
+        // paragraph" heuristic: a blank line after the headers, then a quoted
+        // body spanning several paragraphs, no ">" prefixes anywhere. We can no
+        // longer tell where the quote ends, so nothing is stripped and the
+        // full body, including every paragraph, comes back unchanged.
         const body = [
             'Sounds good, shipping today.',
             '-----Original Message-----',
@@ -625,45 +613,51 @@ describe('quoted history stripping', () => {
             'Thanks,',
             'Alice',
         ].join('\n');
-        expect(stripQuotedHistory(body)).toBe('Sounds good, shipping today.');
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: true });
     });
 
-    it('strips a top-posted original with no blank line after the header block', () => {
+    it('leaves a top-posted original in place when there is no blank line after the header block either', () => {
         const body = 'Reply\n-----Original Message-----\nFrom: A\nSent: B\nTo: C\nSubject: D\nLine one of body\nLine two of body\nLine three of body';
-        expect(stripQuotedHistory(body)).toBe('Reply');
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: true });
     });
 
-    it('drops a bottom-posted reply typed after the delimiter (accepted tradeoff, use includeQuoted to recover it)', () => {
+    it('default clean mode never deletes a bottom-posted reply typed after an Outlook delimiter (required regression test)', () => {
+        // The reviewer's core requirement: a caller using the default clean
+        // mode must never have this authored line silently removed. It comes
+        // back as part of the full, unstripped body, flagged as ambiguous.
         const body = 'Intro\n-----Original Message-----\nFrom: Alice\nOriginal body\n\nMy reply below the quote';
-        expect(stripQuotedHistory(body)).toBe('Intro');
-        const result = formatMessageClean(message(body), 3000, true);
-        expect(result.body).toBe(body);
-        expect(result.quotedHistoryStripped).toBeUndefined();
-    });
+        const stripped = stripQuotedHistory(body);
+        expect(stripped.text).toBe(body);
+        expect(stripped.text).toContain('My reply below the quote');
+        expect(stripped.quotedHistoryAmbiguous).toBe(true);
 
-    it('strips a prefixed hard delimiter body ("> "-quoted original) the same as the unprefixed case', () => {
-        const body = 'Reply here\n-----Original Message-----\n> the original text';
-        expect(stripQuotedHistory(body)).toBe('Reply here');
+        const result = formatMessageClean(message(body));
+        expect(result.body).toBe(body);
+        expect(result.body).toContain('My reply below the quote');
+        expect(result.quotedHistoryStripped).toBeUndefined();
+        expect(result.quotedHistoryAmbiguous).toBe(true);
+        expect(typeof result.quotedHistoryNote).toBe('string');
     });
 
     it('keeps inline replies written between quoted blocks', () => {
         const body = '> question one\nAnswer one\n> question two\nAnswer two';
-        expect(stripQuotedHistory(body)).toBe(body);
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: false });
     });
 
-    it('keeps bottom-posted replies below a quoted block', () => {
+    it('keeps bottom-posted replies below a Gmail-style quoted block (soft marker, unaffected by the hard-delimiter path)', () => {
         const body = 'On Mon, Jul 1, 2024 at 9:00 AM Alice <a@example.com> wrote:\n> Earlier message\n\nMy reply comes after the quote';
-        expect(stripQuotedHistory(body)).toBe(body);
+        expect(stripQuotedHistory(body)).toMatchObject({ text: body, quotedHistoryAmbiguous: false });
     });
 
-    it('keeps quoted history when includeQuoted is true', () => {
+    it('keeps quoted history when includeQuoted is true, and never reports ambiguity when the check is skipped', () => {
         // Use a strip-eligible block (attribution + quoted line) so this proves
         // the opt-out actually suppresses a strip that would otherwise happen.
         const body = 'Answer\n\nOn Mon, Jul 1, 2024 at 9:00 AM Alice <a@example.com> wrote:\n> quoted';
-        expect(stripQuotedHistory(body)).toBe('Answer'); // would strip by default
+        expect(stripQuotedHistory(body)).toMatchObject({ text: 'Answer', quotedHistoryAmbiguous: false }); // would strip by default
         const result = formatMessageClean(message(body), 3000, true);
         expect(result.body).toBe(body);
         expect(result.quotedHistoryStripped).toBeUndefined();
+        expect(result.quotedHistoryAmbiguous).toBeUndefined();
     });
 });
 

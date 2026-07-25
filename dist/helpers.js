@@ -306,26 +306,31 @@ export const getPlainTextBody = (messagePart) => {
     return '';
 };
 
+// Returns { text, quotedHistoryAmbiguous }. text is the input unchanged
+// unless quotedness could be positively established, in which case the
+// quoted tail is removed. quotedHistoryAmbiguous is true only when an
+// unambiguous Outlook-style marker was found but the tail could not be
+// confirmed as quoted, so the caller knows history was detected and left in
+// place rather than silently kept or silently guessed away.
 export const stripQuotedHistory = (text) => {
-    if (!text) return text;
+    if (!text) return { text, quotedHistoryAmbiguous: false };
     const lines = text.split(/\r?\n/);
     // A bare ">" line is deliberately NOT a marker: senders legitimately author
     // ">"-prefixed excerpts (pasted shell output, manual quotes). Only a real
     // attribution marker opens a strip.
     let stripFrom = -1;
-    // A hard delimiter is Outlook's "-----Original Message-----" separator. The
-    // quoted body that follows it has no ">" prefixes, so unlike the soft
-    // markers below we have no reliable marker to tell where quoted history
-    // ends and any authored text after it begins. We deliberately strip the
-    // tail unconditionally rather than guess: a heuristic that tries to find
-    // "real content after the quote" cannot also stay correct on the common
-    // case, a multi-paragraph quoted body with a blank line after the header
-    // block, without leaking that whole quote into the clean output (worse,
-    // and silent, since every top-posted Outlook reply hits this path). A
-    // bottom-posted reply typed below the delimiter is comparatively rare
-    // (Outlook's own Reply button puts the cursor above the quote) and, if it
-    // happens, is lost the same way any other soft-marker false negative would
-    // be. Callers who need the untouched body can pass includeQuoted: true.
+    // A hard delimiter is Outlook's "-----Original Message-----" separator.
+    // Unlike the soft markers below, this marker itself is unambiguous: it
+    // only appears when a mail client inserted a quoted original. What is
+    // ambiguous is where that quoted original ends, since Outlook's pasted
+    // body carries no ">" prefix. We used to strip this tail unconditionally,
+    // which silently deleted any real reply typed below it; a later attempt
+    // to detect a trailing reply by paragraph position instead leaked whole
+    // multi-paragraph quotes into the clean body on the common case, since
+    // Outlook puts a blank line right after the header block. Both are wrong
+    // in different directions. See the shared verification below: this marker
+    // is only treated as resolved, and stripped, when the tail can be
+    // positively confirmed as quoted the same way a soft marker's tail is.
     let hardDelimiter = false;
     for (let i = 0; i < lines.length; i++) {
         if (/^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i.test(lines[i])) {
@@ -350,34 +355,56 @@ export const stripQuotedHistory = (text) => {
             }
         }
     }
-    if (stripFrom === -1) return text;
-    if (hardDelimiter) return lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
-    // Otherwise only strip when everything after the marker is quoted/attribution/blank
-    // AND at least one line is actually ">"-quoted. Inline repliers and
-    // bottom-posters put real content below or between quoted blocks, and a
-    // trailing block of bare header-like lines (a pasted invite, a signature)
-    // is not reply history — stripping either would silently lose content.
+    if (stripFrom === -1) return { text, quotedHistoryAmbiguous: false };
+    // Quotedness is only established when everything after the marker is
+    // blank, attribution-like, or ">"-quoted, AND at least one line is
+    // actually ">"-quoted. Inline repliers and bottom-posters put real
+    // content below or between quoted blocks, and a trailing block of bare
+    // header-like lines (a pasted invite, a signature) is not reply history,
+    // stripping either would silently lose content. This same check applies
+    // to both the hard delimiter and the soft markers: it is what already
+    // protected the soft-marker path, and the hard delimiter gets no special
+    // exemption from it.
     const attributionLine = /^\s*(On .+ wrote:|-{2,}\s*Original Message\s*-{2,}|(From|Sent|To|Cc|Subject|Date):\s.*)\s*$/i;
     let sawQuotedLine = false;
+    let quotednessEstablished = true;
     for (let i = stripFrom; i < lines.length; i++) {
         if (/^\s*>/.test(lines[i])) {
             sawQuotedLine = true;
             continue;
         }
         if (/^\s*$/.test(lines[i]) || attributionLine.test(lines[i])) continue;
-        return text;
+        quotednessEstablished = false;
+        break;
     }
-    if (!sawQuotedLine) return text;
-    return lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
+    if (!quotednessEstablished || !sawQuotedLine) {
+        // Outlook's own pasted body has no ">" prefix, so this is exactly
+        // where the hard delimiter fails the check by construction: we
+        // cannot tell the quoted original from any authored text around or
+        // within it. Rather than guess (either direction has already proven
+        // wrong), keep the full body intact and, for the hard delimiter only,
+        // say so: the marker unambiguously means quoted history is present,
+        // even though we could not safely separate it. Soft markers are
+        // themselves only a guess at being a quote (e.g. a bare "From:" line
+        // could be a pasted invite), so an unconfirmed tail there is left
+        // alone with no extra reporting, same as before.
+        return { text, quotedHistoryAmbiguous: hardDelimiter };
+    }
+    return { text: lines.slice(0, stripFrom).join('\n').replace(/\s+$/, ''), quotedHistoryAmbiguous: false };
 };
 
 export const formatMessageClean = (message, maxBodyChars = 3000, includeQuoted = false) => {
     const headers = message.payload?.headers || [];
     const get = (name) => findHeader(headers, name);
     let body = getPlainTextBody(message.payload) || '';
-    const strippedBody = includeQuoted ? body : stripQuotedHistory(body);
-    const quotedHistoryStripped = strippedBody !== body;
-    body = strippedBody;
+    let quotedHistoryStripped = false;
+    let quotedHistoryAmbiguous = false;
+    if (!includeQuoted) {
+        const stripped = stripQuotedHistory(body);
+        quotedHistoryStripped = stripped.text !== body;
+        quotedHistoryAmbiguous = stripped.quotedHistoryAmbiguous;
+        body = stripped.text;
+    }
     const totalChars = body.length;
     const truncated = maxBodyChars > 0 && body.length > maxBodyChars;
     if (truncated) body = body.slice(0, maxBodyChars);
@@ -393,6 +420,10 @@ export const formatMessageClean = (message, maxBodyChars = 3000, includeQuoted =
         date: get('date'),
         body,
         ...(quotedHistoryStripped ? { quotedHistoryStripped: true } : {}),
+        ...(quotedHistoryAmbiguous ? {
+            quotedHistoryAmbiguous: true,
+            quotedHistoryNote: 'Outlook-style quoted history ("-----Original Message-----") was detected but could not be safely separated from any authored text around it, since the quoted original has no ">" prefix marking where it ends. The full body is returned unstripped rather than guessed at. Pass includeQuoted: true to suppress this check and always get the full body.',
+        } : {}),
         ...(truncated ? { bodyTruncated: true, totalChars } : {}),
     };
 };
