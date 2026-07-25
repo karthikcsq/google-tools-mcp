@@ -131,4 +131,100 @@ describe('checkMarkdownFidelity', () => {
         const cleanBody = [para([textRun('body only\n')])];
         expect(checkMarkdownFidelity(cleanBody)).toEqual([]);
     });
+
+    // --- unhandled ParagraphElement variants (deny-by-default) ---------------
+    //
+    // extractFormattedText() (docsToMarkdown.js) only ever renders `textRun`.
+    // The Docs API ParagraphElement union also defines autoText, pageBreak,
+    // columnBreak, horizontalRule, equation, person, richLink, and dateElement
+    // (https://developers.google.com/workspace/docs/api/reference/rest/v1/documents#ParagraphElement).
+    // None of those round-trips through this converter today (verified by
+    // reading extractFormattedText: its only branch is `if (element.textRun)`),
+    // so checkMarkdownFidelity must warn about every one of them.
+
+    it('warns about an autoText element with no markdown representation', () => {
+        const body = [para([textRun('page '), { autoText: { type: 'PAGE_NUMBER' } }, textRun('\n')])];
+        const w = checkMarkdownFidelity(body);
+        expect(w.some((line) => line.includes('autoText'))).toBe(true);
+    });
+
+    it('warns about a pageBreak element', () => {
+        const body = [para([{ pageBreak: {} }])];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('pageBreak'))).toBe(true);
+    });
+
+    it('warns about a columnBreak element', () => {
+        const body = [para([{ columnBreak: {} }])];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('columnBreak'))).toBe(true);
+    });
+
+    it('warns about a horizontalRule element', () => {
+        const body = [para([{ horizontalRule: {} }])];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('horizontalRule'))).toBe(true);
+    });
+
+    it('warns about an equation element', () => {
+        const body = [para([{ equation: {} }])];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('equation'))).toBe(true);
+    });
+
+    it('warns about a person element', () => {
+        const body = [para([{ person: { personId: 'p1', personProperties: { email: 'a@example.com' } } }])];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('person'))).toBe(true);
+    });
+
+    it('warns about a richLink element', () => {
+        const body = [para([{ richLink: { richLinkId: 'rl1' } }])];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('richLink'))).toBe(true);
+    });
+
+    it('warns about a dateElement', () => {
+        const body = [para([{ dateElement: { displayText: '2026-07-24' } }])];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('dateElement'))).toBe(true);
+    });
+
+    it('warns about an unhandled variant nested inside a table cell', () => {
+        const body = [
+            {
+                table: {
+                    tableRows: [
+                        {
+                            tableCells: [
+                                { content: [para([textRun('note: '), { horizontalRule: {} }])] },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ];
+        expect(checkMarkdownFidelity(body).some((line) => line.includes('horizontalRule'))).toBe(true);
+    });
+
+    it('groups multiple unhandled variants into one warning rather than one line per element', () => {
+        const body = [
+            para([{ pageBreak: {} }]),
+            para([{ pageBreak: {} }]),
+            para([{ equation: {} }]),
+        ];
+        const warnings = checkMarkdownFidelity(body);
+        const unhandledWarnings = warnings.filter(
+            (w) => w.includes('pageBreak') || w.includes('equation')
+        );
+        // Both variant types are reported, but folded into a single warning
+        // string rather than emitted once per element.
+        expect(unhandledWarnings).toHaveLength(1);
+        expect(unhandledWarnings[0]).toContain('2 pageBreak');
+        expect(unhandledWarnings[0]).toContain('1 equation');
+    });
+
+    it('does NOT warn about textRun, images, footnotes, or table-of-contents as "unhandled" (no false positives from the deny-by-default check)', () => {
+        const body = [
+            para([textRun('plain text\n')]),
+            para([{ inlineObjectElement: { inlineObjectId: 'io1' } }, textRun('\n')]),
+            para([textRun('claim'), { footnoteReference: { footnoteId: 'fn1' } }, textRun('\n')]),
+            { tableOfContents: { content: [] } },
+        ];
+        const warnings = checkMarkdownFidelity(body);
+        expect(warnings.some((w) => w.includes('unsupported content type'))).toBe(false);
+    });
 });
