@@ -226,20 +226,58 @@ describe('Total tool count', () => {
         registerSettings(server);
     }
 
-    it('registers the consolidated base surface (100+ tools)', async () => {
-        const server = createMockServer();
-        await registerBase(server);
-        // Gmail settings/labels were consolidated from ~42 granular tools into a
-        // handful of dispatch tools, so the base surface is smaller than before.
-        expect(server.getTools().size).toBeGreaterThanOrEqual(100);
+    afterEach(() => {
+        delete process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES;
     });
 
-    it('with legacy aliases enabled, still exposes 140+ tools for backward compat', async () => {
+    // Exact counts, not loose `>=` assertions (issue #65 review): a loose bound
+    // let the default-surface regression (aliases registering by default) stay
+    // hidden, since 194 >= 100 and 194 >= 140 both still "pass". Pin the exact
+    // number so any future change to the default tool surface is a visible,
+    // deliberate diff in this test, not a silent regression.
+    it('registers exactly 122 tools in the consolidated base surface (docs/utils/drive/extras/sheets/calendar/forms/gmail subset)', async () => {
+        const server = createMockServer();
+        await registerBase(server);
+        expect(server.getTools().size).toBe(122);
+    });
+
+    it('with legacy aliases explicitly enabled, adds exactly 72 snake_case aliases (194 total)', async () => {
+        process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES = 'true';
         const server = createMockServer();
         await registerBase(server);
         const { registerLegacyAliases } = await import('../dist/tools/legacyAliases.js');
-        registerLegacyAliases(server, server.getTools());
-        // Base categories + 72 snake_case aliases keep the public surface large.
-        expect(server.getTools().size).toBeGreaterThanOrEqual(140);
+        const added = registerLegacyAliases(server, server.getTools());
+        expect(added).toBe(72);
+        expect(server.getTools().size).toBe(194);
+    });
+
+    it('legacy aliases are opt-in: registerLegacyAliases is a no-op when the env var is unset (issue #31/#33 regression guard)', async () => {
+        const server = createMockServer();
+        await registerBase(server);
+        const before = server.getTools().size;
+        const { registerLegacyAliases } = await import('../dist/tools/legacyAliases.js');
+        const added = registerLegacyAliases(server, server.getTools());
+        expect(added).toBe(0);
+        expect(server.getTools().size).toBe(before);
+    });
+
+    // The subset above omits slides, tasks, and the 4 always-on utility tools
+    // (help/logout/troubleshoot/feedback) that the real server also registers.
+    // Pin the exact counts through the real `registerAllTools` production path
+    // too, so the number a client actually sees by default is covered, not just
+    // the test-helper subset.
+    it('registerAllTools (real production path) registers exactly 150 tools by default (aliases opt-in, unset)', async () => {
+        const server = createMockServer();
+        const { registerAllTools } = await import('../dist/tools/index.js');
+        await registerAllTools(server);
+        expect(server.getTools().size).toBe(150);
+    });
+
+    it('registerAllTools (real production path) registers exactly 222 tools with legacy aliases explicitly enabled', async () => {
+        process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES = 'true';
+        const server = createMockServer();
+        const { registerAllTools } = await import('../dist/tools/index.js');
+        await registerAllTools(server);
+        expect(server.getTools().size).toBe(222);
     });
 });

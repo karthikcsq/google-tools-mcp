@@ -220,7 +220,7 @@ export async function registerAllTools(server) {
     logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories at startup.`);
 
     // Register backward-compatible snake_case aliases for the renamed/consolidated
-    // tools (unless disabled via GOOGLE_MCP_DISABLE_LEGACY_ALIASES=true).
+    // tools. Opt-in: set GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true to register them.
     registerLegacyAliases(wrappedServer, registeredTools);
 
     // --- Help tool (always available) ---

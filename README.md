@@ -281,7 +281,7 @@ Google Calendar — events, availability, and calendar management.
 
 `listCalendars`, `getEvents`, `manageEvent`, `getBusy`, `getFree`, `moveEvent`, `listRecurringEventInstances`, `manageCalendar`
 
-> **Backward compatibility:** every former snake_case tool name (`get_imap`, `list_messages`, `manage_event`, …) is still registered as a deprecated alias that forwards to its new implementation. See [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase). Set `GOOGLE_MCP_DISABLE_LEGACY_ALIASES=true` to hide the aliases.
+> **Backward compatibility:** every former snake_case tool name (`get_imap`, `list_messages`, `manage_event`, …) is still available as a deprecated alias that forwards to its new implementation, but they are **opt-in, not loaded by default** — registering them by default would grow the tool surface these issues exist to shrink. Set `GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true` to register them. See [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase).
 
 ### `forms` (6 tools)
 Google Forms — create/read forms, manage responses, and publish settings.
@@ -297,7 +297,7 @@ Google Forms — create/read forms, manage responses, and publish settings.
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
-| `GOOGLE_MCP_DISABLE_LEGACY_ALIASES` | No | Set to `true` to stop registering the deprecated snake_case tool aliases (see [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase)) |
+| `GOOGLE_MCP_ENABLE_LEGACY_ALIASES` | No | Set to `true` to register the deprecated snake_case tool aliases (off by default; see [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase)) |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
 
@@ -315,9 +315,12 @@ This package replaces both [`gdrive-tools-mcp`](https://www.npmjs.com/package/gd
 
 Gmail and Calendar tools were unified to camelCase, and the rarely-used Gmail
 account-config tools were consolidated into dispatch tools. **Every old name
-still works** as a deprecated alias that forwards to the new implementation, so
-existing configs keep running. Set `GOOGLE_MCP_DISABLE_LEGACY_ALIASES=true` to
-turn the aliases off once you've migrated.
+still works** as a deprecated alias that forwards to the new implementation,
+but the aliases are **opt-in** — they are not registered by default, since
+loading all 72 of them alongside the new camelCase + dispatch tools would grow
+the default tool surface instead of shrinking it. Set
+`GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true` if you still depend on the old
+snake_case names.
 
 ### Renamed (behavior and parameters unchanged)
 

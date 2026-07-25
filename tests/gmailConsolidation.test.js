@@ -48,11 +48,14 @@ beforeAll(async () => {
 
 afterEach(() => {
     calls = [];
-    delete process.env.GOOGLE_MCP_DISABLE_LEGACY_ALIASES;
+    delete process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES;
 });
 
-// Build a server with the consolidated tools + aliases registered.
+// Build a server with the consolidated tools + aliases registered. Aliases are
+// opt-in by default (issue #31/#33), so tests exercising alias behavior itself
+// explicitly enable them here.
 function buildServer() {
+    process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES = 'true';
     const server = createMockServer();
     registerSettings(server);
     registerLabels(server);
@@ -139,9 +142,8 @@ describe('Legacy alias dispatch equivalence (issue #33)', () => {
     });
 });
 
-describe('GOOGLE_MCP_DISABLE_LEGACY_ALIASES (issue #33)', () => {
-    it('hides all aliases when set to "true"', () => {
-        process.env.GOOGLE_MCP_DISABLE_LEGACY_ALIASES = 'true';
+describe('GOOGLE_MCP_ENABLE_LEGACY_ALIASES (issue #31/#33: aliases must be opt-in, not opt-out)', () => {
+    it('does NOT register aliases by default (var unset) — the whole point of #31/#33 is a smaller default surface', () => {
         const server = createMockServer();
         registerSettings(server);
         registerLabels(server);
@@ -152,7 +154,8 @@ describe('GOOGLE_MCP_DISABLE_LEGACY_ALIASES (issue #33)', () => {
         expect(server.getTools().has('get_imap')).toBe(false);
     });
 
-    it('registers aliases when the var is unset', () => {
+    it('registers aliases only when explicitly enabled', () => {
+        process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES = 'true';
         const server = createMockServer();
         registerSettings(server);
         registerLabels(server);

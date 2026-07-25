@@ -1,20 +1,25 @@
 // Legacy alias layer (issue #31/#32/#33).
 //
 // Registers the pre-consolidation snake_case tool names as thin, working aliases
-// so existing agents/configs keep functioning after the camelCase + dispatch
+// so existing agents/configs can still call them after the camelCase + dispatch
 // reshape. Each alias forwards to its new implementation:
 //   - Pure renames (e.g. list_messages -> listMessages) forward unchanged.
 //   - Consolidated tools (e.g. get_imap -> manageGmailSettings resource=imap
 //     action=get) wrap the old parameters into the new dispatch shape.
 //
-// Set GOOGLE_MCP_DISABLE_LEGACY_ALIASES=true to skip registering all aliases.
+// Opt-in, OFF by default: the entire point of issues #31/#33 is shrinking the
+// tool surface loaded into every turn. Registering these 72 aliases by default
+// would add them back on top of the new camelCase + dispatch tools, growing the
+// default surface instead of shrinking it. Set
+// GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true to register them for callers that still
+// depend on the old snake_case names.
 import { z } from 'zod';
 import { logger } from '../logger.js';
 
-export const DISABLE_LEGACY_ALIASES_ENV = 'GOOGLE_MCP_DISABLE_LEGACY_ALIASES';
+export const ENABLE_LEGACY_ALIASES_ENV = 'GOOGLE_MCP_ENABLE_LEGACY_ALIASES';
 
-export function legacyAliasesDisabled() {
-    return process.env[DISABLE_LEGACY_ALIASES_ENV] === 'true';
+export function legacyAliasesEnabled() {
+    return process.env[ENABLE_LEGACY_ALIASES_ENV] === 'true';
 }
 
 // ---------------------------------------------------------------------------
@@ -380,8 +385,8 @@ export const CONSOLIDATED_ALIASES = {
 // target's execute/parameters). No-op if aliases are disabled via env var.
 // ---------------------------------------------------------------------------
 export function registerLegacyAliases(server, registeredTools) {
-    if (legacyAliasesDisabled()) {
-        logger.info(`${DISABLE_LEGACY_ALIASES_ENV}=true — skipping legacy tool aliases.`);
+    if (!legacyAliasesEnabled()) {
+        logger.info(`Legacy snake_case tool aliases are opt-in — set ${ENABLE_LEGACY_ALIASES_ENV}=true to register them.`);
         return 0;
     }
     let count = 0;
@@ -416,6 +421,6 @@ export function registerLegacyAliases(server, registeredTools) {
         count++;
     }
 
-    logger.info(`Registered ${count} legacy tool aliases (set ${DISABLE_LEGACY_ALIASES_ENV}=true to disable).`);
+    logger.info(`Registered ${count} legacy tool aliases (${ENABLE_LEGACY_ALIASES_ENV}=true).`);
     return count;
 }
