@@ -428,8 +428,8 @@ export const formatMessageClean = (message, maxBodyChars = 3000, includeQuoted =
     };
 };
 
-// Default whole-response character budget for thread tools (get_thread,
-// list_threads, batch_get_threads). maxBodyChars only bounds each message body
+// Default whole-response character budget for thread tools (getThread,
+// listThreads, batchGetThreads). maxBodyChars only bounds each message body
 // independently, so a thread with many messages (or a list/batch call
 // spanning many threads) had no ceiling on total serialized size — a 100-reply
 // thread at the 3,000-char default body cap alone runs to roughly 300,000
@@ -500,15 +500,15 @@ export const capArrayByResponseBudget = (items, maxChars, dropFrom = 'start', ma
 // metadata (counts, notes) is attached after capping and adds its own bytes;
 // reserving room for it by guessing a fixed constant is fragile, since the
 // note text length and the tool's own attachment shape (top-level fields for
-// get_thread/list_threads, mutating the last element of a bare array for
-// batch_get_threads) both vary. Instead this measures the real payload size
+// getThread/listThreads, mutating the last element of a bare array for
+// batchGetThreads) both vary. Instead this measures the real payload size
 // on each attempt and shrinks the array's own budget by the exact overshoot,
 // converging on a final payload that fits maxChars including its metadata.
 //
 // attachMetadata(cappedItems, truncated, totalCount, includedCount, maxChars)
 // must return the exact value the caller will JSON.stringify and return: a
-// full object for get_thread/list_threads, or a full array for
-// batch_get_threads. It receives the target maxChars too, so it can measure
+// full object for getThread/listThreads, or a full array for
+// batchGetThreads. It receives the target maxChars too, so it can measure
 // its own note text against whatever room is actually left (the same
 // "measure, don't guess" approach makeOmissionStub uses for its reason text)
 // instead of always emitting a fixed-length note that might not fit once the

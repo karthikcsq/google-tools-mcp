@@ -18,9 +18,9 @@ describe('Gmail thread output controls', () => {
         const tools = new Map();
         const { register } = await import('../dist/tools/gmail/threads.js');
         register({ addTool: tool => tools.set(tool.name, tool) });
-        getThreadTool = tools.get('get_thread');
-        listThreadsTool = tools.get('list_threads');
-        batchGetThreadsTool = tools.get('batch_get_threads');
+        getThreadTool = tools.get('getThread');
+        listThreadsTool = tools.get('listThreads');
+        batchGetThreadsTool = tools.get('batchGetThreads');
     });
 
     const threeMessageThread = () => ({
@@ -34,7 +34,7 @@ describe('Gmail thread output controls', () => {
         },
     });
 
-    it('filters get_thread output to requested messageIds', async () => {
+    it('filters getThread output to requested messageIds', async () => {
         getThread.mockResolvedValueOnce(threeMessageThread());
 
         const result = JSON.parse(await getThreadTool.execute({
@@ -119,7 +119,7 @@ describe('Gmail thread output controls', () => {
         expect(result.messages).toEqual([]);
     });
 
-    it('applies maxMessages per thread in list_threads', async () => {
+    it('applies maxMessages per thread in listThreads', async () => {
         listThreads.mockResolvedValueOnce({ data: { threads: [{ id: 'thread-1' }] } });
         getThread.mockResolvedValueOnce(threeMessageThread());
 
@@ -131,7 +131,7 @@ describe('Gmail thread output controls', () => {
         expect(result.threads[0].messages.map(m => m.id)).toEqual(['message-3']);
     });
 
-    it('applies maxMessages per thread in batch_get_threads', async () => {
+    it('applies maxMessages per thread in batchGetThreads', async () => {
         getThread.mockResolvedValueOnce(threeMessageThread());
 
         const result = JSON.parse(await batchGetThreadsTool.execute({
@@ -146,7 +146,7 @@ describe('Gmail thread output controls', () => {
     // -----------------------------------------------------------------------
     // maxResponseChars: whole-response budget (merge-blocking review finding
     // on PR #63 — maxBodyChars only caps each message/part independently, so
-    // a default get_thread on a large thread, or list_threads/batch_get_threads
+    // a default getThread on a large thread, or listThreads/batchGetThreads
     // across many threads, had no ceiling on total serialized size.
     // -----------------------------------------------------------------------
     const threadWithMessages = (threadId, count, bodyLength) => ({
@@ -163,7 +163,7 @@ describe('Gmail thread output controls', () => {
         },
     });
 
-    it('get_thread: bounds aggregate response size with maxResponseChars, keeping the latest messages', async () => {
+    it('getThread: bounds aggregate response size with maxResponseChars, keeping the latest messages', async () => {
         getThread.mockResolvedValueOnce(threadWithMessages('thread-budget', 5, 2000));
 
         const result = JSON.parse(await getThreadTool.execute({
@@ -187,7 +187,7 @@ describe('Gmail thread output controls', () => {
         expect(result.messages[0].id).not.toBe('thread-budget-message-1');
     });
 
-    it('get_thread: maxResponseChars: 0 disables the whole-response budget', async () => {
+    it('getThread: maxResponseChars: 0 disables the whole-response budget', async () => {
         getThread.mockResolvedValueOnce(threadWithMessages('thread-nolimit', 5, 2000));
 
         const result = JSON.parse(await getThreadTool.execute({
@@ -201,7 +201,7 @@ describe('Gmail thread output controls', () => {
         expect(result.responseTruncated).toBeUndefined();
     });
 
-    it('list_threads: bounds the aggregate response across multiple threads, dropping lowest-priority threads', async () => {
+    it('listThreads: bounds the aggregate response across multiple threads, dropping lowest-priority threads', async () => {
         listThreads.mockResolvedValueOnce({
             data: { threads: [{ id: 't1' }, { id: 't2' }, { id: 't3' }, { id: 't4' }, { id: 't5' }] },
         });
@@ -229,7 +229,7 @@ describe('Gmail thread output controls', () => {
         expect(JSON.stringify(result.threads).length).toBeLessThanOrEqual(6000);
     });
 
-    it('batch_get_threads: bounds the aggregate response across requested ids, flagging truncation on the last thread returned', async () => {
+    it('batchGetThreads: bounds the aggregate response across requested ids, flagging truncation on the last thread returned', async () => {
         getThread
             .mockResolvedValueOnce(threadWithMessages('b1', 2, 1500))
             .mockResolvedValueOnce(threadWithMessages('b2', 2, 1500))
@@ -252,7 +252,7 @@ describe('Gmail thread output controls', () => {
         expect(typeof last.truncationNote).toBe('string');
     });
 
-    it('batch_get_threads: maxResponseChars: 0 disables the whole-response budget', async () => {
+    it('batchGetThreads: maxResponseChars: 0 disables the whole-response budget', async () => {
         getThread
             .mockResolvedValueOnce(threadWithMessages('c1', 2, 1500))
             .mockResolvedValueOnce(threadWithMessages('c2', 2, 1500))
@@ -275,13 +275,13 @@ describe('Gmail thread output controls', () => {
     // single oversized item unbounded, and threads.js attached truncation
     // metadata *after* measuring against the budget, so a near-limit result
     // could be pushed over the ceiling by the metadata itself. These assert
-    // the exact final JSON.stringify(...) that get_thread, list_threads, and
-    // batch_get_threads actually return, not capArrayByResponseBudget in
+    // the exact final JSON.stringify(...) that getThread, listThreads, and
+    // batchGetThreads actually return, not capArrayByResponseBudget in
     // isolation, including the single-oversized-item cases the review named
     // explicitly.
     // -----------------------------------------------------------------------
 
-    it('get_thread: a single message too large to fit alone is replaced with a bounded omission stub, not shipped unbounded', async () => {
+    it('getThread: a single message too large to fit alone is replaced with a bounded omission stub, not shipped unbounded', async () => {
         getThread.mockResolvedValueOnce({
             data: {
                 id: 'thread-oversized',
@@ -321,7 +321,7 @@ describe('Gmail thread output controls', () => {
         expect(result.includedMessages).toBe(1);
     });
 
-    it('list_threads: a single message too large to fit alone within its thread is bounded, keeping the final payload under budget', async () => {
+    it('listThreads: a single message too large to fit alone within its thread is bounded, keeping the final payload under budget', async () => {
         listThreads.mockResolvedValueOnce({ data: { threads: [{ id: 't1' }] } });
         getThread.mockResolvedValueOnce({
             data: {
@@ -354,7 +354,7 @@ describe('Gmail thread output controls', () => {
         expect(result.threads[0].responseTruncated).toBe(true);
     });
 
-    it('batch_get_threads: a single requested thread whose only message is too large to fit alone is bounded, keeping the final array under budget', async () => {
+    it('batchGetThreads: a single requested thread whose only message is too large to fit alone is bounded, keeping the final array under budget', async () => {
         getThread.mockResolvedValueOnce({
             data: {
                 id: 'bt1',
@@ -392,7 +392,7 @@ describe('Gmail thread output controls', () => {
         expect(result[0].batchResponseTruncated).toBeUndefined();
     });
 
-    it('get_thread: reserves room for its own truncation metadata instead of letting it tip a near-limit result over the ceiling', async () => {
+    it('getThread: reserves room for its own truncation metadata instead of letting it tip a near-limit result over the ceiling', async () => {
         // Four messages whose combined size sits just under the budget with
         // no metadata attached. Appending the truncation note afterward,
         // without reserving room for it first, would push the final payload
@@ -426,7 +426,7 @@ describe('Gmail thread output controls', () => {
         expect(result.responseTruncated).toBe(true);
     });
 
-    it('get_thread: a normal under-budget response gains no truncation fields at all', async () => {
+    it('getThread: a normal under-budget response gains no truncation fields at all', async () => {
         getThread.mockResolvedValueOnce({
             data: {
                 id: 'thread-small',
@@ -451,7 +451,7 @@ describe('Gmail thread output controls', () => {
         expect(result.truncationNote).toBeUndefined();
     });
 
-    it('get_thread: maxResponseChars: 0 stays unbounded even for a single oversized message (no stub, no truncation)', async () => {
+    it('getThread: maxResponseChars: 0 stays unbounded even for a single oversized message (no stub, no truncation)', async () => {
         getThread.mockResolvedValueOnce({
             data: {
                 id: 'thread-unbounded',
@@ -500,7 +500,7 @@ describe('Gmail thread output controls', () => {
     // -----------------------------------------------------------------------
     const SWEEP_STEP = 41; // coprime-ish with common round numbers, covers the 1-2000 range in ~49 steps per tool
 
-    it('get_thread: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
+    it('getThread: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
         for (let maxResponseChars = 1; maxResponseChars <= 2000; maxResponseChars += SWEEP_STEP) {
             getThread.mockResolvedValueOnce({
                 data: {
@@ -535,7 +535,7 @@ describe('Gmail thread output controls', () => {
         }
     });
 
-    it('list_threads: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
+    it('listThreads: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
         for (let maxResponseChars = 1; maxResponseChars <= 2000; maxResponseChars += SWEEP_STEP) {
             listThreads.mockResolvedValueOnce({ data: { threads: [{ id: 'sweep-t1' }] } });
             getThread.mockResolvedValueOnce({
@@ -569,7 +569,7 @@ describe('Gmail thread output controls', () => {
         }
     });
 
-    it('batch_get_threads: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
+    it('batchGetThreads: never returns a payload over maxResponseChars, or the full oversized item, across a sweep of 1-2000', async () => {
         for (let maxResponseChars = 1; maxResponseChars <= 2000; maxResponseChars += SWEEP_STEP) {
             getThread.mockResolvedValueOnce({
                 data: {
@@ -603,7 +603,7 @@ describe('Gmail thread output controls', () => {
         }
     });
 
-    it('get_thread: maxResponseChars: 0 remains genuinely unbounded after the sentinel fix, even for an oversized message', async () => {
+    it('getThread: maxResponseChars: 0 remains genuinely unbounded after the sentinel fix, even for an oversized message', async () => {
         getThread.mockResolvedValueOnce({
             data: {
                 id: 'thread-still-unbounded',
@@ -633,7 +633,7 @@ describe('Gmail thread output controls', () => {
         expect(result.responseTruncated).toBeUndefined();
     });
 
-    it('get_thread: rejects with a UserError naming a concrete minimum when maxResponseChars is too small for any valid payload', async () => {
+    it('getThread: rejects with a UserError naming a concrete minimum when maxResponseChars is too small for any valid payload', async () => {
         getThread.mockResolvedValueOnce({
             data: {
                 id: 'thread-impossible',

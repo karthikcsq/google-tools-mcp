@@ -4,7 +4,7 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'move_event',
+        name: 'moveEvent',
         description:
             'Moves an event from one calendar to another. The event is removed from the source calendar and added to the destination.',
         parameters: z.object({

@@ -5,7 +5,7 @@ import { processMessagePart, constructRawMessage, constructRawMessageWithAttachm
 
 export function register(server) {
     server.addTool({
-        name: 'send_message',
+        name: 'sendMessage',
         description: 'Send an email message to specified recipients. Note the mechanics of the raw parameter.',
         parameters: z.object({
             raw: z.string().optional().describe("The entire email message in base64url encoded RFC 2822 format, ignores to, cc, bcc, subject, body if provided"),
@@ -45,7 +45,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'reply_message',
+        name: 'replyMessage',
         description: 'Reply to a message. Automatically handles To/Cc recipients, subject prefix, threading headers, and quoted content. Use replyAll to include all original recipients.',
         parameters: z.object({
             messageId: z.string().describe("The ID of the message to reply to"),
@@ -162,7 +162,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'forward_message',
+        name: 'forwardMessage',
         description: 'Forward a message to new recipients. Includes the original message body as quoted content and re-attaches any original attachments.',
         parameters: z.object({
             messageId: z.string().describe("The ID of the message to forward"),
@@ -278,7 +278,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'get_message',
+        name: 'getMessage',
         description: 'Get a specific message by ID. Clean mode removes quoted reply history by default. Full mode returns the raw MIME tree with decoded text bodies limited by maxBodyChars.',
         parameters: z.object({
             id: z.string().describe("The ID of the message to retrieve"),
@@ -298,7 +298,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'list_messages',
+        name: 'listMessages',
         description: 'List messages with optional filtering. Clean mode removes quoted reply history by default. Full mode limits decoded text bodies with maxBodyChars. Omit format to get bare IDs only.',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of messages to return (1-500)"),
@@ -341,7 +341,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'modify_message',
+        name: 'modifyMessage',
         description: 'Modify the labels on one or more messages. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs to modify"),
@@ -360,7 +360,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'delete_message',
+        name: 'deleteMessage',
         description: 'Immediately and permanently delete one or more messages. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs to delete"),
@@ -374,7 +374,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'trash_message',
+        name: 'trashMessage',
         description: 'Move one or more messages to the trash or restore them. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Message ID or array of message IDs"),
@@ -400,7 +400,7 @@ export function register(server) {
 
 
     server.addTool({
-        name: 'batch_get_messages',
+        name: 'batchGetMessages',
         description: 'Get multiple messages by ID in parallel. Clean mode removes quoted reply history; full mode limits decoded text bodies with maxBodyChars.',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the messages to retrieve"),
@@ -429,7 +429,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'get_attachment',
+        name: 'getAttachment',
         description: 'Get a message attachment',
         parameters: z.object({
             messageId: z.string().describe("ID of the message containing the attachment"),
