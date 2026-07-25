@@ -185,6 +185,12 @@ const CATEGORIES = {
             registerTasksTools(server);
         },
     },
+    maps: {
+        async loader(server) {
+            const { registerMapsTools } = await import('./maps/index.js');
+            registerMapsTools(server);
+        },
+    },
 };
 
 // ---------------------------------------------------------------------------

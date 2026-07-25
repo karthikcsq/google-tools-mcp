@@ -2,7 +2,7 @@
 
 The **easiest way** to connect your AI agent to Google Workspace.
 
-**153 tools** for Drive, Docs, Sheets, Gmail, Calendar, and Forms — all in one package. One install, one auth, and you're done.
+**159 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, and Maps — all in one package. One install, one auth, and you're done.
 
 ```bash
 npx -y google-tools-mcp setup
@@ -14,7 +14,7 @@ npx -y google-tools-mcp setup
 - **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, and Forms. No juggling multiple tokens or servers.
 - **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
 - **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
-- **153 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms — it's all there.
+- **159 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms, search places — it's all there.
 - **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
 - **No telemetry. No tracking. Fully open source.**
 
@@ -333,6 +333,13 @@ Google Forms — create/read forms, manage responses, and publish settings.
 
 `create_form`, `get_form`, `batch_update_form`, `get_form_response`, `list_form_responses`, `set_publish_settings`
 
+### `maps` (6 tools)
+Google Maps and Places tools for geocoding, reverse geocoding, nearby and text search, place details, and directions.
+
+`mapsGeocode`, `mapsReverseGeocode`, `mapsSearchNearby`, `mapsSearchPlaces`, `mapsPlaceDetails`, `mapsDirections`
+
+These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separate from the Google OAuth credentials used everywhere else and not covered by the setup wizard or by [Step 1](#step-1-create-google-oauth-credentials) above. To get one: enable the **Geocoding API**, **Places API (New)**, and **Routes API** for your Google Cloud project, then go to **Credentials** → **Create Credentials** → **API key**, and set it as `GOOGLE_MAPS_API_KEY`. Without it, the `maps` tools are still listed, but calling any of them fails with a clear error telling you to set the key.
+
 ## Local Working Copies
 
 `readDocument` (markdown format) saves what it reads to a local working-copy file, keyed by document ID and tab, so you can edit that file directly and push it back with `replaceDocumentWithMarkdown` using `filePath` instead of pasting content inline. `replaceDocumentWithMarkdown` also mirrors any inline `markdown=` push into that same file, so it always reflects what's actually on the document.
@@ -354,6 +361,7 @@ These files live in a per-user directory under the OS temp dir (`google-tools-mc
 | `GOOGLE_MCP_WORKSPACE_DIR` | No | Overrides where local working copies of Google Docs are saved (see [Local working copies](#local-working-copies)). Defaults to a per-user directory under the OS temp dir |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
 | `GOOGLE_IMPERSONATE_USER` | No | Email to impersonate with service account |
+| `GOOGLE_MAPS_API_KEY` | No | Google Maps Platform API key (separate from OAuth). Without it, `maps` tools remain listed but fail with a clear error when called |
 
 \* Not required as env vars if you provide credentials via `.env` file or `credentials.json` (see [Step 2](#step-2-provide-your-credentials)).
 
