@@ -576,26 +576,74 @@ describe('quoted history stripping', () => {
         expect(stripQuotedHistory(body)).toBe('Reply');
     });
 
-    it('preserves bottom-posted content written after an Outlook Original Message block', () => {
-        // Regression test for the merge-blocking review finding on PR #63:
-        // treating "-----Original Message-----" as an unconditional cutoff
-        // deleted legitimate authored text below the quoted block. A blank-line
-        // gap after the quoted body's first paragraph marks a genuine, separate
-        // trailing paragraph that must be preserved.
-        const body = 'Intro\n-----Original Message-----\nFrom: Alice\nOriginal body\n\nMy reply below the quote';
-        expect(stripQuotedHistory(body)).toBe('Intro\n\nMy reply below the quote');
+    // -------------------------------------------------------------------
+    // Hard delimiter (Outlook "-----Original Message-----") table.
+    //
+    // An earlier version of this fix tried to detect a genuine trailing
+    // reply after the delimiter by treating the body's first paragraph as
+    // quoted and anything past a following blank line as authored. That
+    // heuristic broke on the single most common real shape: a top-posted
+    // reply where Outlook puts a blank line directly after the header
+    // block. Because the "first paragraph" scan starts on that blank line
+    // and finds it immediately, it consumes zero lines of quoted body, so
+    // the entire original (all of it, not just extra paragraphs) came back
+    // as "authored" and leaked into the clean output. That is worse than
+    // the bug it was meant to fix: it happens silently on every top-posted
+    // Outlook reply, not just the rare bottom-posted one.
+    //
+    // Outlook's pasted original has no ">" prefix, so there is no reliable
+    // marker to tell quoted body from authored text after the delimiter.
+    // We therefore strip the tail unconditionally and accept that a rare
+    // bottom-posted reply is lost the same way a soft-marker false
+    // negative would be; callers who need the untouched body can pass
+    // includeQuoted: true.
+    // -------------------------------------------------------------------
+
+    it('strips a single-paragraph top-posted original with a blank line after the header block', () => {
+        const body = 'Sounds good, will do.\n-----Original Message-----\nFrom: Alice\nSent: Monday\nTo: Bob\nSubject: Q3 planning\n\nHi Bob, can you confirm the Q3 numbers?';
+        expect(stripQuotedHistory(body)).toBe('Sounds good, will do.');
     });
 
-    it('preserves bottom-posted content after a full Outlook header block', () => {
-        const body = 'Thanks for sending this over.\n-----Original Message-----\nFrom: Bob\nSent: Monday\nTo: Carol\nSubject: Re: Update\nThe original body text goes here.\n\nFollow-up: let\'s sync tomorrow.';
-        expect(stripQuotedHistory(body)).toBe("Thanks for sending this over.\n\nFollow-up: let's sync tomorrow.");
+    it('strips a multi-paragraph top-posted original in full, not just its first paragraph (regression)', () => {
+        // This is the exact shape that broke the earlier "preserve trailing
+        // paragraph" heuristic: a blank line after the headers, then a
+        // quoted body spanning several paragraphs. Every paragraph must be
+        // stripped, not just the first one.
+        const body = [
+            'Sounds good, shipping today.',
+            '-----Original Message-----',
+            'From: Alice <alice@example.com>',
+            'Sent: Monday, July 20, 2026 9:00 AM',
+            'To: Bob',
+            'Subject: Q3 planning',
+            '',
+            'Hi Bob,',
+            'Can you confirm the Q3 numbers?',
+            '',
+            'I also need the headcount plan by Friday.',
+            '',
+            'Thanks,',
+            'Alice',
+        ].join('\n');
+        expect(stripQuotedHistory(body)).toBe('Sounds good, shipping today.');
     });
 
-    it('preserves bottom-posted content in formatMessageClean via the hard delimiter', () => {
+    it('strips a top-posted original with no blank line after the header block', () => {
+        const body = 'Reply\n-----Original Message-----\nFrom: A\nSent: B\nTo: C\nSubject: D\nLine one of body\nLine two of body\nLine three of body';
+        expect(stripQuotedHistory(body)).toBe('Reply');
+    });
+
+    it('drops a bottom-posted reply typed after the delimiter (accepted tradeoff, use includeQuoted to recover it)', () => {
         const body = 'Intro\n-----Original Message-----\nFrom: Alice\nOriginal body\n\nMy reply below the quote';
-        const result = formatMessageClean(message(body));
-        expect(result.body).toBe('Intro\n\nMy reply below the quote');
-        expect(result.quotedHistoryStripped).toBe(true);
+        expect(stripQuotedHistory(body)).toBe('Intro');
+        const result = formatMessageClean(message(body), 3000, true);
+        expect(result.body).toBe(body);
+        expect(result.quotedHistoryStripped).toBeUndefined();
+    });
+
+    it('strips a prefixed hard delimiter body ("> "-quoted original) the same as the unprefixed case', () => {
+        const body = 'Reply here\n-----Original Message-----\n> the original text';
+        expect(stripQuotedHistory(body)).toBe('Reply here');
     });
 
     it('keeps inline replies written between quoted blocks', () => {
