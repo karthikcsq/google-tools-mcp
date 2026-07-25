@@ -355,6 +355,13 @@ These files live in a per-user directory under the OS temp dir (`google-tools-mc
 | `GOOGLE_CLIENT_ID` | No* | OAuth 2.0 Client ID |
 | `GOOGLE_CLIENT_SECRET` | No* | OAuth 2.0 Client Secret |
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
+| `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients)) |
+| `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
+| `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
+| `GOOGLE_MCP_HTTP_TOKEN` | No | Bearer token required by HTTP clients. If unset in HTTP mode, a one-time token is generated and printed to stderr at startup. Set a fixed value to keep it stable across restarts |
+| `GOOGLE_MCP_HTTP_HOST` | No | Bind address for HTTP transport (default `127.0.0.1`, loopback only). Change only if you deliberately need remote access |
+| `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` | No | Comma-separated extra `Origin` values to accept (loopback origins are always allowed). Requests with a foreign browser `Origin` are otherwise rejected |
+| `GOOGLE_MCP_HTTP_NO_AUTH` | No | Set to `1` to disable the bearer-token requirement. Only safe when you fully trust every process on the machine |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
 | `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
 | `GOOGLE_MCP_ENABLE_LEGACY_ALIASES` | No | Set to `true` to register the deprecated snake_case tool aliases (off by default; see [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase)) |
@@ -364,6 +371,70 @@ These files live in a per-user directory under the OS temp dir (`google-tools-mc
 | `GOOGLE_MAPS_API_KEY` | No | Google Maps Platform API key (separate from OAuth). Without it, `maps` tools remain listed but fail with a clear error when called |
 
 \* Not required as env vars if you provide credentials via `.env` file or `credentials.json` (see [Step 2](#step-2-provide-your-credentials)).
+
+## Shared HTTP mode (one server for many clients)
+
+By default the server uses **stdio** transport: each MCP client spawns its own
+`google-tools-mcp` process. If you run several clients at once (e.g. many editor
+or agent sessions), that's one Node process per session, each holding memory.
+
+Set `GOOGLE_MCP_TRANSPORT=http` to instead run a **single long-lived server**
+that every client shares over a loopback URL — one process regardless of how
+many clients connect:
+
+```bash
+# start one shared server (keep it running; e.g. a login item or service)
+GOOGLE_MCP_TRANSPORT=http GOOGLE_MCP_PORT=3939 GOOGLE_MCP_HTTP_TOKEN=your-secret google-tools-mcp
+```
+
+Then point each client at the URL, sending the token as a bearer header:
+
+```json
+{
+  "mcpServers": {
+    "google": {
+      "type": "http",
+      "url": "http://127.0.0.1:3939/mcp",
+      "headers": { "Authorization": "Bearer your-secret" }
+    }
+  }
+}
+```
+
+### Security
+
+The HTTP endpoint exposes your **authenticated** Google Workspace tool surface
+(Gmail, Drive, Calendar, Docs, …). It is guarded so it can't be driven by other
+processes or by web pages on your machine:
+
+- **Bearer token required, on every route.** Every request must send
+  `Authorization: Bearer <token>`, including the `GET` that attaches to a session's
+  event stream, the `DELETE` that terminates one, and the legacy SSE compatibility
+  routes (`/sse` and its `/messages` POST endpoint) that FastMCP's HTTP transport
+  always stands up alongside the configured endpoint, whatever `GOOGLE_MCP_ENDPOINT`
+  is set to — there is no way to disable them, so they're guarded instead. A leaked
+  session id on its own gets nobody in. Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a
+  random one-time token is generated and printed to stderr at startup (printed
+  directly, so it still appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`).
+  Requests without a valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables
+  this — only on a fully trusted machine.) The `/ping` health endpoint stays open.
+- **Loopback only.** Binds to `127.0.0.1` by default, so the port isn't reachable
+  from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need
+  to. Startup refuses to run (and exits non-zero) if `GOOGLE_MCP_HTTP_NO_AUTH=1` is
+  combined with a non-loopback host such as `0.0.0.0` or `::` — that combination
+  would be a remotely reachable, completely unauthenticated server — and refuses an
+  empty or whitespace-only host as well.
+- **Origin checked.** Requests carrying a non-loopback browser `Origin` are
+  rejected (DNS-rebinding protection). Add trusted origins via
+  `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` if needed.
+
+Notes:
+- The shared server does **not** start or stop with your clients — you manage
+  its lifecycle (start it at login / run it as a service).
+- Each connecting client gets its own MCP session, and per-session state (such as
+  the read-before-edit guard) is isolated between clients. They still share one
+  process and one OAuth/token state, so a crash or token expiry affects everyone.
+- Auth (`google-tools-mcp auth` / `setup`) is unchanged and still uses stdio.
 
 ## Migrating from gdrive-tools-mcp / gmail-tools-mcp
 
