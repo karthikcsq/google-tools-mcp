@@ -11,6 +11,12 @@ const waypoint = z.union([
 ]);
 const FIELD_MASK = 'routes.distanceMeters,routes.duration,routes.description,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction.instructions,routes.legs.steps.transitDetails';
 
+// The Routes API documents WALK and BICYCLE as beta travel modes and requires displaying
+// this warning to the user for any walking/bicycling route shown:
+// https://developers.google.com/maps/documentation/routes/reference/rest/v2/RouteTravelMode
+const BETA_TRAVEL_MODES = new Set(['WALK', 'BICYCLE']);
+const BETA_TRAVEL_MODE_WARNING = 'WALK and BICYCLE routes are in beta: pedestrian and cycling paths may be incomplete or imprecise in some areas.';
+
 function formatWaypoint(value) {
     return typeof value === 'string' ? { address: value } : { location: { latLng: value } };
 }
@@ -53,6 +59,7 @@ export function register(server) {
                 description: route.description || null,
                 distanceMeters: route.distanceMeters ?? null,
                 duration: route.duration || null,
+                ...(BETA_TRAVEL_MODES.has(args.travelMode) ? { warning: BETA_TRAVEL_MODE_WARNING } : {}),
                 steps: (route.legs || []).flatMap((leg) => (leg.steps || []).map((step) => ({
                     instructions: step.navigationInstruction?.instructions || null,
                     distanceMeters: step.distanceMeters ?? null,

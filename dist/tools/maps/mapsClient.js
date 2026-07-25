@@ -6,10 +6,28 @@ export function getMapsApiKey() {
     return apiKey;
 }
 
+// Generic query-string secret patterns (key=, api_key=, apikey=, access_token=, token=),
+// so future call sites that embed a credential in a URL are covered even if the exact
+// param name changes.
+const SECRET_QUERY_PARAM_PATTERN = /([?&](?:key|api[_-]?key|access_token|token)=)[^&\s'"]+/gi;
+
+// Scrubs the live GOOGLE_MAPS_API_KEY value (if set) plus any key-shaped query-string
+// parameter out of a string before it can reach a caller-visible UserError. This is the
+// single boundary every mapsFetch error path routes through, so no code path (geocoding's
+// URL-embedded key, a future endpoint, a raw network error whose message happens to quote
+// the failed URL) can leak the credential to the MCP caller or its logs.
+export function redactSecrets(text) {
+    if (typeof text !== 'string') return text;
+    let redacted = text;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (apiKey) redacted = redacted.split(apiKey).join('[REDACTED]');
+    return redacted.replace(SECRET_QUERY_PARAM_PATTERN, '$1[REDACTED]');
+}
+
 export async function mapsFetch(url, options = {}) {
     let response;
     try { response = await fetch(url, options); }
-    catch (error) { throw new UserError(`Google Maps request failed: ${error.message || error}`); }
+    catch (error) { throw new UserError(redactSecrets(`Google Maps request failed: ${error.message || error}`)); }
     let data;
     try { data = await response.json(); } catch { data = null; }
     if (data === null && response.ok) {
@@ -19,7 +37,7 @@ export async function mapsFetch(url, options = {}) {
     if (!response.ok || apiStatusError) {
         const status = data?.error?.status || data?.status || response.status;
         const message = data?.error?.message || data?.error_message || response.statusText || 'Unknown error';
-        throw new UserError(`Google Maps API error (${status}): ${message}`);
+        throw new UserError(redactSecrets(`Google Maps API error (${status}): ${message}`));
     }
     return data;
 }

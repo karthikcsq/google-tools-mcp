@@ -22,17 +22,26 @@ export function register(server) {
                 // that lacks the literal word "coffee"). Send the keyword to Text Search,
                 // which ranks relevance server-side, bias it to the circle, then enforce
                 // the radius locally so the result still honors radiusMeters.
-                const body = { textQuery: args.keyword, maxResultCount: 20, locationBias: { circle: { center, radius: args.radiusMeters } } };
-                if (args.includedTypes?.length === 1) body.includedType = args.includedTypes[0];
-                const data = await placesRequest('https://places.googleapis.com/v1/places:searchText', { method: 'POST', body, fieldMask: SEARCH_FIELD_MASK });
-                places = withinRadius((data.places || []).map(formatPlace), center, args.radiusMeters);
-                // Text Search accepts only one includedType; apply any extras as a local
-                // filter. Place types are exact canonical tokens, so this is safe (unlike
-                // matching free text against names).
-                if (args.includedTypes && args.includedTypes.length > 1) {
-                    const wanted = new Set(args.includedTypes);
-                    places = places.filter((place) => place.types.some((type) => wanted.has(type)));
-                }
+                //
+                // Text Search's includedType is a ranking bias, not a filter, unless
+                // strictTypeFiltering is set (Google docs:
+                // https://developers.google.com/maps/documentation/places/web-service/text-search#includedtype).
+                // This tool promises type filtering, and Text Search only accepts a single
+                // includedType per request, so for multiple requested types we run one
+                // strict Text Search per type and merge, instead of asking for one type and
+                // locally filtering an unfiltered (and therefore incomplete, capped-at-20)
+                // page of results by the rest.
+                const types = args.includedTypes?.length ? args.includedTypes : [undefined];
+                const resultSets = await Promise.all(types.map(async (type) => {
+                    const body = { textQuery: args.keyword, maxResultCount: 20, locationBias: { circle: { center, radius: args.radiusMeters } } };
+                    if (type) {
+                        body.includedType = type;
+                        body.strictTypeFiltering = true;
+                    }
+                    const data = await placesRequest('https://places.googleapis.com/v1/places:searchText', { method: 'POST', body, fieldMask: SEARCH_FIELD_MASK });
+                    return (data.places || []).map(formatPlace);
+                }));
+                places = withinRadius(resultSets.flat(), center, args.radiusMeters);
             } else {
                 const body = { locationRestriction: { circle: { center, radius: args.radiusMeters } }, maxResultCount: args.maxResults };
                 if (args.includedTypes?.length) body.includedTypes = args.includedTypes;

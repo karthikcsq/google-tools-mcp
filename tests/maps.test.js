@@ -143,6 +143,7 @@ describe('Maps tools', () => {
             maxResultCount: 20,
             locationBias: { circle: { center: { latitude: 40.4, longitude: -86.9 }, radius: 1500 } },
             includedType: 'cafe',
+            strictTypeFiltering: true,
         });
     });
 
@@ -157,20 +158,41 @@ describe('Maps tools', () => {
         expect(result[0].name).toBe('Starbucks');
     });
 
-    it('applies extra includedTypes as a local filter on top of a keyword Text Search', async () => {
+    it('regression: sets strictTypeFiltering so a high-ranked nonmatching type is not silently returned', async () => {
+        // Google documents includedType on Text Search as a ranking bias, not a filter,
+        // unless strictTypeFiltering is set: without it, a high-ranked place of the wrong
+        // type (e.g. a gas station ranked above nearby restaurants) would come back even
+        // though the tool promises type filtering. Assert the request actually asks the
+        // API to enforce the type instead of merely biasing toward it.
         process.env.GOOGLE_MAPS_API_KEY = 'test-key';
-        global.fetch = jest.fn().mockResolvedValue(response({ places: [
-            { id: 'cafe-match', displayName: { text: 'Starbucks' }, types: ['cafe', 'store'], location: { latitude: 40.4, longitude: -86.9 } },
-            { id: 'no-match', displayName: { text: 'Corner Diner' }, types: ['restaurant'], location: { latitude: 40.4, longitude: -86.9 } },
-        ] }));
+        global.fetch = jest.fn().mockResolvedValue(response({ places: [] }));
+        await tools.get('mapsSearchNearby').execute({ latitude: 40.4, longitude: -86.9, radiusMeters: 1500, includedTypes: ['restaurant'], keyword: 'lunch', maxResults: 5 });
+        const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+        expect(body.includedType).toBe('restaurant');
+        expect(body.strictTypeFiltering).toBe(true);
+    });
+
+    it('runs one strict Text Search per requested type and merges the results when multiple types are given', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockImplementation((_url, options) => {
+            const body = JSON.parse(options.body);
+            const byType = {
+                cafe: [{ id: 'cafe-match', displayName: { text: 'Starbucks' }, types: ['cafe'], location: { latitude: 40.4, longitude: -86.9 } }],
+                bakery: [{ id: 'bakery-match', displayName: { text: 'Corner Bakery' }, types: ['bakery'], location: { latitude: 40.4, longitude: -86.9 } }],
+            };
+            return Promise.resolve(response({ places: byType[body.includedType] || [] }));
+        });
         const result = JSON.parse(await tools.get('mapsSearchNearby').execute({
             latitude: 40.4, longitude: -86.9, radiusMeters: 1000, includedTypes: ['cafe', 'bakery'], keyword: 'coffee', maxResults: 5,
         }));
-        // Text Search accepts only a single includedType, so with more than one requested
-        // type none is sent to the API; both are instead enforced as a local filter.
-        const body = JSON.parse(global.fetch.mock.calls[0][1].body);
-        expect(body.includedType).toBeUndefined();
-        expect(result.map((place) => place.placeId)).toEqual(['cafe-match']);
+        // One strict, per-type Text Search call for each requested type, not a single
+        // unfiltered call with a local post-filter over a capped-at-20 page.
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        for (const [, options] of global.fetch.mock.calls) {
+            const body = JSON.parse(options.body);
+            expect(body.strictTypeFiltering).toBe(true);
+        }
+        expect(result.map((place) => place.placeId).sort()).toEqual(['bakery-match', 'cafe-match']);
     });
 
     it('shapes reverse geocode query parameters and maps the response', async () => {
@@ -215,5 +237,70 @@ describe('Maps tools', () => {
             json: jest.fn().mockRejectedValue(new SyntaxError('Unexpected end of JSON input')),
         });
         await expect(tools.get('mapsSearchPlaces').execute({ query: 'coffee', maxResults: 10 })).rejects.toThrow(/unparsable response/);
+    });
+
+    it('regression: does not leak the API key when a network error message quotes the failed URL', async () => {
+        // Geocode/reverse-geocode embed GOOGLE_MAPS_API_KEY in the request URL's query
+        // string. If the underlying fetch fails in a way whose error message echoes back
+        // the URL it was given (e.g. an invalid-URL TypeError), the raw error message would
+        // otherwise carry `?key=test-key` straight into a caller-visible UserError.
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockImplementation((url) => {
+            throw new TypeError(`Failed to parse URL from ${url}`);
+        });
+        let thrown;
+        try {
+            await tools.get('mapsGeocode').execute({ address: '123 Main St' });
+        } catch (error) {
+            thrown = error;
+        }
+        expect(thrown).toBeDefined();
+        expect(thrown.message).not.toContain('test-key');
+        expect(thrown.message).not.toContain('key=test-key');
+        expect(thrown.message).toContain('[REDACTED]');
+    });
+
+    it('regression: does not leak the API key when the Google Maps API returns an error alongside the request status', async () => {
+        // Same boundary, HTTP-error path: an error body/status line should never be able to
+        // carry the key back to the caller even if a future response happens to include the
+        // request URL in its error text.
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockImplementation((url) => Promise.resolve(response(
+            { status: 'REQUEST_DENIED', error_message: `API key invalid for request ${url}` },
+            { ok: false, status: 403, statusText: 'Forbidden' },
+        )));
+        let thrown;
+        try {
+            await tools.get('mapsGeocode').execute({ address: '123 Main St' });
+        } catch (error) {
+            thrown = error;
+        }
+        expect(thrown).toBeDefined();
+        expect(thrown.message).toContain('[REDACTED]');
+        expect(thrown.message).not.toContain('key=test-key');
+        expect(thrown.message).not.toContain('test-key');
+    });
+
+    it('includes a beta warning for WALK routes per the Routes API RouteTravelMode policy', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ routes: [{ distanceMeters: 500, duration: '600s', legs: [{ steps: [] }] }] }));
+        const result = JSON.parse(await tools.get('mapsDirections').execute({ origin: 'A', destination: 'B', travelMode: 'WALK' }));
+        expect(result.warning).toMatch(/beta/i);
+    });
+
+    it('includes a beta warning for BICYCLE routes per the Routes API RouteTravelMode policy', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ routes: [{ distanceMeters: 500, duration: '600s', legs: [{ steps: [] }] }] }));
+        const result = JSON.parse(await tools.get('mapsDirections').execute({ origin: 'A', destination: 'B', travelMode: 'BICYCLE' }));
+        expect(result.warning).toMatch(/beta/i);
+    });
+
+    it('omits the beta warning for DRIVE and TRANSIT routes', async () => {
+        process.env.GOOGLE_MAPS_API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(response({ routes: [{ distanceMeters: 500, duration: '600s', legs: [{ steps: [] }] }] }));
+        const drive = JSON.parse(await tools.get('mapsDirections').execute({ origin: 'A', destination: 'B', travelMode: 'DRIVE' }));
+        const transit = JSON.parse(await tools.get('mapsDirections').execute({ origin: 'A', destination: 'B', travelMode: 'TRANSIT' }));
+        expect(drive.warning).toBeUndefined();
+        expect(transit.warning).toBeUndefined();
     });
 });
