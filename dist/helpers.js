@@ -242,33 +242,6 @@ export const getPlainTextBody = (messagePart) => {
     return '';
 };
 
-// Outlook's hard delimiter is immediately followed by a contiguous header
-// block (From/Sent/Date/To/Cc/Subject), then the quoted body. That body
-// commonly runs to the end of the message — the case the unconditional strip
-// handled — but a bottom-poster can type a genuine reply below it, separated
-// by a blank line, e.g.:
-//   Intro
-//   -----Original Message-----
-//   From: ...
-//   Original body
-//
-//   My reply below the quote
-// We can't rely on ">" prefixes here (Outlook's pasted original has none), so
-// we treat the header block plus the body's first paragraph as quoted
-// history (covering the common all-quoted case), and any further paragraph
-// separated by a blank line as authored trailing content to preserve rather
-// than silently discard.
-const HARD_DELIMITER_HEADER_LINE = /^\s*(From|Sent|Date|To|Cc|Subject):\s?.*$/i;
-
-const findTrailingContentAfterHardDelimiter = (lines, delimiterIndex) => {
-    let i = delimiterIndex + 1;
-    while (i < lines.length && HARD_DELIMITER_HEADER_LINE.test(lines[i])) i++;
-    while (i < lines.length && !/^\s*$/.test(lines[i])) i++; // the quoted body's first paragraph
-    while (i < lines.length && /^\s*$/.test(lines[i])) i++; // the blank-line gap after it
-    if (i >= lines.length) return '';
-    return lines.slice(i).join('\n').replace(/\s+$/, '');
-};
-
 export const stripQuotedHistory = (text) => {
     if (!text) return text;
     const lines = text.split(/\r?\n/);
@@ -276,11 +249,19 @@ export const stripQuotedHistory = (text) => {
     // ">"-prefixed excerpts (pasted shell output, manual quotes). Only a real
     // attribution marker opens a strip.
     let stripFrom = -1;
-    // A hard delimiter is an unambiguous "everything below is the original"
-    // separator (Outlook's "-----Original Message-----"). Clients emit it on its
-    // own line and never author reply text after it, so we strip the tail
-    // unconditionally — even when the quoted original carries no ">" prefixes,
-    // which is the common Outlook case the ">"-only check used to miss.
+    // A hard delimiter is Outlook's "-----Original Message-----" separator. The
+    // quoted body that follows it has no ">" prefixes, so unlike the soft
+    // markers below we have no reliable marker to tell where quoted history
+    // ends and any authored text after it begins. We deliberately strip the
+    // tail unconditionally rather than guess: a heuristic that tries to find
+    // "real content after the quote" cannot also stay correct on the common
+    // case, a multi-paragraph quoted body with a blank line after the header
+    // block, without leaking that whole quote into the clean output (worse,
+    // and silent, since every top-posted Outlook reply hits this path). A
+    // bottom-posted reply typed below the delimiter is comparatively rare
+    // (Outlook's own Reply button puts the cursor above the quote) and, if it
+    // happens, is lost the same way any other soft-marker false negative would
+    // be. Callers who need the untouched body can pass includeQuoted: true.
     let hardDelimiter = false;
     for (let i = 0; i < lines.length; i++) {
         if (/^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i.test(lines[i])) {
@@ -306,11 +287,7 @@ export const stripQuotedHistory = (text) => {
         }
     }
     if (stripFrom === -1) return text;
-    if (hardDelimiter) {
-        const before = lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
-        const trailing = findTrailingContentAfterHardDelimiter(lines, stripFrom);
-        return [before, trailing].filter(Boolean).join('\n\n');
-    }
+    if (hardDelimiter) return lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
     // Otherwise only strip when everything after the marker is quoted/attribution/blank
     // AND at least one line is actually ">"-quoted. Inline repliers and
     // bottom-posters put real content below or between quoted blocks, and a
