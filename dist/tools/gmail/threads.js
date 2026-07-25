@@ -1,12 +1,29 @@
 // Gmail Thread tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
+import { processMessagePart, formatMessageClean, formatMessageMetadata, capArrayByResponseBudget, DEFAULT_MAX_RESPONSE_CHARS } from '../../helpers.js';
+
+// Applies the whole-response character budget to a thread's formatted messages
+// array, keeping the latest messages (dropping oldest-first) and stamping
+// truncation metadata directly on the thread object so callers can tell it
+// happened and how to get the rest.
+const capThreadMessages = (thread, maxResponseChars) => {
+    if (!thread.messages) return thread;
+    const budget = capArrayByResponseBudget(thread.messages, maxResponseChars, 'start');
+    thread.messages = budget.items;
+    if (budget.truncated) {
+        thread.responseTruncated = true;
+        thread.totalMessages = budget.totalCount;
+        thread.includedMessages = budget.includedCount;
+        thread.truncationNote = `Showing the latest ${budget.includedCount} of ${budget.totalCount} messages to stay under maxResponseChars (${maxResponseChars}). Use maxMessages, messageIds, format:'metadata', or a smaller maxBodyChars to fetch specific messages, or raise/zero maxResponseChars for the rest.`;
+    }
+    return thread;
+};
 
 export function register(server) {
     server.addTool({
         name: 'get_thread',
-        description: 'Get a specific thread by ID. Clean mode removes quoted reply history by default. Full mode returns raw MIME trees with decoded text bodies limited by maxBodyChars. Use maxMessages (latest N) or messageIds to fetch only the messages you need. Note: maxBodyChars caps each message body independently, not the total response size.',
+        description: 'Get a specific thread by ID. Clean mode removes quoted reply history by default. Full mode returns raw MIME trees with decoded text bodies limited by maxBodyChars. Use maxMessages (latest N) or messageIds to fetch only the messages you need. Note: maxBodyChars caps each message body independently, not the total response size — maxResponseChars bounds the aggregate response and truncates (keeping the latest messages) with a truncationNote when the thread is too large.',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format for each message: clean (default), metadata (headers only), or full (raw MIME tree)"),
@@ -15,6 +32,7 @@ export function register(server) {
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
             messageIds: z.array(z.string()).optional().describe("Only include messages with these IDs in the thread response. An empty array is treated as no filter."),
             maxMessages: z.number().optional().describe("Only include the latest N messages of the thread (applied after messageIds). Omit for all. Use 1-2 for the usual 'just the latest reply' case."),
+            maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across all messages combined (unlike maxBodyChars, which only caps each message independently). When exceeded, the oldest messages are dropped (keeping the latest) and the response reports responseTruncated/totalMessages/includedMessages/truncationNote. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
@@ -28,6 +46,7 @@ export function register(server) {
                     if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml, params.maxBodyChars);
                     return message;
                 });
+                capThreadMessages(data, params.maxResponseChars);
             }
             return JSON.stringify(data);
         },
@@ -35,7 +54,7 @@ export function register(server) {
 
     server.addTool({
         name: 'list_threads',
-        description: 'List threads in the user\'s mailbox. Clean mode removes quoted reply history by default. Full mode limits decoded text bodies with maxBodyChars. Omit format to get bare thread stubs.',
+        description: 'List threads in the user\'s mailbox. Clean mode removes quoted reply history by default. Full mode limits decoded text bodies with maxBodyChars. Omit format to get bare thread stubs. maxResponseChars bounds the aggregate response size across all fetched threads combined and truncates (dropping the lowest-priority threads, then oldest messages within a thread) with a truncationNote when the call is too large.',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of threads to return"),
             pageToken: z.string().optional().describe("Page token to retrieve a specific page of results"),
@@ -47,6 +66,7 @@ export function register(server) {
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
             maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all."),
+            maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across every thread this call fetches combined (unlike maxBodyChars, which only caps each message independently, and applies per-thread besides). When exceeded, whole threads are dropped from the end of the list first; each retained thread is also capped individually. Reports responseTruncated/totalThreads/includedThreads/truncationNote at the top level, and the same per-thread when an individual thread's messages were cut. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
@@ -71,6 +91,7 @@ export function register(server) {
                                     if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml, params.maxBodyChars);
                                     return message;
                                 });
+                                capThreadMessages(thread, params.maxResponseChars);
                             }
                             return thread;
                         } catch (e) {
@@ -78,6 +99,14 @@ export function register(server) {
                         }
                     })
                 );
+                const budget = capArrayByResponseBudget(data.threads, params.maxResponseChars, 'end');
+                data.threads = budget.items;
+                if (budget.truncated) {
+                    data.responseTruncated = true;
+                    data.totalThreads = budget.totalCount;
+                    data.includedThreads = budget.includedCount;
+                    data.truncationNote = `Showing ${budget.includedCount} of ${budget.totalCount} threads fetched this call to stay under maxResponseChars (${params.maxResponseChars}). Use pageToken to continue, a smaller maxResults/maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`;
+                }
             }
             return JSON.stringify(data);
         },
@@ -85,7 +114,7 @@ export function register(server) {
 
     server.addTool({
         name: 'batch_get_threads',
-        description: 'Get multiple threads by ID in parallel. Clean mode removes quoted reply history; full mode limits decoded text bodies with maxBodyChars.',
+        description: 'Get multiple threads by ID in parallel. Clean mode removes quoted reply history; full mode limits decoded text bodies with maxBodyChars. maxResponseChars bounds the aggregate response size across all requested threads combined: whole threads are dropped from the end of the ids list first, then each retained thread is capped individually, with truncation reported on the last returned thread (batchResponseTruncated/totalThreadsRequested/includedThreads/truncationNote).',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the threads to retrieve"),
             format: z.enum(['full', 'clean', 'metadata']).optional().default('clean').describe("Response format for each message: clean (default), metadata (headers only), or full (raw MIME tree)"),
@@ -93,6 +122,7 @@ export function register(server) {
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: include quoted reply history. Default false."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
             maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all."),
+            maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across every requested thread combined (unlike maxBodyChars, which only caps each message independently, and applies per-thread besides). When exceeded, whole threads are dropped from the end of the ids list first; each retained thread is also capped individually. Truncation is reported on the last returned thread via batchResponseTruncated/totalThreadsRequested/includedThreads/truncationNote, and per-thread when an individual thread's messages were cut. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
             const gmail = await getGmailClient();
@@ -108,6 +138,7 @@ export function register(server) {
                                 if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml, params.maxBodyChars);
                                 return message;
                             });
+                            capThreadMessages(data, params.maxResponseChars);
                         }
                         return data;
                     } catch (error) {
@@ -115,7 +146,20 @@ export function register(server) {
                     }
                 })
             );
-            return JSON.stringify(results);
+            const budget = capArrayByResponseBudget(results, params.maxResponseChars, 'end');
+            let output = budget.items;
+            if (budget.truncated) {
+                output = output.slice();
+                const lastIndex = output.length - 1;
+                output[lastIndex] = {
+                    ...output[lastIndex],
+                    batchResponseTruncated: true,
+                    totalThreadsRequested: budget.totalCount,
+                    includedThreads: budget.includedCount,
+                    truncationNote: `Only ${budget.includedCount} of ${budget.totalCount} requested threads are included to stay under maxResponseChars (${params.maxResponseChars}). Re-run with fewer ids, a smaller maxMessages/maxBodyChars, or raise/zero maxResponseChars for the rest.`,
+                };
+            }
+            return JSON.stringify(output);
         },
     });
 

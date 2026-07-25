@@ -12,6 +12,7 @@ import {
     getNestedHistory,
     stripQuotedHistory,
     formatMessageClean,
+    capArrayByResponseBudget,
 } from '../dist/helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -467,6 +468,57 @@ describe('processMessagePart', () => {
     });
 });
 
+// ---------------------------------------------------------------------------
+// capArrayByResponseBudget — whole-response character budget (merge-blocking
+// review finding on PR #63: maxBodyChars only caps each message/part
+// independently, so total response size across many messages/threads was
+// unbounded).
+// ---------------------------------------------------------------------------
+describe('capArrayByResponseBudget', () => {
+    it('leaves the array untouched when it is already under budget', () => {
+        const items = [{ a: 1 }, { a: 2 }];
+        const result = capArrayByResponseBudget(items, 10000, 'start');
+        expect(result).toMatchObject({ items, truncated: false, totalCount: 2, includedCount: 2 });
+    });
+
+    it('drops from the start (oldest-first) when dropFrom is "start"', () => {
+        const items = [{ id: 1, pad: 'x'.repeat(50) }, { id: 2, pad: 'x'.repeat(50) }, { id: 3, pad: 'x'.repeat(50) }];
+        const fullSize = JSON.stringify(items).length;
+        const result = capArrayByResponseBudget(items, fullSize - 1, 'start');
+        expect(result.truncated).toBe(true);
+        expect(result.totalCount).toBe(3);
+        expect(result.items[result.items.length - 1].id).toBe(3);
+        expect(result.items.some(i => i.id === 1)).toBe(false);
+        expect(JSON.stringify(result.items).length).toBeLessThanOrEqual(fullSize - 1);
+    });
+
+    it('drops from the end (lowest-priority-last) when dropFrom is "end"', () => {
+        const items = [{ id: 1, pad: 'x'.repeat(50) }, { id: 2, pad: 'x'.repeat(50) }, { id: 3, pad: 'x'.repeat(50) }];
+        const fullSize = JSON.stringify(items).length;
+        const result = capArrayByResponseBudget(items, fullSize - 1, 'end');
+        expect(result.truncated).toBe(true);
+        expect(result.items[0].id).toBe(1);
+        expect(result.items.some(i => i.id === 3)).toBe(false);
+    });
+
+    it('always keeps at least one item even if it alone exceeds the budget', () => {
+        const items = [{ pad: 'x'.repeat(1000) }, { pad: 'x'.repeat(1000) }];
+        const result = capArrayByResponseBudget(items, 10, 'start');
+        expect(result.items.length).toBe(1);
+        expect(result.truncated).toBe(true);
+    });
+
+    it('treats maxChars <= 0 as unlimited (opt-out)', () => {
+        const items = [{ pad: 'x'.repeat(1000) }, { pad: 'x'.repeat(1000) }];
+        expect(capArrayByResponseBudget(items, 0, 'start')).toMatchObject({ truncated: false, includedCount: 2 });
+        expect(capArrayByResponseBudget(items, undefined, 'start')).toMatchObject({ truncated: false, includedCount: 2 });
+    });
+
+    it('handles an empty array without throwing', () => {
+        expect(capArrayByResponseBudget([], 100, 'start')).toMatchObject({ items: [], truncated: false, totalCount: 0, includedCount: 0 });
+    });
+});
+
 describe('quoted history stripping', () => {
     const message = (body) => ({
         id: 'm1',
@@ -509,12 +561,41 @@ describe('quoted history stripping', () => {
 
     it('strips everything after an Original Message delimiter, prefixed or not', () => {
         // "-----Original Message-----" is an unambiguous hard delimiter: Outlook
-        // emits it on its own line and never writes reply text below it, so the
-        // whole tail is quoted history even without ">" prefixes.
+        // emits it on its own line, and the quoted original commonly runs to the
+        // end of the message with no ">" prefixes.
         const prefixed = 'Reply here\n-----Original Message-----\n> the original text';
         expect(stripQuotedHistory(prefixed)).toBe('Reply here');
         const unprefixed = 'Reply here\n-----Original Message-----\nFrom: A\nSent: B\nUnquoted original body';
         expect(stripQuotedHistory(unprefixed)).toBe('Reply here');
+    });
+
+    it('strips a multi-line Outlook quoted body with no trailing content', () => {
+        // The quoted body itself can span several lines with no blank-line gap;
+        // as long as nothing follows it, the whole tail is still quoted history.
+        const body = 'Reply\n-----Original Message-----\nFrom: A\nSent: B\nTo: C\nSubject: D\nLine one of body\nLine two of body\nLine three of body';
+        expect(stripQuotedHistory(body)).toBe('Reply');
+    });
+
+    it('preserves bottom-posted content written after an Outlook Original Message block', () => {
+        // Regression test for the merge-blocking review finding on PR #63:
+        // treating "-----Original Message-----" as an unconditional cutoff
+        // deleted legitimate authored text below the quoted block. A blank-line
+        // gap after the quoted body's first paragraph marks a genuine, separate
+        // trailing paragraph that must be preserved.
+        const body = 'Intro\n-----Original Message-----\nFrom: Alice\nOriginal body\n\nMy reply below the quote';
+        expect(stripQuotedHistory(body)).toBe('Intro\n\nMy reply below the quote');
+    });
+
+    it('preserves bottom-posted content after a full Outlook header block', () => {
+        const body = 'Thanks for sending this over.\n-----Original Message-----\nFrom: Bob\nSent: Monday\nTo: Carol\nSubject: Re: Update\nThe original body text goes here.\n\nFollow-up: let\'s sync tomorrow.';
+        expect(stripQuotedHistory(body)).toBe("Thanks for sending this over.\n\nFollow-up: let's sync tomorrow.");
+    });
+
+    it('preserves bottom-posted content in formatMessageClean via the hard delimiter', () => {
+        const body = 'Intro\n-----Original Message-----\nFrom: Alice\nOriginal body\n\nMy reply below the quote';
+        const result = formatMessageClean(message(body));
+        expect(result.body).toBe('Intro\n\nMy reply below the quote');
+        expect(result.quotedHistoryStripped).toBe(true);
     });
 
     it('keeps inline replies written between quoted blocks', () => {
