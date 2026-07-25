@@ -47,34 +47,119 @@ function alignmentToDocs(value) {
             return null;
     }
 }
-function parseStyleDeclarations(style) {
+// Human-readable hints for recognized CSS properties, used when a declaration
+// is dropped so the warning tells the author what format IS supported.
+const STYLE_PROPERTY_HINTS = {
+    'color': 'a 6-digit hex value like #ff0000',
+    'foreground-color': 'a 6-digit hex value like #ff0000',
+    'background-color': 'a 6-digit hex value like #ff0000',
+    'background': 'a 6-digit hex value like #ff0000',
+    'font-size': 'a point value like 12pt',
+    'font-family': 'a plain font name (letters, digits, spaces, hyphens, periods only)',
+    'text-align': 'left, center, right, or justify',
+};
+/**
+ * Parses an inline `style="..."` attribute into the subset of formatting this
+ * converter understands, AND reports every declaration that could not be
+ * applied. This is deny-by-default: nothing is silently dropped without a
+ * matching entry in `unhandled` (issue #34 follow-up: recognized tags like
+ * <span> were losing unrecognized CSS properties/values with no warning).
+ *
+ * @param options.allowAlignment - Pass true when the caller separately applies
+ *   `text-align` at the paragraph level (e.g. <p>/<div>/table cells) so a
+ *   valid `text-align` isn't double-reported as unhandled here.
+ * @param options.allowRunFormatting - Whether color/background-color/font-size/
+ *   font-family can actually be applied in this context. Only <span> (and other
+ *   run-level formatting) pushes these onto the character formatting stack; a
+ *   wrapping <p>/<div>/table cell never applies them to its contained text, so
+ *   for those callers this must be false -- otherwise a *validly formatted*
+ *   declaration (e.g. `color:#ff0000` on a <p>) would be marked "handled" even
+ *   though nothing ever consumes it, recreating the exact silent-drop bug this
+ *   function exists to prevent. Defaults to true (the <span> case).
+ */
+function parseStyleDeclarations(style, options = {}) {
+    const allowAlignment = options.allowAlignment === true;
+    const allowRunFormatting = options.allowRunFormatting !== false;
     const formatting = {};
+    const unhandled = [];
     if (!style)
-        return formatting;
+        return { formatting, unhandled };
     for (const declaration of style.split(';')) {
         const [rawName, ...rawValueParts] = declaration.split(':');
         if (!rawName || rawValueParts.length === 0)
             continue;
         const name = rawName.trim().toLowerCase();
         const value = rawValueParts.join(':').trim();
-        if ((name === 'color' || name === 'foreground-color') && /^#[0-9a-f]{6}$/i.test(value)) {
-            formatting.foregroundColor = value;
+        if (!value)
+            continue;
+        const isColor = name === 'color' || name === 'foreground-color';
+        const isBackground = name === 'background-color' || name === 'background';
+        const isFontSize = name === 'font-size';
+        const isFontFamily = name === 'font-family';
+        if (isColor || isBackground || isFontSize || isFontFamily) {
+            if (!allowRunFormatting) {
+                unhandled.push({ property: name, value, reason: 'not-applicable-here' });
+                continue;
+            }
+            if (isColor && /^#[0-9a-f]{6}$/i.test(value)) {
+                formatting.foregroundColor = value;
+                continue;
+            }
+            if (isBackground && /^#[0-9a-f]{6}$/i.test(value)) {
+                formatting.backgroundColor = value;
+                continue;
+            }
+            if (isFontSize) {
+                const match = value.match(/^(\d+(?:\.\d+)?)pt$/i);
+                if (match) {
+                    formatting.fontSize = Number(match[1]);
+                    continue;
+                }
+            }
+            if (isFontFamily) {
+                const family = value.split(',')[0]?.trim().replace(/^['"]|['"]$/g, '');
+                if (family && /^[\w .-]+$/.test(family)) {
+                    formatting.fontFamily = family;
+                    continue;
+                }
+            }
+            unhandled.push({ property: name, value, reason: 'unsupported-value' });
+            continue;
         }
-        else if ((name === 'background-color' || name === 'background') && /^#[0-9a-f]{6}$/i.test(value)) {
-            formatting.backgroundColor = value;
+        if (name === 'text-align') {
+            const alignment = alignmentToDocs(value);
+            if (!alignment) {
+                unhandled.push({ property: name, value, reason: 'unsupported-value' });
+                continue;
+            }
+            if (!allowAlignment) {
+                unhandled.push({ property: name, value, reason: 'not-applicable-here' });
+            }
+            continue;
         }
-        else if (name === 'font-size') {
-            const match = value.match(/^(\d+(?:\.\d+)?)pt$/i);
-            if (match)
-                formatting.fontSize = Number(match[1]);
-        }
-        else if (name === 'font-family') {
-            const family = value.split(',')[0]?.trim().replace(/^['"]|['"]$/g, '');
-            if (family && /^[\w .-]+$/.test(family))
-                formatting.fontFamily = family;
-        }
+        unhandled.push({ property: name, value, reason: 'unsupported-property' });
     }
-    return formatting;
+    return { formatting, unhandled };
+}
+/**
+ * Emits one warning per style declaration that `parseStyleDeclarations`
+ * could not apply, so recognized tags never discard formatting silently.
+ */
+function addUnhandledStyleWarnings(context, tag, unhandled) {
+    for (const { property, value, reason } of unhandled) {
+        let detail;
+        if (reason === 'not-applicable-here') {
+            detail = property === 'text-align'
+                ? `text-align is only applied on block-level elements like <p> or <div>, not <${tag}>`
+                : `${property} is only applied on inline elements like <span>, not on the <${tag}> wrapper itself`;
+        }
+        else {
+            detail = STYLE_PROPERTY_HINTS[property]
+                ? `expected ${STYLE_PROPERTY_HINTS[property]}`
+                : 'this CSS property is not supported';
+        }
+        addWarning(context, `Dropped unsupported style declaration "${property}: ${value}" on <${tag}> (${detail}); the formatting was not applied.`);
+    }
 }
 function parseRichHtmlTag(rawHtml) {
     const trimmed = rawHtml.trim();
@@ -318,7 +403,10 @@ function processToken(token, context) {
         case 'th_open':
         case 'td_open': {
             if (context.tableState) {
-                const alignment = parseAlignmentFromStyle(getAttr(token, 'style'));
+                const cellStyle = getAttr(token, 'style');
+                const alignment = parseAlignmentFromStyle(cellStyle);
+                const { unhandled } = parseStyleDeclarations(cellStyle, { allowAlignment: true, allowRunFormatting: false });
+                addUnhandledStyleWarnings(context, token.type === 'th_open' ? 'th' : 'td', unhandled);
                 context.tableState.currentCell = {
                     text: '',
                     isHeader: context.tableState.inHeader || token.type === 'th_open',
@@ -454,7 +542,8 @@ function handleHtmlInlineToken(token, context) {
             context.formattingStack.push({ backgroundColor: '#FFF2CC' });
             break;
         case 'span': {
-            const formatting = parseStyleDeclarations(attrs.style);
+            const { formatting, unhandled } = parseStyleDeclarations(attrs.style);
+            addUnhandledStyleWarnings(context, 'span', unhandled);
             if (hasFormatting(formatting)) {
                 formatting.richSpan = true;
                 context.formattingStack.push(formatting);
@@ -464,6 +553,8 @@ function handleHtmlInlineToken(token, context) {
         case 'p':
         case 'div': {
             const alignment = alignmentToDocs(attrs.align ?? '') ?? parseAlignmentFromStyle(attrs.style);
+            const { unhandled } = parseStyleDeclarations(attrs.style, { allowAlignment: true, allowRunFormatting: false });
+            addUnhandledStyleWarnings(context, parsed.tag, unhandled);
             if (alignment) {
                 context.paragraphFormattingStack.push({ alignment });
                 context.htmlParagraphPushStack.push(true);
@@ -507,6 +598,8 @@ function handleHtmlBlockToken(token, context) {
     }
     else {
         const alignment = alignmentToDocs(attrs.align ?? '') ?? parseAlignmentFromStyle(attrs.style);
+        const { unhandled } = parseStyleDeclarations(attrs.style, { allowAlignment: true, allowRunFormatting: false });
+        addUnhandledStyleWarnings(context, tag, unhandled);
         if (alignment) {
             context.paragraphFormattingStack.push({ alignment });
             pushedParagraphFormatting = true;

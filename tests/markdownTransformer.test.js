@@ -398,7 +398,7 @@ describe('convertMarkdownToRequests', () => {
     });
 
     it('parses rich inline HTML formatting into text style requests', () => {
-        const { requests } = convertMarkdownToRequests('<u><span style="color:#ff0000; background-color:#ffff00; font-size:14pt; font-family:Arial">Styled</span></u>', 1);
+        const { requests, warnings } = convertMarkdownToRequests('<u><span style="color:#ff0000; background-color:#ffff00; font-size:14pt; font-family:Arial">Styled</span></u>', 1);
         const richRequest = requests.find(r =>
             r.updateTextStyle?.textStyle?.underline === true &&
             r.updateTextStyle?.textStyle?.foregroundColor?.color?.rgbColor?.red === 1 &&
@@ -407,6 +407,8 @@ describe('convertMarkdownToRequests', () => {
             r.updateTextStyle?.textStyle?.weightedFontFamily?.fontFamily === 'Arial'
         );
         expect(richRequest).toBeDefined();
+        // All four declarations are in a supported format, so nothing should warn.
+        expect(warnings).toEqual([]);
     });
 
     it('parses paragraph alignment wrappers', () => {
@@ -550,6 +552,95 @@ describe('convertMarkdownToRequests', () => {
         const { warnings } = convertMarkdownToRequests('Weird <!-- a comment --> tag');
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).toMatch(/Dropped unsupported inline HTML/);
+    });
+
+    // -----------------------------------------------------------------------
+    // Recognized-tag style fidelity (PR #61 review thread): <span>/<p>/<div>
+    // and table cells were silently discarding CSS declarations they didn't
+    // understand instead of warning like unsupported tags do.
+    // -----------------------------------------------------------------------
+    it('warns and drops the property for an unsupported CSS property inside a recognized <span>', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<span style="font-weight:bold">important</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('font-weight: bold');
+        expect(warnings[0]).toContain('<span>');
+        // Text is preserved even though the formatting is dropped.
+        const allText = requests.filter(r => 'insertText' in r).map(r => r.insertText.text).join('');
+        expect(allText).toContain('important');
+        // No bold text style request should have been generated.
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.bold === true)).toBe(false);
+    });
+
+    it('warns for a recognized CSS property expressed in an unsupported format inside <span>', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<span style="color:red">important</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('color: red');
+        expect(warnings[0]).toContain('expected a 6-digit hex value');
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.foregroundColor)).toBe(false);
+    });
+
+    it('warns for font-size expressed in an unsupported unit inside <span>', () => {
+        const { requests, warnings } = convertMarkdownToRequests('<span style="font-size:12px">important</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('font-size: 12px');
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.fontSize)).toBe(false);
+    });
+
+    it('reports multiple unhandled declarations on the same span separately', () => {
+        const { warnings } = convertMarkdownToRequests('<span style="font-weight:bold;text-decoration:underline">x</span>', 1);
+        expect(warnings).toHaveLength(2);
+        expect(warnings.some(w => w.includes('font-weight: bold'))).toBe(true);
+        expect(warnings.some(w => w.includes('text-decoration: underline'))).toBe(true);
+    });
+
+    it('warns when a recognized <p> block ignores an unsupported CSS property', () => {
+        const { warnings } = convertMarkdownToRequests('<p style="color:#ff0000">Colored paragraph</p>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('color: #ff0000');
+        expect(warnings[0]).toContain('<p>');
+    });
+
+    it('warns when a recognized <div> HTML block ignores an unsupported CSS property', () => {
+        const { warnings } = convertMarkdownToRequests('<div style="font-weight:bold">Block content</div>', 1);
+        expect(warnings.some(w => w.includes('font-weight: bold') && w.includes('<div>'))).toBe(true);
+    });
+
+    it('warns when a <p> with a validly formatted CSS property has it silently dropped', () => {
+        // The color IS in a supported format, but <p>/<div> wrappers never apply
+        // run-level formatting to their contained text (only <span> does), so
+        // this must still warn instead of being treated as "handled".
+        const { requests, warnings } = convertMarkdownToRequests('<p style="color:#ff0000">Colored paragraph</p>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('color: #ff0000');
+        expect(warnings[0]).toContain('only applied on inline elements like <span>');
+        expect(requests.some(r => r.updateTextStyle?.textStyle?.foregroundColor)).toBe(false);
+    });
+
+    it('warns when text-align is used on an inline <span> where it cannot be applied', () => {
+        const { warnings } = convertMarkdownToRequests('<span style="text-align:center">x</span>', 1);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('text-align: center');
+        expect(warnings[0]).toContain('not <span>');
+    });
+
+    it('does not warn when text-align is used on a <p>, since it is applied there', () => {
+        const { warnings } = convertMarkdownToRequests('<p style="text-align:center">Centered</p>', 1);
+        expect(warnings).toEqual([]);
+    });
+
+    it('warns when a span with unsupported formatting appears inside a table cell', () => {
+        // Table cells route inline content (including HTML spans) through the same
+        // span handler, so the same fidelity warning must surface there too.
+        const { warnings } = convertMarkdownToRequests('| <span style="font-weight:bold">A</span> |\n| --- |\n| 1 |', 1);
+        expect(warnings.some(w => w.includes('font-weight: bold'))).toBe(true);
+    });
+
+    it('does not warn for markdown-generated table cell alignment styles', () => {
+        // markdown-it derives a `style="text-align:..."` attribute on th/td tokens
+        // straight from the `:---:`/`---:` separator syntax; that value must never
+        // trigger a false "unsupported CSS" warning.
+        const { warnings } = convertMarkdownToRequests('| Left | Center | Right |\n| :--- | :---: | ---: |\n| a | b | c |', 1);
+        expect(warnings).toEqual([]);
     });
 });
 
