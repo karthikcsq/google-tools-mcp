@@ -110,7 +110,7 @@ export function register(server) {
                 const warningNote = result.warnings?.length
                     ? ` with ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (content dropped — see below)`
                     : '';
-                return `${docUrl}\nAppended ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
+                return `${docUrl}\nSuccessfully appended ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
             }
             catch (error) {
                 log.error(`Error appending markdown: ${error.message}`);
