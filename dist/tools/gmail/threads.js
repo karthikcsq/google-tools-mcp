@@ -17,7 +17,7 @@ const messageOmissionStub = (maxResponseChars) => (message, budgetForStub) => ma
 // single oversized message: a bounded stub rather than an unbounded thread
 // or a silently dropped one.
 const threadOmissionStub = (maxResponseChars) => (thread, budgetForStub) => makeOmissionStub(thread, budgetForStub, id =>
-    `This thread alone is larger than maxResponseChars (${maxResponseChars}), even after per-message capping. Fetch it directly with get_thread using id: "${id}" and a larger maxResponseChars, a smaller maxMessages, or format: 'metadata'.`);
+    `This thread alone is larger than maxResponseChars (${maxResponseChars}), even after per-message capping. Fetch it directly with getThread using id: "${id}" and a larger maxResponseChars, a smaller maxMessages, or format: 'metadata'.`);
 
 // Truncates fullNote to whatever room remains so that adding it to an object
 // already measured at baseSize (before the note key exists) keeps the whole
@@ -75,7 +75,7 @@ const capThreadMessages = (thread, maxResponseChars) => {
 
 export function register(server) {
     server.addTool({
-        name: 'get_thread',
+        name: 'getThread',
         description: 'Get a specific thread by ID. Clean mode removes quoted reply history when it can be safely identified; an ambiguous Outlook-style quote (no ">" prefixes to mark where it ends) is left in the body rather than guessed at, and flagged via quotedHistoryAmbiguous/quotedHistoryNote. Full mode returns raw MIME trees with decoded text bodies limited by maxBodyChars. Use maxMessages (latest N) or messageIds to fetch only the messages you need. Note: maxBodyChars caps each message body independently, not the total response size. maxResponseChars bounds the aggregate response and truncates (keeping the latest messages) with a truncationNote when the thread is too large.',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to retrieve"),
@@ -106,7 +106,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'list_threads',
+        name: 'listThreads',
         description: 'List threads in the user\'s mailbox. Clean mode removes quoted reply history when it can be safely identified; an ambiguous Outlook-style quote (no ">" prefixes to mark where it ends) is left in the body rather than guessed at, and flagged via quotedHistoryAmbiguous/quotedHistoryNote. Full mode limits decoded text bodies with maxBodyChars. Omit format to get bare thread stubs. maxResponseChars bounds the aggregate response size across all fetched threads combined and truncates (dropping the lowest-priority threads, then oldest messages within a thread) with a truncationNote when the call is too large.',
         parameters: z.object({
             maxResults: z.number().optional().describe("Maximum number of threads to return"),
@@ -175,7 +175,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'batch_get_threads',
+        name: 'batchGetThreads',
         description: 'Get multiple threads by ID in parallel. Clean mode removes quoted reply history when it can be safely identified; an ambiguous Outlook-style quote (no ">" prefixes to mark where it ends) is left in the body rather than guessed at, and flagged via quotedHistoryAmbiguous/quotedHistoryNote. Full mode limits decoded text bodies with maxBodyChars. maxResponseChars bounds the aggregate response size across all requested threads combined: whole threads are dropped from the end of the ids list first, then each retained thread is capped individually, with truncation reported on the last returned thread (batchResponseTruncated/totalThreadsRequested/includedThreads/truncationNote).',
         parameters: z.object({
             ids: z.array(z.string()).describe("The IDs of the threads to retrieve"),
@@ -231,7 +231,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'modify_thread',
+        name: 'modifyThread',
         description: 'Modify the labels applied to a thread',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to modify"),
@@ -247,7 +247,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'delete_thread',
+        name: 'deleteThread',
         description: 'Delete a thread',
         parameters: z.object({
             id: z.string().describe("The ID of the thread to delete"),
@@ -260,7 +260,7 @@ export function register(server) {
     });
 
     server.addTool({
-        name: 'trash_thread',
+        name: 'trashThread',
         description: 'Move one or more threads to the trash or restore them. Pass a single id or an array of ids.',
         parameters: z.object({
             ids: z.union([z.string(), z.array(z.string())]).describe("Thread ID or array of thread IDs"),
