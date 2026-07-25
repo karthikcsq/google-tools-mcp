@@ -25,6 +25,8 @@ import http from 'node:http';
 
 /**
  * Resolve HTTP auth configuration from the environment. Pure — no side effects.
+ * Does not validate the combination of `noAuth` and `host` — call
+ * `assertSafeHttpBinding` on the result before starting the HTTP transport.
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function resolveHttpAuthConfig(env = process.env) {
@@ -36,6 +38,45 @@ export function resolveHttpAuthConfig(env = process.env) {
         .map((s) => s.trim())
         .filter(Boolean);
     return { explicitToken, noAuth, host, allowedOrigins };
+}
+
+/**
+ * Refuse configurations that would expose the authenticated Google Workspace
+ * tool surface (Gmail, Drive, Calendar, Docs, ...) with no way to keep out an
+ * unauthenticated remote caller.
+ *
+ * Two things are unsafe on their own and must stop startup, not just log a
+ * warning after the fact:
+ *   1. `GOOGLE_MCP_HTTP_NO_AUTH=1` (no bearer token) combined with a bind host
+ *      that is not strictly loopback (e.g. `0.0.0.0`, `::`, a LAN IP, or a
+ *      hostname). That is a remotely reachable server with zero
+ *      authentication.
+ *   2. An empty or whitespace-only host after trimming. `env.HOST || '...'`
+ *      treats a whitespace string as truthy, so `GOOGLE_MCP_HTTP_HOST="  "`
+ *      previously resolved to `''`, which Node's http server can bind as "all
+ *      interfaces" instead of the intended loopback default.
+ *
+ * @param {{ host: string, noAuth: boolean }} config result of resolveHttpAuthConfig
+ * @throws {Error} with an operator-facing message if the combination is unsafe
+ */
+export function assertSafeHttpBinding({ host, noAuth }) {
+    const trimmedHost = typeof host === 'string' ? host.trim() : '';
+    if (!trimmedHost) {
+        throw new Error(
+            'GOOGLE_MCP_HTTP_HOST resolved to an empty value after trimming. Refusing to start: ' +
+            'an empty host can make the HTTP server bind to all interfaces instead of loopback. ' +
+            'Unset GOOGLE_MCP_HTTP_HOST to use the 127.0.0.1 default, or set it to a real host.'
+        );
+    }
+    if (noAuth && !isLoopbackHost(trimmedHost)) {
+        throw new Error(
+            `Refusing to start: GOOGLE_MCP_HTTP_NO_AUTH is set and GOOGLE_MCP_HTTP_HOST is ` +
+            `'${trimmedHost}', which is not loopback. That combination starts a remotely ` +
+            'reachable server with zero authentication in front of every Google Workspace tool ' +
+            '(Gmail, Drive, Docs, Calendar, ...). Either remove GOOGLE_MCP_HTTP_NO_AUTH so the ' +
+            'bearer token stays required, or bind to a loopback host (127.0.0.1, localhost, ::1).'
+        );
+    }
 }
 
 /** Generate a high-entropy URL-safe token. */
@@ -165,27 +206,40 @@ export function checkHttpAuth(headers, config) {
 }
 
 /**
- * Build a request guard that applies the same gates to every HTTP method.
+ * Build a request guard that applies the same gates to every HTTP method and
+ * every route the underlying listener can dispatch to, not just the
+ * configured streamable-HTTP endpoint.
  *
  * FastMCP's `authenticate` hook is only reached on session creation. In the
- * pinned mcp-proxy that means POST: its GET branch (attaching to a session's
- * event stream) and DELETE branch (terminating a session) dispatch on the
- * Mcp-Session-Id header alone and never call the hook. Anyone who learned a
- * session id could read from or kill that session without presenting a token,
- * while the README promises every request is bearer-protected.
+ * pinned mcp-proxy that means POST to the streamable endpoint: its GET branch
+ * (attaching to a session's event stream) and DELETE branch (terminating a
+ * session) dispatch on the Mcp-Session-Id header alone and never call the
+ * hook. Anyone who learned a session id could read from or kill that session
+ * without presenting a token, while the README promises every request is
+ * bearer-protected.
+ *
+ * That gap is not limited to the configured endpoint (normally `/mcp`).
+ * FastMCP's call into mcp-proxy's `startHTTPServer` never passes
+ * `sseEndpoint`, so mcp-proxy's default of `/sse` (plus its companion POST
+ * `/messages` route) is always live alongside the streamable endpoint,
+ * whatever `GOOGLE_MCP_ENDPOINT` is set to, and there is no supported FastMCP
+ * option to turn that legacy SSE compatibility transport off. Guarding only
+ * the configured endpoint would leave `/sse` and `/messages` completely
+ * unauthenticated, so this guard instead applies to every path except the two
+ * that must stay open for the protocol to work at all.
  *
  * Returns true when it has already written a rejection, false to let the
  * request continue.
  *
  * OPTIONS is let through: browsers never attach Authorization to a preflight,
- * and the real request behind it is still gated. Paths other than the MCP
- * endpoint (mcp-proxy's own /ping, for one) are left alone.
+ * and the real request behind it is still gated. `GET /ping` is let through:
+ * it is mcp-proxy's own unauthenticated health check, carries no session data
+ * and no tool surface, and is documented as staying open.
  *
  * @param {{ token?: string, noAuth?: boolean, allowedOrigins?: string[] }} config
  * @param {{ warn?: Function }} [logger]
- * @param {string} endpoint the MCP endpoint path, e.g. '/mcp'
  */
-export function createHttpRequestGuard(config, logger, endpoint) {
+export function createHttpRequestGuard(config, logger) {
     return function guardRequest(req, res) {
         if (req.method === 'OPTIONS') return false;
 
@@ -195,7 +249,7 @@ export function createHttpRequestGuard(config, logger, endpoint) {
         } catch {
             return false;
         }
-        if (pathname !== endpoint) return false;
+        if (req.method === 'GET' && pathname === '/ping') return false;
 
         const result = checkHttpAuth(req.headers, config);
         if (result.ok) return false;

@@ -11,7 +11,7 @@
 import { FastMCP } from 'fastmcp';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
-import { resolveHttpAuthConfig, generateToken, createHttpAuthenticate, createHttpRequestGuard, startWithRequestGuard } from './httpAuth.js';
+import { resolveHttpAuthConfig, assertSafeHttpBinding, generateToken, createHttpAuthenticate, createHttpRequestGuard, startWithRequestGuard } from './httpAuth.js';
 import { clearSession } from './readTracker.js';
 
 // --- Setup subcommand ---
@@ -55,6 +55,20 @@ const httpEndpoint = process.env.GOOGLE_MCP_ENDPOINT || '/mcp';
 // by default so it isn't reachable by untrusted local processes, browser-
 // delivered requests, or the network. (PR #36 review)
 const httpAuth = resolveHttpAuthConfig(process.env);
+if (useHttp) {
+    // Refuse to start rather than log a warning after the fact: a non-loopback
+    // host combined with GOOGLE_MCP_HTTP_NO_AUTH=1 is a remotely reachable,
+    // completely unauthenticated server in front of Gmail/Drive/Docs/Calendar,
+    // and an empty host after trimming can make Node bind to all interfaces.
+    // Written straight to stderr (not the logger) so LOG_LEVEL=error/silent
+    // can't hide the reason the process refused to start.
+    try {
+        assertSafeHttpBinding(httpAuth);
+    } catch (configError) {
+        process.stderr.write(`FATAL: ${configError.message}\n`);
+        process.exit(1);
+    }
+}
 let httpToken = httpAuth.explicitToken;
 if (useHttp && !httpAuth.noAuth && !httpToken) {
     // No token configured — generate a one-time one so the server is never
@@ -141,13 +155,15 @@ try {
     logger.info('Starting google-tools-mcp server...');
     if (useHttp) {
         // authenticate() above only runs on session creation (POST). The guard
-        // covers the endpoint itself, so GET stream attachment and DELETE
-        // session termination have to present the same token instead of riding
-        // on a session id alone.
+        // covers every method and every route mcp-proxy can dispatch to
+        // (including the legacy /sse and /messages compatibility endpoints
+        // FastMCP always stands up alongside the configured streamable
+        // endpoint), so GET stream attachment and DELETE session termination
+        // have to present the same token instead of riding on a session id
+        // alone.
         const guard = createHttpRequestGuard(
             { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
             logger,
-            httpEndpoint,
         );
         await startWithRequestGuard(() => server.start({
             transportType: 'httpStream',

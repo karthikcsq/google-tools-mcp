@@ -342,16 +342,23 @@ The HTTP endpoint exposes your **authenticated** Google Workspace tool surface
 (Gmail, Drive, Calendar, Docs, …). It is guarded so it can't be driven by other
 processes or by web pages on your machine:
 
-- **Bearer token required.** Every request to the MCP endpoint must send
+- **Bearer token required, on every route.** Every request must send
   `Authorization: Bearer <token>`, including the `GET` that attaches to a session's
-  event stream and the `DELETE` that terminates one, so a leaked session id on its
-  own gets nobody in. Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a random one-time
-  token is generated and printed to stderr at startup (printed directly, so it
-  still appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`). Requests without a
-  valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables this — only on a
-  fully trusted machine.) The `/ping` health endpoint stays open.
+  event stream, the `DELETE` that terminates one, and the legacy SSE compatibility
+  routes (`/sse` and its `/messages` POST endpoint) that FastMCP's HTTP transport
+  always stands up alongside the configured endpoint, whatever `GOOGLE_MCP_ENDPOINT`
+  is set to — there is no way to disable them, so they're guarded instead. A leaked
+  session id on its own gets nobody in. Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a
+  random one-time token is generated and printed to stderr at startup (printed
+  directly, so it still appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`).
+  Requests without a valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables
+  this — only on a fully trusted machine.) The `/ping` health endpoint stays open.
 - **Loopback only.** Binds to `127.0.0.1` by default, so the port isn't reachable
-  from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need to.
+  from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need
+  to. Startup refuses to run (and exits non-zero) if `GOOGLE_MCP_HTTP_NO_AUTH=1` is
+  combined with a non-loopback host such as `0.0.0.0` or `::` — that combination
+  would be a remotely reachable, completely unauthenticated server — and refuses an
+  empty or whitespace-only host as well.
 - **Origin checked.** Requests carrying a non-loopback browser `Origin` are
   rejected (DNS-rebinding protection). Add trusted origins via
   `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` if needed.

@@ -4,6 +4,7 @@
 import { describe, it, expect } from '@jest/globals';
 import {
     resolveHttpAuthConfig,
+    assertSafeHttpBinding,
     generateToken,
     isLoopbackHost,
     isOriginAllowed,
@@ -42,6 +43,57 @@ describe('httpAuth', () => {
             expect(resolveHttpAuthConfig({ GOOGLE_MCP_HTTP_NO_AUTH: 'true' }).noAuth).toBe(true);
             expect(resolveHttpAuthConfig({ GOOGLE_MCP_HTTP_NO_AUTH: 'no' }).noAuth).toBe(false);
             expect(resolveHttpAuthConfig({ GOOGLE_MCP_HTTP_NO_AUTH: '' }).noAuth).toBe(false);
+        });
+
+        it('resolves a whitespace-only host down to an empty string', () => {
+            // `env.HOST || '127.0.0.1'` treats a whitespace-only string as truthy,
+            // so it is never replaced by the loopback default; only the
+            // subsequent .trim() empties it. assertSafeHttpBinding is what
+            // actually rejects this, not resolveHttpAuthConfig itself.
+            expect(resolveHttpAuthConfig({ GOOGLE_MCP_HTTP_HOST: '   ' }).host).toBe('');
+        });
+
+        it('feeds a remote-exposure combination straight into assertSafeHttpBinding', () => {
+            const cfg = resolveHttpAuthConfig({
+                GOOGLE_MCP_HTTP_NO_AUTH: '1',
+                GOOGLE_MCP_HTTP_HOST: '0.0.0.0',
+            });
+            expect(() => assertSafeHttpBinding(cfg)).toThrow(/Refusing to start/);
+        });
+    });
+
+    // Merge-blocking finding on PR #59: GOOGLE_MCP_HTTP_NO_AUTH=1 combined with
+    // a non-loopback GOOGLE_MCP_HTTP_HOST (e.g. 0.0.0.0) started a remotely
+    // reachable, completely unauthenticated server. A log line after binding
+    // is not a safeguard for that credential boundary — startup must refuse.
+    describe('assertSafeHttpBinding', () => {
+        it('allows noAuth with a loopback host', () => {
+            expect(() => assertSafeHttpBinding({ host: '127.0.0.1', noAuth: true })).not.toThrow();
+            expect(() => assertSafeHttpBinding({ host: 'localhost', noAuth: true })).not.toThrow();
+            expect(() => assertSafeHttpBinding({ host: '::1', noAuth: true })).not.toThrow();
+        });
+
+        it('allows a non-loopback host when auth is required', () => {
+            expect(() => assertSafeHttpBinding({ host: '0.0.0.0', noAuth: false })).not.toThrow();
+        });
+
+        it('rejects noAuth combined with a non-loopback IPv4 host', () => {
+            expect(() => assertSafeHttpBinding({ host: '0.0.0.0', noAuth: true })).toThrow(/Refusing to start/);
+        });
+
+        it('rejects noAuth combined with the IPv6 unspecified host', () => {
+            expect(() => assertSafeHttpBinding({ host: '::', noAuth: true })).toThrow(/Refusing to start/);
+        });
+
+        it('rejects noAuth combined with a LAN/hostname host', () => {
+            expect(() => assertSafeHttpBinding({ host: '192.168.1.50', noAuth: true })).toThrow(/Refusing to start/);
+            expect(() => assertSafeHttpBinding({ host: 'my-machine.local', noAuth: true })).toThrow(/Refusing to start/);
+        });
+
+        it('rejects an empty host after trimming regardless of noAuth', () => {
+            expect(() => assertSafeHttpBinding({ host: '', noAuth: false })).toThrow(/empty/);
+            expect(() => assertSafeHttpBinding({ host: '   ', noAuth: false })).toThrow(/empty/);
+            expect(() => assertSafeHttpBinding({ host: '   ', noAuth: true })).toThrow(/empty/);
         });
     });
 
@@ -180,21 +232,21 @@ describe('httpAuth', () => {
         };
 
         it.each(['GET', 'DELETE', 'POST'])('rejects %s with no token', (method) => {
-            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const guard = createHttpRequestGuard({ token }, undefined);
             const res = fakeRes();
             expect(guard(guardReq(method, { 'mcp-session-id': 'leaked' }), res)).toBe(true);
             expect(res.statusCode).toBe(401);
         });
 
         it.each(['GET', 'DELETE'])('lets %s through with a valid token', (method) => {
-            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const guard = createHttpRequestGuard({ token }, undefined);
             const res = fakeRes();
             expect(guard(guardReq(method, { authorization: `Bearer ${token}` }), res)).toBe(false);
             expect(res.statusCode).toBeNull();
         });
 
         it('rejects a disallowed Origin with 403 even when the token is right', () => {
-            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const guard = createHttpRequestGuard({ token }, undefined);
             const res = fakeRes();
             expect(guard(guardReq('GET', {
                 authorization: `Bearer ${token}`,
@@ -204,26 +256,63 @@ describe('httpAuth', () => {
         });
 
         it('leaves OPTIONS preflight alone (browsers never send Authorization on it)', () => {
-            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+            const guard = createHttpRequestGuard({ token }, undefined);
             const res = fakeRes();
             expect(guard(guardReq('OPTIONS'), res)).toBe(false);
         });
 
-        it('leaves other paths alone, so /ping stays reachable', () => {
-            const guard = createHttpRequestGuard({ token }, undefined, '/mcp');
+        it('leaves GET /ping alone, so the health check stays reachable', () => {
+            const guard = createHttpRequestGuard({ token }, undefined);
             const res = fakeRes();
             expect(guard(guardReq('GET', {}, '/ping'), res)).toBe(false);
         });
 
-        it('honours a non-default endpoint', () => {
-            const guard = createHttpRequestGuard({ token }, undefined, '/custom');
+        it('does not exempt POST /ping (mcp-proxy itself only special-cases GET)', () => {
+            const guard = createHttpRequestGuard({ token }, undefined);
             const res = fakeRes();
-            expect(guard(guardReq('GET', {}, '/mcp'), res)).toBe(false);
-            expect(guard(guardReq('GET', {}, '/custom'), fakeRes())).toBe(true);
+            expect(guard(guardReq('POST', {}, '/ping'), res)).toBe(true);
+            expect(res.statusCode).toBe(401);
+        });
+
+        // Regression coverage for the merge-blocking finding on PR #59: FastMCP's
+        // call into mcp-proxy's startHTTPServer never passes `sseEndpoint`, so
+        // mcp-proxy's default `/sse` GET route and its companion `/messages`
+        // POST route are live alongside the configured streamable endpoint no
+        // matter what GOOGLE_MCP_ENDPOINT is set to. A guard that only matched
+        // one configured endpoint would leave those two completely open.
+        it('guards the legacy SSE endpoint (GET /sse) exactly like the streamable endpoint', () => {
+            const guard = createHttpRequestGuard({ token }, undefined);
+            const rejected = fakeRes();
+            expect(guard(guardReq('GET', {}, '/sse'), rejected)).toBe(true);
+            expect(rejected.statusCode).toBe(401);
+
+            const allowed = fakeRes();
+            expect(guard(guardReq('GET', { authorization: `Bearer ${token}` }, '/sse'), allowed)).toBe(false);
+        });
+
+        it('guards the legacy SSE message endpoint (POST /messages)', () => {
+            const guard = createHttpRequestGuard({ token }, undefined);
+            const rejected = fakeRes();
+            expect(guard(guardReq('POST', {}, '/messages?sessionId=leaked'), rejected)).toBe(true);
+            expect(rejected.statusCode).toBe(401);
+
+            const allowed = fakeRes();
+            expect(guard(guardReq(
+                'POST',
+                { authorization: `Bearer ${token}` },
+                '/messages?sessionId=leaked',
+            ), allowed)).toBe(false);
+        });
+
+        it('guards the configured endpoint even when it differs from the /mcp default', () => {
+            const guard = createHttpRequestGuard({ token }, undefined);
+            const res = fakeRes();
+            expect(guard(guardReq('GET', {}, '/custom'), res)).toBe(true);
+            expect(res.statusCode).toBe(401);
         });
 
         it('skips the token check when noAuth is set but still guards Origin', () => {
-            const guard = createHttpRequestGuard({ noAuth: true }, undefined, '/mcp');
+            const guard = createHttpRequestGuard({ noAuth: true }, undefined);
             expect(guard(guardReq('DELETE', {}), fakeRes())).toBe(false);
             const res = fakeRes();
             expect(guard(guardReq('DELETE', { origin: 'https://evil.example' }), res)).toBe(true);
