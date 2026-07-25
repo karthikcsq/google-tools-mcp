@@ -290,6 +290,8 @@ Google Forms — create/read forms, manage responses, and publish settings.
 
 `readDocument` (markdown format) saves what it reads to a local working-copy file, keyed by document ID and tab, so you can edit that file directly and push it back with `replaceDocumentWithMarkdown` using `filePath` instead of pasting content inline. `replaceDocumentWithMarkdown` also mirrors any inline `markdown=` push into that same file, so it always reflects what's actually on the document.
 
+If the document contains content markdown can't represent (images, footnotes, a generated table of contents, or other Docs elements with no markdown equivalent), `readDocument` appends a warning after the markdown listing exactly what a full `replaceDocumentWithMarkdown` push would permanently remove. Use `modifyText` or `appendMarkdown` instead for those documents.
+
 These files live in a per-user directory under the OS temp dir (`google-tools-mcp-<user>`), created with restrictive permissions and checked on every write so a planted symlink is refused rather than followed. Set `GOOGLE_MCP_WORKSPACE_DIR` to use a different directory instead.
 
 ## Environment Variables
