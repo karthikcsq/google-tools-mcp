@@ -571,6 +571,49 @@ describe('convertMarkdownToRequests', () => {
         expect(requests.some(r => r.updateTextStyle?.textStyle?.bold === true)).toBe(false);
     });
 
+    it('preserves outer span formatting after a nested unsupported span closes', () => {
+        const { requests } = convertMarkdownToRequests(
+            '<span style="color:#ff0000">before <span style="font-weight:bold">inner</span> after</span>',
+            1
+        );
+        const redRanges = requests
+            .filter(r => r.updateTextStyle?.textStyle?.foregroundColor?.color?.rgbColor?.red === 1)
+            .map(r => r.updateTextStyle.range);
+        expect(redRanges).toEqual([
+            { startIndex: 1, endIndex: 8 },
+            { startIndex: 8, endIndex: 13 },
+            { startIndex: 13, endIndex: 19 },
+        ]);
+    });
+
+    it('preserves outer span formatting around a nested supported span', () => {
+        const { requests } = convertMarkdownToRequests(
+            '<span style="color:#ff0000">before <span style="color:#00ff00">inner</span> after</span>',
+            1
+        );
+        const colorRanges = requests
+            .filter(r => r.updateTextStyle?.textStyle?.foregroundColor)
+            .map(r => ({
+                range: r.updateTextStyle.range,
+                color: r.updateTextStyle.textStyle.foregroundColor.color.rgbColor,
+            }));
+        expect(colorRanges).toEqual([
+            { range: { startIndex: 1, endIndex: 8 }, color: { red: 1, green: 0, blue: 0 } },
+            { range: { startIndex: 8, endIndex: 13 }, color: { red: 0, green: 1, blue: 0 } },
+            { range: { startIndex: 13, endIndex: 19 }, color: { red: 1, green: 0, blue: 0 } },
+        ]);
+    });
+
+    it('still warns for an unsupported declaration in a nested span', () => {
+        const { warnings } = convertMarkdownToRequests(
+            '<span style="color:#ff0000">before <span style="font-weight:bold">inner</span> after</span>',
+            1
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('font-weight: bold');
+        expect(warnings[0]).toContain('<span>');
+    });
+
     it('warns for a recognized CSS property expressed in an unsupported format inside <span>', () => {
         const { requests, warnings } = convertMarkdownToRequests('<span style="color:red">important</span>', 1);
         expect(warnings).toHaveLength(1);

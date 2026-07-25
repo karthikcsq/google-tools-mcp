@@ -252,6 +252,7 @@ export function convertMarkdownToRequests(markdown, startIndex = 1, tabId, optio
         inTableCell: false,
         paragraphFormattingStack: [],
         htmlParagraphPushStack: [],
+        htmlSpanPushStack: [],
         warningCounts: new Map(),
         tabId,
         titleConsumed: false,
@@ -520,9 +521,12 @@ function handleHtmlInlineToken(token, context) {
             case 'mark':
                 popFormatting(context, 'backgroundColor');
                 break;
-            case 'span':
-                popFormatting(context, 'richSpan');
+            case 'span': {
+                const pushed = context.htmlSpanPushStack.pop();
+                if (pushed)
+                    popFormatting(context, 'richSpan');
                 break;
+            }
             case 'p':
             case 'div': {
                 const pushed = context.htmlParagraphPushStack.pop();
@@ -551,6 +555,10 @@ function handleHtmlInlineToken(token, context) {
             if (hasFormatting(formatting)) {
                 formatting.richSpan = true;
                 context.formattingStack.push(formatting);
+                context.htmlSpanPushStack.push(true);
+            }
+            else {
+                context.htmlSpanPushStack.push(false);
             }
             break;
         }
