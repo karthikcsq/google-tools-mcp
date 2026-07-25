@@ -1,0 +1,79 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+# npm Trusted Publishing exchanges this short-lived GitHub Actions identity for
+# publish access. No npm token is stored in this repository.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Requires a "npm-publish" GitHub environment with at least one required
+    # reviewer (see RELEASING.md). The ancestry check below only proves the
+    # tagged commit is reachable from main, not that a release was approved;
+    # this environment gate adds that approval step, and its name must match
+    # the "Environment name" configured on npm's trusted publisher so the
+    # OIDC identity npm expects lines up with the one this job presents.
+    environment: npm-publish
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # A v* tag can be pushed from any local branch, so the version check alone
+      # is not enough: it would happily publish a commit that never went through
+      # main. Ask the API whether the tagged commit is reachable from main and
+      # refuse otherwise. Comparing main...<sha> returns "identical" when the tag
+      # is exactly main's tip and "behind" when it is an older commit on main;
+      # anything else ("ahead", "diverged") means the commit is not on main.
+      - name: Verify tagged commit is on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${GITHUB_SHA}" --jq .status)"
+          echo "Comparison of main...${GITHUB_SHA}: ${status}"
+          if [ "$status" != "identical" ] && [ "$status" != "behind" ]; then
+            echo "Tag $GITHUB_REF_NAME points at a commit that is not on main. Refusing to publish."
+            exit 1
+          fi
+
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          if [ "$tag_version" != "$package_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $package_version"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run release checks
+        run: npm run test:ci
+
+      - name: Verify npm package contents
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        run: npm publish --access public
