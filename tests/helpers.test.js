@@ -11,6 +11,8 @@ import {
     stripQuotedHistory,
     formatMessageClean,
     capArrayByResponseBudget,
+    capToResponseBudget,
+    makeOmissionStub,
 } from '../dist/helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -353,11 +355,30 @@ describe('capArrayByResponseBudget', () => {
         expect(result.items.some(i => i.id === 3)).toBe(false);
     });
 
-    it('always keeps at least one item even if it alone exceeds the budget', () => {
+    it('without a makeStub function, keeps the oversized last item as-is (low-level primitive, opt-in only)', () => {
+        // This is the behavior a merge-blocking review flagged: on its own,
+        // capArrayByResponseBudget cannot guarantee the array fits maxChars,
+        // because a lone oversized item is kept unbounded. That is still true
+        // here, deliberately: this primitive has no way to build a stub for
+        // an arbitrary item shape. Every production call site now always
+        // passes a makeStub (see the tests below and in gmailThreads.test.js
+        // for the actual end-to-end guarantee); this test just documents the
+        // low-level floor when a caller does not.
         const items = [{ pad: 'x'.repeat(1000) }, { pad: 'x'.repeat(1000) }];
         const result = capArrayByResponseBudget(items, 10, 'start');
         expect(result.items.length).toBe(1);
         expect(result.truncated).toBe(true);
+        expect(JSON.stringify(result.items).length).toBeGreaterThan(10);
+    });
+
+    it('with a makeStub function, replaces an oversized last item with its bounded stub instead of keeping it unbounded', () => {
+        const items = [{ id: 'a', pad: 'x'.repeat(1000) }, { id: 'b', pad: 'x'.repeat(1000) }];
+        const makeStub = (item, maxChars) => makeOmissionStub(item, maxChars, id => `omitted: ${id}`);
+        const result = capArrayByResponseBudget(items, 60, 'start', makeStub);
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0]).toMatchObject({ id: 'b', responseOmitted: true });
+        expect(result.items[0].pad).toBeUndefined();
+        expect(JSON.stringify(result.items).length).toBeLessThanOrEqual(60);
     });
 
     it('treats maxChars <= 0 as unlimited (opt-out)', () => {
@@ -368,6 +389,105 @@ describe('capArrayByResponseBudget', () => {
 
     it('handles an empty array without throwing', () => {
         expect(capArrayByResponseBudget([], 100, 'start')).toMatchObject({ items: [], truncated: false, totalCount: 0, includedCount: 0 });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// makeOmissionStub
+// ---------------------------------------------------------------------------
+describe('makeOmissionStub', () => {
+    it('includes the id and a reason that fits within maxChars', () => {
+        const stub = makeOmissionStub({ id: 'msg-1' }, 500, id => `This item (${id}) was too large to include.`);
+        expect(stub.id).toBe('msg-1');
+        expect(stub.responseOmitted).toBe(true);
+        expect(stub.omittedReason).toBe('This item (msg-1) was too large to include.');
+        expect(JSON.stringify(stub).length).toBeLessThanOrEqual(500);
+    });
+
+    it('truncates the reason to whatever room remains instead of exceeding maxChars', () => {
+        const longReason = 'x'.repeat(1000);
+        const stub = makeOmissionStub({ id: 'msg-1' }, 80, () => longReason);
+        expect(JSON.stringify(stub).length).toBeLessThanOrEqual(80);
+        expect(stub.omittedReason.length).toBeLessThan(longReason.length);
+    });
+
+    it('drops the reason entirely, keeping only the bare skeleton, when there is no room for it at all', () => {
+        const stub = makeOmissionStub({ id: 'msg-1' }, 10, () => 'anything');
+        expect(stub).toEqual({ id: 'msg-1', responseOmitted: true });
+    });
+
+    it('caps an unreasonably long id so the id itself cannot blow the budget', () => {
+        const stub = makeOmissionStub({ id: 'x'.repeat(10000) }, 300, id => `omitted: ${id}`);
+        expect(JSON.stringify(stub).length).toBeLessThanOrEqual(300);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// capToResponseBudget
+// ---------------------------------------------------------------------------
+describe('capToResponseBudget', () => {
+    const attach = (state) => (items, truncated, totalCount, includedCount) => {
+        state.items = items;
+        state.truncated = truncated;
+        state.totalCount = totalCount;
+        state.includedCount = includedCount;
+        return { items, truncated, totalCount, includedCount };
+    };
+
+    it('returns the untouched payload when it already fits, with no metadata attached', () => {
+        const state = {};
+        const items = [{ id: 1 }, { id: 2 }];
+        const payload = capToResponseBudget(items, 10000, 'start', undefined, attach(state));
+        expect(payload.truncated).toBe(false);
+        expect(payload.items).toBe(items);
+    });
+
+    it('guarantees the final payload (items plus metadata) fits maxChars, not just the array alone', () => {
+        // Each item alone is small, but the metadata this attach function
+        // adds is deliberately large relative to maxChars, so capping the
+        // array to the full budget and adding metadata afterward (the old
+        // bug) would overshoot. capToResponseBudget must shrink the array
+        // further to leave room for it, and this stays airtight down to the
+        // single-item floor because a makeStub is supplied.
+        const items = Array.from({ length: 10 }, (_, i) => ({ id: i, pad: 'y'.repeat(20) }));
+        const bigNote = 'z'.repeat(150);
+        const makeStub = (item, maxChars) => makeOmissionStub(item, maxChars, id => `omitted: ${id}`);
+        const attachWithBigNote = (capped, truncated, totalCount, includedCount) => ({
+            items: capped,
+            truncated,
+            totalCount,
+            includedCount,
+            ...(truncated ? { note: bigNote } : {}),
+        });
+        const maxChars = 400;
+        const payload = capToResponseBudget(items, maxChars, 'start', makeStub, attachWithBigNote);
+        expect(JSON.stringify(payload).length).toBeLessThanOrEqual(maxChars);
+        expect(payload.truncated).toBe(true);
+        // Fewer items survive than would fit the array alone against the full
+        // 400-char budget, proving room was actually reserved for `note`.
+        const arrayOnlyFit = capArrayByResponseBudget(items, maxChars, 'start', makeStub).includedCount;
+        expect(payload.includedCount).toBeLessThan(arrayOnlyFit);
+    });
+
+    it('replaces a single oversized item with a bounded stub via the provided makeStub, keeping the final payload within maxChars', () => {
+        const items = [{ id: 'only', pad: 'x'.repeat(1000) }];
+        const makeStub = (item, maxChars) => makeOmissionStub(item, maxChars, id => `omitted: ${id}`);
+        const maxChars = 200;
+        const payload = capToResponseBudget(items, maxChars, 'start', makeStub, (capped, truncated, totalCount, includedCount) => ({
+            items: capped,
+            truncated,
+            totalCount,
+            includedCount,
+        }));
+        expect(JSON.stringify(payload).length).toBeLessThanOrEqual(maxChars);
+        expect(payload.items[0].responseOmitted).toBe(true);
+    });
+
+    it('treats maxChars <= 0 as unlimited and returns the untouched payload', () => {
+        const items = [{ pad: 'x'.repeat(1000) }];
+        const payload = capToResponseBudget(items, 0, 'start', undefined, (capped, truncated) => ({ items: capped, truncated }));
+        expect(payload.truncated).toBe(false);
+        expect(payload.items).toBe(items);
     });
 });
 
