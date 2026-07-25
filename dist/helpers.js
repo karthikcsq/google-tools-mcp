@@ -242,6 +242,33 @@ export const getPlainTextBody = (messagePart) => {
     return '';
 };
 
+// Outlook's hard delimiter is immediately followed by a contiguous header
+// block (From/Sent/Date/To/Cc/Subject), then the quoted body. That body
+// commonly runs to the end of the message — the case the unconditional strip
+// handled — but a bottom-poster can type a genuine reply below it, separated
+// by a blank line, e.g.:
+//   Intro
+//   -----Original Message-----
+//   From: ...
+//   Original body
+//
+//   My reply below the quote
+// We can't rely on ">" prefixes here (Outlook's pasted original has none), so
+// we treat the header block plus the body's first paragraph as quoted
+// history (covering the common all-quoted case), and any further paragraph
+// separated by a blank line as authored trailing content to preserve rather
+// than silently discard.
+const HARD_DELIMITER_HEADER_LINE = /^\s*(From|Sent|Date|To|Cc|Subject):\s?.*$/i;
+
+const findTrailingContentAfterHardDelimiter = (lines, delimiterIndex) => {
+    let i = delimiterIndex + 1;
+    while (i < lines.length && HARD_DELIMITER_HEADER_LINE.test(lines[i])) i++;
+    while (i < lines.length && !/^\s*$/.test(lines[i])) i++; // the quoted body's first paragraph
+    while (i < lines.length && /^\s*$/.test(lines[i])) i++; // the blank-line gap after it
+    if (i >= lines.length) return '';
+    return lines.slice(i).join('\n').replace(/\s+$/, '');
+};
+
 export const stripQuotedHistory = (text) => {
     if (!text) return text;
     const lines = text.split(/\r?\n/);
@@ -279,7 +306,11 @@ export const stripQuotedHistory = (text) => {
         }
     }
     if (stripFrom === -1) return text;
-    if (hardDelimiter) return lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
+    if (hardDelimiter) {
+        const before = lines.slice(0, stripFrom).join('\n').replace(/\s+$/, '');
+        const trailing = findTrailingContentAfterHardDelimiter(lines, stripFrom);
+        return [before, trailing].filter(Boolean).join('\n\n');
+    }
     // Otherwise only strip when everything after the marker is quoted/attribution/blank
     // AND at least one line is actually ">"-quoted. Inline repliers and
     // bottom-posters put real content below or between quoted blocks, and a
@@ -323,6 +354,39 @@ export const formatMessageClean = (message, maxBodyChars = 3000, includeQuoted =
         ...(quotedHistoryStripped ? { quotedHistoryStripped: true } : {}),
         ...(truncated ? { bodyTruncated: true, totalChars } : {}),
     };
+};
+
+// Default whole-response character budget for thread tools (get_thread,
+// list_threads, batch_get_threads). maxBodyChars only bounds each message body
+// independently, so a thread with many messages (or a list/batch call
+// spanning many threads) had no ceiling on total serialized size — a 100-reply
+// thread at the 3,000-char default body cap alone runs to roughly 300,000
+// body characters before headers/MIME metadata. This budget is a real cap on
+// the aggregate JSON size of the array being returned, applied after the
+// per-item caps above. 0 disables it (opt-out, matching maxBodyChars).
+export const DEFAULT_MAX_RESPONSE_CHARS = 100000;
+
+// Drops items from an array (oldest-first via 'start', or lowest-priority-last
+// via 'end') until the serialized array fits within maxChars, always keeping
+// at least one item. Used to bound the aggregate size of a messages array
+// (within one thread) or a threads/results array (across a list/batch call).
+// Re-stringifying on every drop is O(n^2) in item count, which is fine for the
+// message/thread counts these tools realistically return; it keeps the logic
+// exact instead of estimating from average item size.
+export const capArrayByResponseBudget = (items, maxChars, dropFrom = 'start') => {
+    const totalCount = items?.length ?? 0;
+    if (!maxChars || maxChars <= 0 || !totalCount) {
+        return { items: items || [], truncated: false, totalCount, includedCount: totalCount };
+    }
+    if (JSON.stringify(items).length <= maxChars) {
+        return { items, truncated: false, totalCount, includedCount: totalCount };
+    }
+    const kept = items.slice();
+    while (kept.length > 1 && JSON.stringify(kept).length > maxChars) {
+        if (dropFrom === 'start') kept.shift();
+        else kept.pop();
+    }
+    return { items: kept, truncated: true, totalCount, includedCount: kept.length };
 };
 
 export const formatMessageMetadata = (message) => {
