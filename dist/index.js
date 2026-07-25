@@ -8,11 +8,22 @@
 //   google-tools-mcp          Start the MCP server (default)
 //   google-tools-mcp auth     Run the interactive OAuth flow
 //   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
+import { createRequire } from 'module';
 import { FastMCP } from 'fastmcp';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
+import { getConfigDir } from './auth.js';
+import { checkForUpdate } from './updateCheck.js';
 import { resolveHttpAuthConfig, assertSafeHttpBinding, generateToken, createHttpAuthenticate, createHttpRequestGuard, startWithRequestGuard } from './httpAuth.js';
 import { clearSession } from './readTracker.js';
+
+// Read our own published version straight from package.json rather than
+// hardcoding it. `files: ["dist"]` in package.json only restricts what npm
+// packs; package.json itself always ships at the package root (npm
+// includes it unconditionally), so this resolves the same way both in this
+// checkout and once installed globally.
+const require = createRequire(import.meta.url);
+const { version: packageVersion } = require('../package.json');
 
 // --- Setup subcommand ---
 if (process.argv[2] === 'setup') {
@@ -153,6 +164,17 @@ await registerAllTools(server);
 
 try {
     logger.info('Starting google-tools-mcp server...');
+    // process.uptime() covers the whole life of this node process, including
+    // module load time, so a slow number here means the server itself is
+    // slow to boot. If this is fast (~1s) but the MCP client still reports a
+    // long time-to-connect, the delay is happening before this process even
+    // started — e.g. npx re-resolving the dependency tree on every launch.
+    // See https://github.com/karthikcsq/google-tools-mcp/issues/46
+    //
+    // Measured inside each branch rather than once before them, so the number
+    // covers the transport actually being brought up: binding a port is not
+    // the same work as attaching to a stdio pipe.
+    let readyMs;
     if (useHttp) {
         // authenticate() above only runs on session creation (POST). The guard
         // covers every method and every route mcp-proxy can dispatch to
@@ -169,14 +191,46 @@ try {
             transportType: 'httpStream',
             httpStream: { port: httpPort, endpoint: httpEndpoint, host: httpAuth.host },
         }), guard);
-        logger.info(`MCP Server running over HTTP at http://${httpAuth.host}:${httpPort}${httpEndpoint}`);
+        readyMs = Math.round(process.uptime() * 1000);
+        logger.info(`MCP Server running over HTTP at http://${httpAuth.host}:${httpPort}${httpEndpoint} in ${readyMs}ms.`);
         logger.info(`Auth: ${httpAuth.noAuth ? 'DISABLED (GOOGLE_MCP_HTTP_NO_AUTH) — do not use on a shared machine' : 'bearer token required'}; bound to ${httpAuth.host}.`);
         logger.info('Shared mode: point every client at this URL instead of spawning per-session stdio servers.');
     } else {
         await server.start({ transportType: 'stdio' });
-        logger.info('MCP Server running using stdio. Awaiting client connection...');
+        readyMs = Math.round(process.uptime() * 1000);
+        logger.info(`MCP Server running using stdio in ${readyMs}ms. Awaiting client connection...`);
+    }
+    if (readyMs > 5000) {
+        logger.warn(`Startup took ${readyMs}ms. If the MCP client also reports a long connection time, ` +
+            'this process itself is slow — check for antivirus/disk contention. If this number is small ' +
+            'but the client-reported connect time is much larger (e.g. near 30000ms), the delay is happening ' +
+            'before this process starts (commonly npx re-resolving the dependency tree on every launch); ' +
+            'see the README troubleshooting section for a fix.');
     }
     logger.info('Google auth will run automatically on first tool call.');
+
+    // Best-effort update nudge. This runs AFTER the transport above is
+    // already established, and is deliberately not awaited: a slow or
+    // unreachable registry can never delay or block the MCP handshake this
+    // way. checkForUpdate() is itself time-boxed and caches its result, so
+    // most launches don't even make a network call. See updateCheck.js for
+    // why this exists: pointing MCP clients at a fixed global-install path
+    // (see setup.js) fixed the npx timeout race but also means nothing else
+    // ever re-runs `npm install -g` to pick up new releases.
+    checkForUpdate({ currentVersion: packageVersion, configDir: getConfigDir() })
+        .then((result) => {
+            if (result?.updateAvailable) {
+                logger.warn(
+                    `A newer version of google-tools-mcp is available: ${result.latestVersion} ` +
+                    `(currently running ${packageVersion}). Update with: npm install -g google-tools-mcp@latest`
+                );
+            }
+        })
+        .catch(() => {
+            // checkForUpdate() already swallows its own errors; this catch
+            // only guards against a truly unexpected throw so it can never
+            // surface as an unhandled rejection.
+        });
 } catch (startError) {
     logger.error('FATAL: Server failed to start:', startError.message || startError);
     process.exit(1);
