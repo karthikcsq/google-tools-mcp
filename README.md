@@ -102,7 +102,7 @@ Add the credentials directly to your MCP configuration:
 }
 ```
 
-(Requires `npm install -g google-tools-mcp` first — see [Step 3](#step-3-add-to-your-mcp-client) and the [Troubleshooting](#troubleshooting) section for why `npx` isn't used here.)
+(Requires `npm install -g google-tools-mcp` first: see [Step 3](#step-3-add-to-your-mcp-client) and the [Troubleshooting](#troubleshooting) section for why `npx` isn't used here.)
 
 > **Credential lookup order:** env vars → `~/.config/google-tools-mcp/.env` → project root `.env` → `~/.config/google-tools-mcp/credentials.json` → project root `credentials.json`
 
@@ -128,7 +128,7 @@ For larger arguments, put JSON in a file and pass it with `@`:
 npm run local:tool -- replaceDocumentWithMarkdown @args.json
 ```
 
-> **Why `npm install -g` instead of `npx`?** The guided setup wizard installs the package globally and points your MCP client straight at it, instead of using `npx -y google-tools-mcp`. `npx` re-resolves the whole dependency tree on every single launch, which can take 30+ seconds on some machines (this package pulls in `fastmcp` + the full `googleapis` client library) — long enough to lose the race against Claude Code's fixed 30s stdio MCP connection timeout. See [Troubleshooting](#troubleshooting) below if you're setting this up by hand.
+> **Why `npm install -g` instead of `npx`?** The guided setup wizard installs the package globally and points your MCP client straight at it, instead of using `npx -y google-tools-mcp`. `npx` re-resolves the whole dependency tree on every single launch, which can take 30+ seconds on some machines (this package pulls in `fastmcp` + the full `googleapis` client library). That's long enough to lose the race against Claude Code's fixed 30s stdio MCP connection timeout. See [Troubleshooting](#troubleshooting) below if you're setting this up by hand.
 
 First, install once:
 
@@ -225,7 +225,7 @@ If using Option C, add an `"env"` block with your `GOOGLE_CLIENT_ID` and `GOOGLE
 <details>
 <summary>Prefer <code>npx</code> anyway, or can't install globally?</summary>
 
-Every example above works with `npx -y google-tools-mcp` in place of `google-tools-mcp` (e.g. `codex mcp add google -- npx -y google-tools-mcp`). It requires no global install, but pays npx's dependency-resolution cost on every launch — see [Troubleshooting](#troubleshooting) for what that costs you.
+Every example above works with `npx -y google-tools-mcp` in place of `google-tools-mcp` (e.g. `codex mcp add google -- npx -y google-tools-mcp`). It requires no global install, but pays npx's dependency-resolution cost on every launch: see [Troubleshooting](#troubleshooting) for what that costs you.
 
 </details>
 
@@ -257,19 +257,19 @@ This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default 
 
 ### The `google` MCP server won't connect / "connection timed out"
 
-**Symptom:** Claude Code (or another MCP client) reports that the `google` server failed to connect, timed out, or keeps disconnecting — with no other visible error. It may work sometimes and fail other times on the same machine.
+**Symptom:** Claude Code (or another MCP client) reports that the `google` server failed to connect, timed out, or keeps disconnecting, with no other visible error. It may work sometimes and fail other times on the same machine.
 
-**Cause:** If your MCP config launches the server with `npx -y google-tools-mcp`, `npx` re-resolves and verifies the entire dependency tree (this package pulls in `fastmcp` + the full `googleapis` client library, a large `node_modules`) on **every single launch** — not just the first. On some machines, especially Windows (likely antivirus real-time scanning of npm's file I/O during install/verify), this reliably takes 30-34 seconds, even when the exact version is already cached locally. Claude Code's stdio MCP connection timeout is a fixed 30 seconds, so `npx`-launched servers are right on the failure line and frequently lose the race.
+**Cause:** If your MCP config launches the server with `npx -y google-tools-mcp`, `npx` re-resolves and verifies the entire dependency tree (this package pulls in `fastmcp` + the full `googleapis` client library, a large `node_modules`) on **every single launch**, not just the first. On some machines, especially Windows (likely antivirus real-time scanning of npm's file I/O during install/verify), this reliably takes 30-34 seconds, even when the exact version is already cached locally. Claude Code's stdio MCP connection timeout is a fixed 30 seconds, so `npx`-launched servers are right on the failure line and frequently lose the race.
 
 Launching directly (`node dist/index.js`, or the global-install path below) is faster, but it is not a guarantee. Measured on one affected Windows machine on 2026-07-24, three runs each: `npx` took 23.0s, 25.3s and 24.6s, a direct `node` launch took 14.7s, 26.0s and 12.2s. So skipping `npx` is worth roughly 7 seconds on average and removes a large source of variance, but on a machine with slow disk I/O a direct launch can still come close to the limit. If it still times out after you switch, what is left is the cost of reading this package's dependency tree off disk, tracked in [issue #71](https://github.com/karthikcsq/google-tools-mcp/issues/71). Full writeup in [issue #46](https://github.com/karthikcsq/google-tools-mcp/issues/46).
 
 **Where to look:** MCP clients that log per-server connection attempts will show the exact timing. For Claude Code, per-server logs live at:
 
 - **Windows:** `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project-slug>\mcp-logs-google\*.jsonl`
-- **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` — the `claude-cli-nodejs` cache root and per-server log folder are corroborated by an independent user report ([anthropics/claude-code#18869](https://github.com/anthropics/claude-code/issues/18869)), though not confirmed with this exact server name
-- **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir — unconfirmed; if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
+- **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl`: the `claude-cli-nodejs` cache root and per-server log folder are corroborated by an independent user report ([anthropics/claude-code#18869](https://github.com/anthropics/claude-code/issues/18869)), though not confirmed with this exact server name
+- **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir, and unconfirmed; if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
 
-Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. google-tools-mcp itself also logs its own startup time on the server's first ready line (e.g. `MCP Server running using stdio in 1123ms`), so if the server logs a fast startup but the client still reports a near-30000ms connection time, the delay is happening before the server process even starts — i.e. in `npx`, not in the server.
+Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. google-tools-mcp itself also logs its own startup time on the server's first ready line (e.g. `MCP Server running using stdio in 1123ms`), so if the server logs a fast startup but the client still reports a near-30000ms connection time, the delay is happening before the server process even starts, i.e. in `npx`, not in the server.
 
 **Fix:** Install the package globally and point your MCP client directly at it instead of using `npx`:
 
@@ -277,7 +277,7 @@ Look for lines like `"Connection timeout triggered after ...ms"` or `"Successful
 npm install -g google-tools-mcp
 ```
 
-Then use `google-tools-mcp` (no `npx`) as the MCP `command` — see [Step 3](#step-3-add-to-your-mcp-client) for exact commands per client. Running `npx -y google-tools-mcp setup` does this for you automatically: the guided setup wizard installs the package globally and points the MCP entry straight at it. If the global install isn't possible on your machine (e.g. no write access to the global npm directory), it falls back to `npx` — but only if `npx` is actually on PATH, since a machine that can't reach npm usually can't reach npx either. If `npx` isn't there either, it falls back to launching whichever copy of the package is running the wizard right now. If none of the three works, it stops, explains why, and writes nothing to your MCP config rather than leaving you with a command that can't run.
+Then use `google-tools-mcp` (no `npx`) as the MCP `command`: see [Step 3](#step-3-add-to-your-mcp-client) for exact commands per client. Running `npx -y google-tools-mcp setup` does this for you automatically: the guided setup wizard installs the package globally and points the MCP entry straight at it. If the global install isn't possible on your machine (e.g. no write access to the global npm directory), it falls back to `npx`, but only if `npx` is actually on PATH, since a machine that can't reach npm usually can't reach npx either. If `npx` isn't there either, it falls back to launching whichever copy of the package is running the wizard right now. If none of the three works, it stops, explains why, and writes nothing to your MCP config rather than leaving you with a command that can't run.
 
 ## Tool Categories
 
