@@ -4,7 +4,7 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'manage_event',
+        name: 'manageEvent',
         description:
             'Create, update, or delete a calendar event. Supports attendees, Google Meet, reminders, attachments, visibility, and transparency settings. IMPORTANT: To modify an existing event, always use action "update" with the existing event_id. Never delete and recreate an event to make changes — this destroys the event ID, attendee RSVPs, and sent notifications.',
         parameters: z.object({
@@ -64,7 +64,7 @@ export function register(server) {
             color_id: z
                 .string()
                 .optional()
-                .describe('Color ID for the event (1-11). Use list_calendars or Google Calendar docs for color mapping.'),
+                .describe('Color ID for the event (1-11). Use listCalendars or Google Calendar docs for color mapping.'),
             recurrence: z
                 .array(z.string())
                 .optional()
@@ -136,7 +136,7 @@ export function register(server) {
                 throw new UserError(`Unknown action: ${args.action}`);
             } catch (error) {
                 if (error instanceof UserError) throw error;
-                log.error(`Error in manage_event (${args.action}): ${error.message || error}`);
+                log.error(`Error in manageEvent (${args.action}): ${error.message || error}`);
                 if (error.code === 404)
                     throw new UserError('Calendar or event not found. Check the IDs.');
                 if (error.code === 403)

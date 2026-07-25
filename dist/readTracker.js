@@ -7,11 +7,43 @@ import { UserError } from 'fastmcp';
 import { createPatch } from 'diff';
 import { getDriveClient } from './clients.js';
 import { logger } from './logger.js';
+import { currentSessionKey } from './sessionContext.js';
 
-// Map of fileId → { readAt: Date, modifiedTime: string|null, content: string|null }
-// content is only populated for file types that opt in (currently Google Docs).
-// Sheets and raw Drive files still track read/modifiedTime only.
-const readLog = new Map();
+// Per-session read logs.
+//
+// Each session has its own Map of fileId → { readAt, modifiedTime, content }.
+// content is only populated for file types that opt in (currently Google Docs);
+// Sheets and raw Drive files track read/modifiedTime only.
+//
+// Namespacing by session is what makes shared HTTP mode safe: two clients
+// reading or mutating the same file no longer clobber each other's tracked
+// content, modifiedTime, and revision guard (PR #36 review). In stdio mode the
+// ambient session key is null, so there is a single namespace and behavior is
+// identical to the original single-Map implementation.
+const sessions = new Map(); // sessionKey (string|null) → Map<fileId, entry>
+
+// Sentinel for the stdio / no-request namespace (Map keys can't be null-safe
+// across distinct absent values, so normalize null → this string).
+const DEFAULT_SESSION = '\0default';
+
+function logForCurrentSession() {
+    const key = currentSessionKey() ?? DEFAULT_SESSION;
+    let log = sessions.get(key);
+    if (!log) {
+        log = new Map();
+        sessions.set(key, log);
+    }
+    return log;
+}
+
+/**
+ * Drop all tracked state for a session. Called when an HTTP session disconnects
+ * so a long-lived shared server doesn't accumulate tracker entries forever.
+ * @param {string|null|undefined} sessionKey
+ */
+export function clearSession(sessionKey) {
+    sessions.delete(sessionKey ?? DEFAULT_SESSION);
+}
 
 /**
  * Record that a file was read. Call from all read tools.
@@ -21,7 +53,7 @@ const readLog = new Map();
  * @param revisionId Optional Google Docs revision ID used for optimistic concurrency
  */
 export function trackRead(fileId, modifiedTime, content, revisionId) {
-    readLog.set(fileId, {
+    logForCurrentSession().set(fileId, {
         readAt: new Date(),
         modifiedTime: modifiedTime || null,
         content: typeof content === 'string' ? content : null,
@@ -47,6 +79,7 @@ export function trackRead(fileId, modifiedTime, content, revisionId) {
  *   a guaranteed-stale requiredRevisionId.
  */
 export async function guardMutation(fileId, opts) {
+    const readLog = logForCurrentSession();
     const entry = readLog.get(fileId);
     if (!entry) {
         throw new UserError(
@@ -171,7 +204,7 @@ export async function guardMutation(fileId, opts) {
  *   behavior, same as before).
  */
 export function trackMutation(fileId, newRevisionId) {
-    const entry = readLog.get(fileId);
+    const entry = logForCurrentSession().get(fileId);
     if (entry) {
         entry.readAt = new Date();
         // Clear modifiedTime — it will be stale after our mutation.
@@ -200,7 +233,7 @@ export function trackMutation(fileId, newRevisionId) {
  * @param reason Sentence fragment explaining what happened, shown to the caller.
  */
 export function requireRereadBeforeMutation(fileId, reason) {
-    const entry = readLog.get(fileId);
+    const entry = logForCurrentSession().get(fileId);
     if (entry) {
         entry.readAt = new Date();
         entry.modifiedTime = null;
@@ -214,18 +247,18 @@ export function requireRereadBeforeMutation(fileId, reason) {
  * Check if a file has been read (without throwing).
  */
 export function hasBeenRead(fileId) {
-    return readLog.has(fileId);
+    return logForCurrentSession().has(fileId);
 }
 
 /**
  * Return the content snapshot from the last read, or null if none stored.
  */
 export function getLastReadContent(fileId) {
-    const entry = readLog.get(fileId);
+    const entry = logForCurrentSession().get(fileId);
     return entry?.content ?? null;
 }
 
 /** Return the Google Docs revision ID from the last read, or null. */
 export function getLastReadRevisionId(fileId) {
-    return readLog.get(fileId)?.revisionId ?? null;
+    return logForCurrentSession().get(fileId)?.revisionId ?? null;
 }

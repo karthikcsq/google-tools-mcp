@@ -4,7 +4,7 @@ import { getCalendarClient } from '../../clients.js';
 
 export function register(server) {
     server.addTool({
-        name: 'get_events',
+        name: 'getEvents',
         description:
             'Retrieves events from a Google Calendar. Can get a single event by ID, or list events in a time range with optional search. ' +
             'By default only returns future events (time_min defaults to now). To retrieve past events, set time_min to a past date (e.g. "2025-01-01T00:00:00Z"). ' +

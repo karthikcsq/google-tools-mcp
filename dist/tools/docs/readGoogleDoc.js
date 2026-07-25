@@ -4,8 +4,9 @@ import { createPatch } from 'diff';
 import { getDocsClient, getDriveClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
+import { docsJsonToMarkdown, checkMarkdownFidelity } from '../../markdown-transformer/index.js';
 import { trackRead, getLastReadContent } from '../../readTracker.js';
+import { writeWorkspaceFile } from '../../workspace.js';
 
 async function fetchModifiedTime(documentId) {
     try {
@@ -24,7 +25,10 @@ async function fetchModifiedTime(documentId) {
 export function register(server) {
     server.addTool({
         name: 'readDocument',
-        description: "Reads the content of a Google Document. Returns markdown by default (formatted content suitable for editing and re-uploading with replaceDocumentWithMarkdown). Use format='text' for plain text, or format='json' for the raw document structure. Set diffFromLastRead=true (markdown only) to get a unified diff from your previous read in this session instead of the full content.",
+        description: "Reads the content of a Google Document. Returns markdown by default (formatted content suitable for editing and re-uploading with replaceDocumentWithMarkdown) and saves it to a local working-copy file (path included in the response). " +
+            "PREFERRED EDITING WORKFLOW for large edits: (1) readDocument to get the local file path, (2) edit that file locally, (3) call replaceDocumentWithMarkdown with filePath pointing to it. This avoids inline content truncation and gives you a reviewable working copy before pushing changes. " +
+            "If the document contains content markdown cannot represent (images, footnotes), a warning is appended listing what replaceDocumentWithMarkdown would permanently remove — prefer modifyText or appendMarkdown for those documents. " +
+            "Use format='text' for plain text, or format='json' for the raw document structure. Set diffFromLastRead=true (markdown only) to get a unified diff from your previous read in this session instead of the full content.",
         parameters: DocumentIdParameter.extend({
             format: z
                 .enum(['text', 'json', 'markdown'])
@@ -71,7 +75,12 @@ export function register(server) {
                     if (!targetTab.documentTab) {
                         throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
-                    contentSource = { body: targetTab.documentTab.body };
+                    // List definitions are scoped to the document tab. Without them,
+                    // docsJsonToMarkdown cannot distinguish ordered lists from bullets.
+                    contentSource = {
+                        body: targetTab.documentTab.body,
+                        lists: targetTab.documentTab.lists,
+                    };
                     log.info(`Using content from tab: ${targetTab.tabProperties?.title || 'Untitled'}`);
                 }
                 else {
@@ -95,6 +104,18 @@ export function register(server) {
                     const markdownContent = docsJsonToMarkdown(contentSource);
                     const totalLength = markdownContent.length;
                     log.info(`Generated markdown: ${totalLength} characters`);
+                    // Derive fidelity warnings from EXACTLY the body that will be replaced
+                    // (contentSource.body is the active tab's body in tab mode, the document
+                    // body otherwise). This scopes image/footnote detection to the content
+                    // the replacement mutates and never over-reports images or footnotes
+                    // living in other tabs or in headers/footers a body replacement leaves
+                    // untouched.
+                    const fidelityWarnings = checkMarkdownFidelity(contentSource.body?.content);
+                    const fidelityNotice = fidelityWarnings.length > 0
+                        ? '\n\n---\n⚠️ FORMATTING LOSS WARNING: This document contains content that cannot be represented in markdown. Calling replaceDocumentWithMarkdown will permanently lose:\n' +
+                            fidelityWarnings.map(w => `  • ${w}`).join('\n') +
+                            '\nConsider using modifyText or appendMarkdown for targeted edits instead.\n---'
+                        : '';
                     if (args.diffFromLastRead) {
                         const previous = getLastReadContent(args.documentId);
                         if (previous !== null) {
@@ -107,17 +128,56 @@ export function register(server) {
                                 { context: 3 }
                             );
                             trackRead(args.documentId, modifiedTime, markdownContent, res.data.revisionId);
-                            return patch;
+                            // Keep the on-disk working copy in sync even on diff reads, so a
+                            // subsequent edit-and-push starts from the current document state.
+                            try {
+                                await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
+                            } catch (e) {
+                                log.info(`Could not update workspace on diff read: ${e.message}`);
+                            }
+                            // The diff can be silent about content the converter has no
+                            // representation for: an image or footnote another editor added
+                            // since the last read simply is not in either markdown snapshot,
+                            // so it never shows up as a change. The workspace file was still
+                            // refreshed above, and pushing it back would delete that content.
+                            // Carry the same warning the full read gives.
+                            return patch + fidelityNotice;
                         }
                         log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
                     }
+                    // Store clean markdown (without warning) for future diffs and guardMutation
                     trackRead(args.documentId, modifiedTime, markdownContent, res.data.revisionId);
+                    // Save to local workspace file so the AI can edit it and push with filePath.
+                    // Scoped by tabId so two tabs of the same document keep separate copies.
+                    let localPath = null;
+                    try {
+                        localPath = await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
+                        log.info(`Saved to ${localPath}`);
+                    } catch (e) {
+                        log.info(`Could not save to workspace: ${e.message}`);
+                        localPath = null;
+                    }
                     // Apply length limit to markdown if specified
+                    let output;
                     if (args.maxLength && totalLength > args.maxLength) {
                         const truncatedContent = markdownContent.substring(0, args.maxLength);
-                        return `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`;
+                        output = `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`;
+                    } else {
+                        output = markdownContent;
                     }
-                    return markdownContent;
+                    // Append fidelity warning after the markdown so the AI knows what
+                    // replaceDocumentWithMarkdown would permanently destroy.
+                    output += fidelityNotice;
+                    if (localPath) {
+                        // Use forward slashes in the advice string so the path is valid JSON
+                        // regardless of OS (backslashes in Windows paths break JSON encoding).
+                        const jsonSafePath = localPath.replace(/\\/g, '/');
+                        // If this was a tab read, the file holds only that tab's content, so the
+                        // push must target the same tab to avoid writing it into the wrong tab.
+                        const tabAdvice = args.tabId ? ` tabId="${args.tabId}"` : '';
+                        output += `\n\n📄 Local file: ${localPath}\nEdit this file, then call replaceDocumentWithMarkdown with filePath="${jsonSafePath}"${tabAdvice} to push changes.`;
+                    }
+                    return output;
                 }
                 // Default: Text format - extract all text content
                 if (args.diffFromLastRead) {
