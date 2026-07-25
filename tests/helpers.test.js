@@ -72,40 +72,89 @@ describe('header folding', () => {
         expect(unfolded).toBe(`Subject: ${subject}`);
     });
 
-    it('hard-splits an unbreakable emoji run on code-point boundaries without corruption', () => {
-        // 300 emoji, no whitespace -> 1200 octets on one token, forcing an
-        // emergency cut. A naive UTF-16 or raw-byte slice would sever a surrogate
-        // pair / multi-byte sequence and yield replacement characters.
+    // RFC 5322 §2.2.3 defines unfolding as removing the CRLF only - the WSP
+    // that follows is NOT removed. So a fold inserted inside a token that had
+    // no original whitespace leaves a permanent extra space in the decoded
+    // value: that is corruption, not folding. §3.6.4 additionally says a
+    // msg-id "does not have internal CFWS anywhere", so the same operation is
+    // flatly illegal for Message-ID/In-Reply-To/References. The only
+    // RFC-legal move for a wordless, over-length token is to leave it whole
+    // on one (possibly >998-octet) line rather than mutate it.
+    it('leaves an unbreakable over-length token whole instead of injecting a corrupting fold', () => {
+        // 300 emoji, no whitespace -> ~1200 octets on one token. There is no
+        // FWS-legal place to fold inside it, so it must survive as one line.
         const run = '😀'.repeat(300);
         const folded = foldHeader('Subject', run);
+
+        // No fold was injected: exactly one line, and it legitimately
+        // exceeds the 998-octet hard limit because it cannot be split.
+        expect(folded.split('\r\n')).toHaveLength(1);
+        expect(Buffer.byteLength(folded, 'utf8')).toBeGreaterThan(998);
+
+        // True RFC unfolding (remove CRLF only - there isn't one here, so
+        // this is a no-op) reproduces the original byte-for-byte, with no
+        // manual space-stripping required.
+        expect(folded).toBe(`Subject: ${run}`);
+        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
+        expect(decoded).not.toContain('�');
+    });
+
+    it('does not split a multi-byte character straddling the old hard limit', () => {
+        // Fill to 1 octet short of the old 998 cutoff with ASCII, then place
+        // an emoji, so a naive byte-count cut at 998 would land mid-character.
+        // The whole thing is one token (no whitespace), so it must stay whole.
+        const subject = 'a'.repeat(987) + '😀' + 'b'.repeat(10);
+        const folded = foldHeader('Subject', subject);
+
+        expect(folded.split('\r\n')).toHaveLength(1);
+        expect(folded).toBe(`Subject: ${subject}`);
+        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
+        expect(decoded).not.toContain('�');
+    });
+
+    it('never folds inside a message-id atom (RFC 5322 §3.6.4: no internal CFWS)', () => {
+        // A single, absurdly long msg-id with no internal whitespace. Even
+        // though it blows past both the soft and (old) hard limits, folding
+        // inside '<local@domain>' would produce a token that no longer
+        // matches the Message-ID it references, breaking threading.
+        const msgId = `<${'a'.repeat(1100)}@example.com>`;
+        const folded = foldHeader('In-Reply-To', msgId);
+
+        expect(folded.split('\r\n')).toHaveLength(1);
+        expect(folded).toBe(`In-Reply-To: ${msgId}`);
+    });
+
+    it('never fragments an RFC 2047 encoded-word (RFC 2047 §2: encoded-text MUST NOT continue across encoded-words)', () => {
+        // A caller-supplied, already-encoded value with a single very long
+        // encoded-word token (no internal whitespace). Splitting inside the
+        // base64 encoded-text would produce two syntactically invalid
+        // encoded-words and corrupt the decoded characters.
+        const encodedWord = `=?UTF-8?B?${'QQ=='.repeat(300)}?=`;
+        const folded = foldHeader('Subject', encodedWord);
+
+        expect(folded.split('\r\n')).toHaveLength(1);
+        expect(folded).toBe(`Subject: ${encodedWord}`);
+    });
+
+    it('still folds a normal multi-word header at existing whitespace, unfolding back exactly', () => {
+        // Ordinary ASCII words separated by real spaces: there IS a
+        // FWS-legal point between every word, so this should fold normally
+        // across multiple lines, each within the recommended 78-octet limit.
+        const subject = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
+        const folded = foldHeader('Subject', subject);
         const lines = folded.split('\r\n');
 
         expect(lines.length).toBeGreaterThan(1);
+        expect(lines.slice(1).every(line => line.startsWith(' '))).toBe(true);
         for (const line of lines) {
-            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(998);
+            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(78);
         }
-        // Round-trip through UTF-8 bytes to prove no split produced a lone
-        // surrogate or truncated code point.
-        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
-        expect(decoded).not.toContain('�');
-        // The run has no internal whitespace, so removing each injected CRLF+space
-        // continuation reconstructs the original exactly.
-        const reconstructed = folded.replace(/^Subject: /, '').replace(/\r\n /g, '');
-        expect(reconstructed).toBe(run);
-    });
-
-    it('does not split a multi-byte character straddling the hard limit', () => {
-        // Fill to 1 octet short of the limit with ASCII, then place an emoji so a
-        // byte-count cut at 998 would land mid-character.
-        // "Subject: " is 9 octets; 987 'a' puts the emoji at octets 996-1000, so a
-        // byte cut at 998 must stop before it rather than slicing it in half.
-        const subject = 'a'.repeat(987) + '😀' + 'b'.repeat(10);
-        const folded = foldHeader('Subject', subject);
-        for (const line of folded.split('\r\n')) {
-            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(998);
-        }
-        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
-        expect(decoded).not.toContain('�');
+        // True RFC unfolding: remove the CRLF only. Because each continuation
+        // line's leading space is the fold marker that replaces the single
+        // space trimmed off the end of the previous line, this reconstructs
+        // the original exactly.
+        const unfolded = folded.replace(/\r\n/g, '');
+        expect(unfolded).toBe(`Subject: ${subject}`);
     });
 });
 
