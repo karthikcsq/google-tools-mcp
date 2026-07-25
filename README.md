@@ -266,8 +266,8 @@ Launching directly (`node dist/index.js`, or the global-install path below) is f
 **Where to look:** MCP clients that log per-server connection attempts will show the exact timing. For Claude Code, per-server logs live at:
 
 - **Windows:** `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project-slug>\mcp-logs-google\*.jsonl`
-- **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl`
-- **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir — if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
+- **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (inferred from Claude Code's per-OS cache convention, not independently confirmed)
+- **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir — likewise inferred, not independently confirmed; if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
 
 Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. google-tools-mcp itself also logs its own startup time on the server's first ready line (e.g. `MCP Server running using stdio in 1123ms`), so if the server logs a fast startup but the client still reports a near-30000ms connection time, the delay is happening before the server process even starts — i.e. in `npx`, not in the server.
 
@@ -277,7 +277,7 @@ Look for lines like `"Connection timeout triggered after ...ms"` or `"Successful
 npm install -g google-tools-mcp
 ```
 
-Then use `google-tools-mcp` (no `npx`) as the MCP `command` — see [Step 3](#step-3-add-to-your-mcp-client) for exact commands per client. Running `npx -y google-tools-mcp setup` does this for you automatically: the guided setup wizard installs the package globally and configures the MCP entry to launch it directly, falling back to `npx` only if the global install isn't possible on your machine (e.g. no write access to the global npm directory).
+Then use `google-tools-mcp` (no `npx`) as the MCP `command` — see [Step 3](#step-3-add-to-your-mcp-client) for exact commands per client. Running `npx -y google-tools-mcp setup` does this for you automatically: the guided setup wizard installs the package globally and points the MCP entry straight at it. If the global install isn't possible on your machine (e.g. no write access to the global npm directory), it falls back to `npx` — but only if `npx` is actually on PATH, since a machine that can't reach npm usually can't reach npx either. If `npx` isn't there either, it falls back to launching whichever copy of the package is running the wizard right now. If none of the three works, it stops, explains why, and writes nothing to your MCP config rather than leaving you with a command that can't run.
 
 ## Tool Categories
 
