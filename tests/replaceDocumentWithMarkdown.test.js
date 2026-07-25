@@ -11,7 +11,7 @@
 // resolves and the mutation is tracked, so a failed push never touches the
 // previous local copy.
 //
-// Uses GOOGLE_TOOLS_MCP_WORKSPACE_DIR (dist/workspace.js) to sandbox these
+// Uses GOOGLE_MCP_WORKSPACE_DIR (dist/workspace.js) to sandbox these
 // tests in a throwaway fs.mkdtemp() directory instead of the real per-user
 // production workspace.
 import { describe, expect, it, jest, beforeAll, afterAll } from '@jest/globals';
@@ -67,16 +67,16 @@ let sandboxDir;
 let previousEnvValue;
 
 beforeAll(async () => {
-    previousEnvValue = process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+    previousEnvValue = process.env.GOOGLE_MCP_WORKSPACE_DIR;
     sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gtm-replace-md-test-'));
-    process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = sandboxDir;
+    process.env.GOOGLE_MCP_WORKSPACE_DIR = sandboxDir;
 });
 
 afterAll(async () => {
     if (previousEnvValue === undefined) {
-        delete process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR;
+        delete process.env.GOOGLE_MCP_WORKSPACE_DIR;
     } else {
-        process.env.GOOGLE_TOOLS_MCP_WORKSPACE_DIR = previousEnvValue;
+        process.env.GOOGLE_MCP_WORKSPACE_DIR = previousEnvValue;
     }
     // Safe to remove unconditionally: this is our own throwaway sandbox
     // directory, never the real production workspace path.
