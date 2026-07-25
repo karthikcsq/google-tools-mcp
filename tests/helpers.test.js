@@ -574,20 +574,29 @@ describe('makeOmissionStub', () => {
 // capToResponseBudget
 // ---------------------------------------------------------------------------
 describe('capToResponseBudget', () => {
-    const attach = (state) => (items, truncated, totalCount, includedCount) => {
+    // capToResponseBudget returns { ok, payload } on success, or
+    // { ok: false, minimumViableChars, payload } when no payload that both
+    // fits maxChars and means anything can be produced (a second
+    // merge-blocking review finding on PR #63: the prior version silently
+    // returned the full, unbounded item once the internal per-attempt budget
+    // was squeezed to 0, because capArrayByResponseBudget treats <= 0 as its
+    // own "caller opted out" sentinel and the two meanings collided).
+    const attach = (state) => (items, truncated, totalCount, includedCount, maxChars) => {
         state.items = items;
         state.truncated = truncated;
         state.totalCount = totalCount;
         state.includedCount = includedCount;
+        state.maxChars = maxChars;
         return { items, truncated, totalCount, includedCount };
     };
 
     it('returns the untouched payload when it already fits, with no metadata attached', () => {
         const state = {};
         const items = [{ id: 1 }, { id: 2 }];
-        const payload = capToResponseBudget(items, 10000, 'start', undefined, attach(state));
-        expect(payload.truncated).toBe(false);
-        expect(payload.items).toBe(items);
+        const result = capToResponseBudget(items, 10000, 'start', undefined, attach(state));
+        expect(result.ok).toBe(true);
+        expect(result.payload.truncated).toBe(false);
+        expect(result.payload.items).toBe(items);
     });
 
     it('guarantees the final payload (items plus metadata) fits maxChars, not just the array alone', () => {
@@ -608,34 +617,70 @@ describe('capToResponseBudget', () => {
             ...(truncated ? { note: bigNote } : {}),
         });
         const maxChars = 400;
-        const payload = capToResponseBudget(items, maxChars, 'start', makeStub, attachWithBigNote);
-        expect(JSON.stringify(payload).length).toBeLessThanOrEqual(maxChars);
-        expect(payload.truncated).toBe(true);
+        const result = capToResponseBudget(items, maxChars, 'start', makeStub, attachWithBigNote);
+        expect(result.ok).toBe(true);
+        expect(JSON.stringify(result.payload).length).toBeLessThanOrEqual(maxChars);
+        expect(result.payload.truncated).toBe(true);
         // Fewer items survive than would fit the array alone against the full
         // 400-char budget, proving room was actually reserved for `note`.
         const arrayOnlyFit = capArrayByResponseBudget(items, maxChars, 'start', makeStub).includedCount;
-        expect(payload.includedCount).toBeLessThan(arrayOnlyFit);
+        expect(result.payload.includedCount).toBeLessThan(arrayOnlyFit);
     });
 
     it('replaces a single oversized item with a bounded stub via the provided makeStub, keeping the final payload within maxChars', () => {
         const items = [{ id: 'only', pad: 'x'.repeat(1000) }];
         const makeStub = (item, maxChars) => makeOmissionStub(item, maxChars, id => `omitted: ${id}`);
         const maxChars = 200;
-        const payload = capToResponseBudget(items, maxChars, 'start', makeStub, (capped, truncated, totalCount, includedCount) => ({
+        const result = capToResponseBudget(items, maxChars, 'start', makeStub, (capped, truncated, totalCount, includedCount) => ({
             items: capped,
             truncated,
             totalCount,
             includedCount,
         }));
-        expect(JSON.stringify(payload).length).toBeLessThanOrEqual(maxChars);
-        expect(payload.items[0].responseOmitted).toBe(true);
+        expect(result.ok).toBe(true);
+        expect(JSON.stringify(result.payload).length).toBeLessThanOrEqual(maxChars);
+        expect(result.payload.items[0].responseOmitted).toBe(true);
     });
 
     it('treats maxChars <= 0 as unlimited and returns the untouched payload', () => {
         const items = [{ pad: 'x'.repeat(1000) }];
-        const payload = capToResponseBudget(items, 0, 'start', undefined, (capped, truncated) => ({ items: capped, truncated }));
-        expect(payload.truncated).toBe(false);
-        expect(payload.items).toBe(items);
+        const result = capToResponseBudget(items, 0, 'start', undefined, (capped, truncated) => ({ items: capped, truncated }));
+        expect(result.ok).toBe(true);
+        expect(result.payload.truncated).toBe(false);
+        expect(result.payload.items).toBe(items);
+    });
+
+    it('never lets the internal per-attempt budget collide with capArrayByResponseBudget\'s own <= 0 opt-out sentinel', () => {
+        // Regression test for the exact inversion a second review found: a
+        // single 50,000 char item whose metadata note costs more than tiny
+        // budgets, at every budget from 1 through 2000, must never come back
+        // as the full unstubbed item (which is what happens if an internal
+        // budget of 0 gets reinterpreted as "caller opted out").
+        const bigItem = { id: 'oversized', body: 'y'.repeat(50000) };
+        const makeStub = (item, maxChars) => makeOmissionStub(item, maxChars, id => `omitted: ${id}`);
+        const noteFor = (includedCount, totalCount) => `Showing ${includedCount} of ${totalCount}. `.padEnd(120, 'z');
+        const attach = (capped, truncated, totalCount, includedCount, maxChars) => {
+            const withoutNote = { items: capped, truncated, totalCount, includedCount };
+            if (!truncated) return withoutNote;
+            const baseSize = JSON.stringify(withoutNote).length;
+            const room = Math.max(0, (maxChars || 0) - baseSize - 20);
+            const note = noteFor(includedCount, totalCount).slice(0, room);
+            return note ? { ...withoutNote, note } : withoutNote;
+        };
+        for (let maxChars = 1; maxChars <= 2000; maxChars += 37) {
+            const result = capToResponseBudget([bigItem], maxChars, 'start', makeStub, attach);
+            if (result.ok) {
+                // The invariant the review demanded: whatever comes back
+                // actually fits, and is not the raw 50,000 char item.
+                expect(JSON.stringify(result.payload).length).toBeLessThanOrEqual(maxChars);
+                expect(JSON.stringify(result.payload)).not.toContain('yyyyyyyyyy');
+            } else {
+                // Honest refusal: a concrete, larger-than-maxChars minimum is
+                // reported instead of a silently oversized payload.
+                expect(result.minimumViableChars).toBeGreaterThan(maxChars);
+                expect(JSON.stringify(result.payload)).not.toContain('yyyyyyyyyy');
+            }
+        }
     });
 });
 
