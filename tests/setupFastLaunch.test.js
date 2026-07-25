@@ -13,6 +13,7 @@ import {
     resolveGlobalIndexPath,
     installGlobalFastLaunch,
     buildLaunchCommand,
+    resolveRunningIndexPath,
 } from '../dist/setup.js';
 
 // ---------------------------------------------------------------------------
@@ -119,16 +120,90 @@ describe('buildLaunchCommand', () => {
         );
     });
 
-    it('falls back to npx when fast-launch failed', () => {
-        const result = buildLaunchCommand({ ok: false, reason: 'npm not found' });
+    it('falls back to npx when the global install failed but npx is present', () => {
+        const result = buildLaunchCommand(
+            { ok: false, reason: 'npm install failed' },
+            { hasNpx: () => true },
+        );
 
         expect(result.command).toBe('npx');
         expect(result.args).toEqual(['-y', 'google-tools-mcp']);
         expect(result.shellDisplay).toBe('npx -y google-tools-mcp');
+        expect(result.source).toBe('npx');
     });
 
     it('falls back to npx when no fast-launch result is given', () => {
-        const result = buildLaunchCommand(undefined);
+        const result = buildLaunchCommand(undefined, { hasNpx: () => true });
         expect(result.shellDisplay).toBe('npx -y google-tools-mcp');
+    });
+
+    // The npm-missing case is the one that used to produce a broken config: on a
+    // standard Node install npm and npx ship together, so no npm almost always
+    // means no npx, and writing `npx -y google-tools-mcp` would have handed the
+    // user a launch command that cannot run.
+    it('does NOT write an npx command when npx is absent', () => {
+        const result = buildLaunchCommand(
+            { ok: false, npmMissing: true, reason: 'npm was not found on PATH' },
+            {
+                hasNpx: () => false,
+                runningIndexPath: '/opt/pkg/dist/index.js',
+                execPath: '/usr/bin/node',
+            },
+        );
+
+        expect(result.command).toBe('/usr/bin/node');
+        expect(result.args).toEqual(['/opt/pkg/dist/index.js']);
+        expect(result.source).toBe('running-copy');
+    });
+
+    it('returns null when there is no global install, no npx, and no running copy', () => {
+        const result = buildLaunchCommand(
+            { ok: false, npmMissing: true, reason: 'npm was not found on PATH' },
+            { hasNpx: () => false, runningIndexPath: null },
+        );
+
+        expect(result).toBeNull();
+    });
+
+    it('prefers the global install over both fallbacks', () => {
+        const result = buildLaunchCommand(
+            { ok: true, indexPath: '/global/dist/index.js' },
+            { hasNpx: () => true, runningIndexPath: '/opt/pkg/dist/index.js', execPath: '/usr/bin/node' },
+        );
+
+        expect(result.args).toEqual(['/global/dist/index.js']);
+        expect(result.source).toBe('global');
+    });
+
+    it('prefers npx over the running copy when both are available', () => {
+        const result = buildLaunchCommand(
+            { ok: false, reason: 'install failed' },
+            { hasNpx: () => true, runningIndexPath: '/opt/pkg/dist/index.js' },
+        );
+
+        expect(result.source).toBe('npx');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// resolveRunningIndexPath
+// ---------------------------------------------------------------------------
+describe('resolveRunningIndexPath', () => {
+    it('points at index.js next to the given module', () => {
+        // File URLs are platform-shaped: Windows needs a drive letter, POSIX
+        // does not, and fileURLToPath rejects the other platform's form.
+        const moduleUrl = process.platform === 'win32'
+            ? 'file:///C:/opt/pkg/dist/setup.js'
+            : 'file:///opt/pkg/dist/setup.js';
+        const result = resolveRunningIndexPath(moduleUrl);
+        expect(result.split(path.sep).join('/')).toMatch(/\/opt\/pkg\/dist\/index\.js$/);
+    });
+
+    it('returns null instead of throwing when the URL cannot be resolved', () => {
+        expect(resolveRunningIndexPath('not-a-file-url')).toBeNull();
+    });
+
+    it('resolves its own module by default', () => {
+        expect(resolveRunningIndexPath()).toMatch(/index\.js$/);
     });
 });

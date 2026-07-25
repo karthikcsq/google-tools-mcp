@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { exec, execSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 
 // ---------------------------------------------------------------------------
@@ -114,7 +115,7 @@ export async function installGlobalFastLaunch({
     hasNpm = () => hasCli('npm'),
 } = {}) {
     if (!hasNpm()) {
-        return { ok: false, reason: 'npm was not found on PATH — cannot install globally.' };
+        return { ok: false, npmMissing: true, reason: 'npm was not found on PATH, so nothing can be installed globally.' };
     }
 
     try {
@@ -140,24 +141,55 @@ export async function installGlobalFastLaunch({
     return { ok: true, indexPath };
 }
 
-// Builds the { command, args, shellDisplay } to launch the server with,
-// given the result of installGlobalFastLaunch(). Falls back to the slower
-// `npx -y google-tools-mcp` when the fast-launch install didn't succeed, so
-// setup never fails outright — it just can't avoid the npx race on this
-// machine.
-export function buildLaunchCommand(fastLaunch, { execPath = process.execPath } = {}) {
-    if (fastLaunch?.ok) {
+// Absolute path to the dist/index.js sitting next to this file, i.e. the copy
+// of the package that is running setup right now. Used as the last fallback:
+// wherever this wizard was launched from, that entry point demonstrably exists.
+// Returns null if the URL can't be turned into a path, so a surprise here
+// degrades to "no last-resort fallback" instead of crashing the wizard.
+export function resolveRunningIndexPath(moduleUrl = import.meta.url) {
+    try {
+        return path.join(path.dirname(fileURLToPath(moduleUrl)), 'index.js');
+    } catch {
+        return null;
+    }
+}
+
+// Builds the { command, args, shellDisplay, source } to launch the server with,
+// given the result of installGlobalFastLaunch().
+//
+// Falling back to `npx` unconditionally would be wrong: on a standard Node
+// installation npm and npx ship together, so "npm is not on PATH" almost always
+// means npx is not either, and the wizard would finish happily after writing a
+// launch command that cannot run. So the order is: the global install if it
+// worked, then npx if npx actually exists, then the copy of the package running
+// this wizard. Returns null when none of those is available, which the caller
+// must report rather than write a broken config.
+export function buildLaunchCommand(fastLaunch, {
+    execPath = process.execPath,
+    runningIndexPath = null,
+    hasNpx = () => hasCli('npx'),
+} = {}) {
+    const direct = (indexPath, source) => ({
+        command: execPath,
+        args: [indexPath],
+        shellDisplay: `"${execPath}" "${indexPath}"`,
+        source,
+    });
+
+    if (fastLaunch?.ok) return direct(fastLaunch.indexPath, 'global');
+
+    if (hasNpx()) {
         return {
-            command: execPath,
-            args: [fastLaunch.indexPath],
-            shellDisplay: `"${execPath}" "${fastLaunch.indexPath}"`,
+            command: 'npx',
+            args: ['-y', 'google-tools-mcp'],
+            shellDisplay: 'npx -y google-tools-mcp',
+            source: 'npx',
         };
     }
-    return {
-        command: 'npx',
-        args: ['-y', 'google-tools-mcp'],
-        shellDisplay: 'npx -y google-tools-mcp',
-    };
+
+    if (runningIndexPath) return direct(runningIndexPath, 'running-copy');
+
+    return null;
 }
 
 // Pull the GCP project number out of an OAuth client ID.
@@ -469,15 +501,42 @@ export async function runSetup() {
     const installSpinner = p.spinner();
     installSpinner.start('Installing google-tools-mcp globally...');
     const fastLaunch = await installGlobalFastLaunch();
+
+    // Last-resort launch target: the copy of the package running this wizard.
+    // Only offered if it is really there, so we never write a path we haven't
+    // confirmed.
+    let runningIndexPath = resolveRunningIndexPath();
+    try {
+        await fs.access(runningIndexPath);
+    } catch {
+        runningIndexPath = null;
+    }
+
+    const launch = buildLaunchCommand(fastLaunch, { runningIndexPath });
+
     if (fastLaunch.ok) {
         installSpinner.stop(chalk.green('Installed globally — MCP clients will launch it directly via node.'));
-    } else {
+    } else if (!launch) {
+        installSpinner.stop(chalk.red('Could not work out any way to launch the server on this machine.'));
+        p.log.warn(fastLaunch.reason);
+        p.log.error(
+            'No global install, no npx on PATH, and no readable entry point next to this wizard. ' +
+            'Install Node.js with npm from nodejs.org, or install this package yourself with ' +
+            '`npm install -g google-tools-mcp`, then run setup again. Nothing was written to your MCP client config.'
+        );
+        process.exit(1);
+    } else if (launch.source === 'npx') {
         installSpinner.stop(chalk.yellow('Global install failed — falling back to npx (slower; can hit connection timeouts).'));
         p.log.warn(fastLaunch.reason);
         p.log.message(chalk.dim('See the README troubleshooting section if the MCP server fails to connect.'));
+    } else {
+        installSpinner.stop(chalk.yellow('Global install failed and npx is not on PATH — pointing at this copy of the package instead.'));
+        p.log.warn(fastLaunch.reason);
+        p.log.message(chalk.dim(
+            `Your MCP client will launch ${runningIndexPath} directly. That works as long as this copy stays ` +
+            'where it is; if it was run from a temporary npx cache, install the package properly and run setup again.'
+        ));
     }
-
-    const launch = buildLaunchCommand(fastLaunch);
 
     const hasCodex = hasCli('codex');
     const hasClaude = hasCli('claude');
