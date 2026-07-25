@@ -111,28 +111,31 @@ export const wrapTextBody = (text) => text.split('\n').map(line => {
 
 // RFC 5322 line limits are measured in OCTETS, not UTF-16 code units. The raw
 // message is serialized as UTF-8, so a non-ASCII subject or display name can
-// blow past the 998-octet hard limit while `string.length` stays small. Measure
-// with byte length, and when an over-length run has no foldable whitespace, cut
-// it only at code-point boundaries so a multi-byte character (or a surrogate
-// pair such as an emoji) is never split into a corrupt/replacement byte.
+// blow past the 998-octet hard limit while `string.length` stays small.
+// Measure with byte length so wrapping decisions account for multi-byte UTF-8
+// octets.
+//
+// Folding (a CRLF followed by WSP) is only legal at a point where folding
+// white space is already allowed (RFC 5322 §2.2.3, §3.2.2). A run of
+// characters with no internal whitespace has no such point: a message-id
+// atom "does not have internal CFWS anywhere in the message identifier"
+// (§3.6.4), an address atom is likewise unbreakable, and an RFC 2047
+// encoded-word's encoded-text "MUST NOT be continued from one encoded-word
+// to another" (RFC 2047 §2). Even for a plain unstructured run (e.g. a CJK
+// or emoji subject with no spaces), inserting a fold is not safe: §2.2.3
+// defines unfolding as "simply removing any CRLF that is immediately
+// followed by WSP" - the CRLF is removed, but the WSP is NOT, so an
+// injected fold leaves a permanent extra space in the decoded value that
+// was never in the original. The only RFC-safe behavior for a wordless,
+// over-length token is to leave it unfolded on its own line, even if that
+// line then exceeds the 998-octet hard limit: an overlong line is a
+// robustness concern (§2.1.1, "Individual implementations MAY choose to
+// include higher limits"), whereas splitting the token would corrupt a
+// structured value (breaking Message-ID/References matching, or DKIM
+// signatures over the raw header bytes) or silently change an unstructured
+// one.
 const byteLen = (str) => Buffer.byteLength(str, 'utf8');
 const SOFT_LIMIT = 78; // recommended max octets per line (RFC 5322 §2.1.1)
-const HARD_LIMIT = 998; // absolute max octets per line, excluding CRLF
-
-// Slice `str` into a head of at most `maxBytes` octets ending on a code-point
-// boundary, plus the untouched remainder. Iterating with Array.from walks
-// Unicode code points, so surrogate pairs stay intact.
-const sliceByBytes = (str, maxBytes) => {
-    const codePoints = Array.from(str);
-    let bytes = 0;
-    let cut = codePoints.length;
-    for (let i = 0; i < codePoints.length; i++) {
-        const cpBytes = byteLen(codePoints[i]);
-        if (bytes + cpBytes > maxBytes) { cut = i; break; }
-        bytes += cpBytes;
-    }
-    return [codePoints.slice(0, cut).join(''), codePoints.slice(cut).join('')];
-};
 
 export const foldHeader = (name, value) => {
     const prefix = `${name}: `;
@@ -149,16 +152,13 @@ export const foldHeader = (name, value) => {
             lines.push(line.trimEnd());
             line = ' ';
         }
+        // Tokens are only ever joined at existing whitespace (see the regex
+        // above), which is the one place FWS is unconditionally legal. A
+        // single token that is itself over-length (a long message-id, an
+        // address, an encoded-word, or a wordless CJK/emoji run) is never
+        // split internally - it just becomes a long line, folded away from
+        // its neighbors on the next token boundary.
         line += token;
-        // A single token longer than the hard limit (e.g. a giant CJK subject or
-        // an emoji run with no whitespace) can't be folded at WSP, so cut it on a
-        // code-point boundary. The injected continuation space is unavoidable for
-        // an unbreakable >998-octet run, but it never corrupts a character.
-        while (byteLen(line) > HARD_LIMIT) {
-            const [head, rest] = sliceByBytes(line, HARD_LIMIT);
-            lines.push(head);
-            line = ' ' + rest;
-        }
     }
     lines.push(line.trimEnd());
     return lines.join('\r\n');
