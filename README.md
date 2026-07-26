@@ -261,7 +261,7 @@ This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default 
 
 **Cause:** If your MCP config launches the server with `npx -y google-tools-mcp`, `npx` re-resolves and verifies the entire dependency tree (this package pulls in `fastmcp` + the full `googleapis` client library, a large `node_modules`) on **every single launch**, not just the first. On some machines, especially Windows (likely antivirus real-time scanning of npm's file I/O during install/verify), this reliably takes 30-34 seconds, even when the exact version is already cached locally. Claude Code's stdio MCP connection timeout is a fixed 30 seconds, so `npx`-launched servers are right on the failure line and frequently lose the race.
 
-Launching directly (`node dist/index.js`, or the global-install path below) is faster, but it is not a guarantee. Measured on one affected Windows machine on 2026-07-24, three runs each: `npx` took 23.0s, 25.3s and 24.6s, a direct `node` launch took 14.7s, 26.0s and 12.2s. So skipping `npx` is worth roughly 7 seconds on average and removes a large source of variance, but on a machine with slow disk I/O a direct launch can still come close to the limit. If it still times out after you switch, what is left is the cost of reading this package's dependency tree off disk, tracked in [issue #71](https://github.com/karthikcsq/google-tools-mcp/issues/71). Full writeup in [issue #46](https://github.com/karthikcsq/google-tools-mcp/issues/46).
+Launching directly (`node dist/index.js`, or the global-install path below) is faster, but it is not a guarantee. Measured on one affected Windows machine on 2026-07-24, three runs each: `npx` took 23.0s, 25.3s and 24.6s, a direct `node` launch took 14.7s, 26.0s and 12.2s. So skipping `npx` is worth roughly 7 seconds on average and removes a large source of variance, but on a machine with slow disk I/O a direct launch can still come close to the limit. If it still times out after you switch, what is left is the cost of reading this package's dependency tree off disk, tracked in [issue #71](https://github.com/karthikcsq/google-tools-mcp/issues/71). Full writeup in [issue #46](https://github.com/karthikcsq/google-tools-mcp/issues/46), and see [docs/startup-performance.md](docs/startup-performance.md) for the per-import breakdown and how to measure any of this on your own machine.
 
 **Where to look:** MCP clients that log per-server connection attempts will show the exact timing. For Claude Code, per-server logs live at:
 
@@ -291,6 +291,8 @@ npm install -g google-tools-mcp@latest
 
 (or just re-run `npx -y google-tools-mcp setup`, which does the same install and re-points your MCP config). The server also helps you notice: on startup, after the MCP connection is already established, it makes a strictly time-boxed (2s), non-blocking, at-most-once-per-24-hours check against the npm registry for the latest published version, and logs a one-line warning if you're behind. This check runs after the connection handshake and is never awaited, so a slow or unreachable network can't delay or reintroduce the `npx` startup-timeout race this section is about; worst case, it just never gets to print the notice.
 ## Development / Contributing
+
+Contributor-facing deep dives live in [`docs/`](docs/README.md), indexed there.
 
 `dist/` is the hand-edited source for this repository. It contains plain JavaScript; there is no TypeScript, bundler, or build step.
 
