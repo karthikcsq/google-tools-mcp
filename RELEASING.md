@@ -152,13 +152,37 @@ npm view google-tools-mcp version                 # registry updated
 ```
 
 Then confirm the published tarball actually runs. There is no `--help` flag, so
-start the server with an immediately-closed stdin: it logs its ready line and
-then shuts down cleanly when the pipe ends.
+start the server and hold stdin open long enough for it to finish booting, then
+let the pipe close to shut it down:
 
 ```bash
-echo "" | npx -y google-tools-mcp@X.Y.Z 2>&1 | head -3
+(sleep 30) | npx -y google-tools-mcp@X.Y.Z
 ```
 
-Expect a line like `MCP Server running using stdio in 1123ms`, followed by
-`stdin ended — MCP client disconnected`. A hang or a module-resolution error
-here means the tarball is broken even though the publish succeeded.
+Expect a line like `MCP Server running using stdio in 13970ms`, then
+`stdin ended — MCP client disconnected. Shutting down.` and exit 0. A hang, a
+module-resolution error, or a missing ready line means the tarball is broken
+even though the publish succeeded.
+
+Hold stdin open rather than closing it immediately. With `echo "" |` the stream
+ends before the server finishes starting, the shutdown handler wins the race, and
+you get `Loaded all 12 categories` followed straight by `stdin ended` with no
+ready line at all. That looks like a broken build and is not one. Startup was
+measured at 8-14 seconds on a normal machine, so 30 seconds leaves room.
+
+Two things to know if this step misbehaves:
+
+- **Do not pipe this into `head`.** `head` exits after its line quota and the
+  resulting SIGPIPE can kill `npx` partway through unpacking, which leaves a
+  half-written directory under `npm-cache/_npx/<hash>`. Every later `npx` run for
+  that package then fails with `ENOENT ... could not read package.json` and keeps
+  failing until you delete that directory. The failure looks like a bad publish
+  and is purely local.
+- To check the tarball without involving the `npx` cache at all, install it into
+  a scratch directory instead:
+
+  ```bash
+  mkdir verify && cd verify
+  npm install google-tools-mcp@X.Y.Z
+  (sleep 30) | node node_modules/google-tools-mcp/dist/index.js
+  ```
