@@ -2,19 +2,30 @@
 
 The **easiest way** to connect your AI agent to Google Workspace.
 
-**159 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, and Maps — all in one package. One install, one auth, and you're done.
+**156 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, Tasks, and Maps — all in one package. One install, one auth, and you're done.
 
 ```bash
 npx -y google-tools-mcp setup
 ```
 
+## Contents
+
+- [Quick Start](#quick-start)
+- [Tool Categories](#tool-categories)
+- [Common Workflows](docs/workflows.md)
+- [Local Working Copies](#local-working-copies)
+- [Environment Variables](#environment-variables)
+- [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients)
+- [Troubleshooting](#troubleshooting)
+- [Development / Contributing](#development--contributing)
+
 ## Why google-tools-mcp?
 
 - **One command to install.** No cloning repos, no building from source, no Docker. Just `npx -y google-tools-mcp setup` and it works.
-- **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, and Forms. No juggling multiple tokens or servers.
+- **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, and Tasks. No juggling multiple tokens or servers.
 - **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
 - **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
-- **159 tools, zero config.** Every tool is available the moment the server starts. Send emails, create docs, manage calendar events, build forms, search places — it's all there.
+- **156 tools, zero config.** Every tool is available the moment the server starts. Send emails, create Docs and Slides, manage Tasks and calendar events, build forms, search places — it's all there.
 - **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
 - **No telemetry. No tracking. Fully open source.**
 
@@ -47,7 +58,7 @@ The setup wizard can add the MCP server to Codex or Claude Code automatically wh
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project (or use an existing one)
-3. Enable the **Google Docs API**, **Google Sheets API**, **Google Drive API**, **Gmail API**, **Google Calendar API**, and **Google Forms API**
+3. Enable the **Google Docs API**, **Google Sheets API**, **Google Drive API**, **Gmail API**, **Google Calendar API**, **Google Forms API**, **Google Slides API**, and **Google Tasks API**
 4. Go to **OAuth consent screen** and configure it (External is fine for personal use). If your app's publishing status is **Testing** (the default), you must add your Google account as a test user — go to **OAuth consent screen** → **Test users** → **Add users** and enter your email. Without this, Google will block the OAuth flow with an "Access denied" or "app not verified" error.
 5. Go to **Credentials** → **Create Credentials** → **OAuth Client ID**
 6. Select **Desktop application** as the application type
@@ -339,20 +350,20 @@ Watch for source/runtime drift: editing a clone has no effect while the MCP clie
 
 ## Tool Categories
 
-### `files` (18 tools)
+### `files` (27 tools)
 Google Drive file management and content reading.
 
-`listDriveFiles`, `searchDocuments`, `getFileInfo`, `getFilePath`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `downloadFile`, `readFile`, `searchFileContents`
+`listDriveFiles`, `searchDocuments`, `getFileInfo`, `getFilePath`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `downloadFile`, `uploadFile`, `listPermissions`, `addPermission`, `removePermission`, `updatePermission`, `listRevisions`, `getRevision`, `updateRevision`, `readFile`, `searchFileContents`, `readDriveFile`
 
 ### `documents` (22 tools)
 Google Docs read/write/format with markdown support.
 
 `readDocument`, `appendText`, `deleteRange`, `modifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`
 
-### `spreadsheets` (29 tools)
+### `spreadsheets` (30 tools)
 Google Sheets operations.
 
-`readSpreadsheet`, `writeSpreadsheet`, `batchWrite`, `appendRows`, `clearRange`, `createSpreadsheet`, `getSpreadsheetInfo`, `addSheet`, `deleteSheet`, `duplicateSheet`, `renameSheet`, `formatCells`, `readCellFormat`, `autoResizeColumns`, `freezeRowsAndColumns`, `setColumnWidths`, `addConditionalFormatting`, `copyFormatting`, `setDropdownValidation`, `createTable`, `deleteTable`, `getTable`, `listTables`, `appendTableRows`, `updateTableRange`, `insertChart`, `deleteChart`, `groupRows`, `ungroupAllRows`
+`readSpreadsheet`, `writeSpreadsheet`, `batchWrite`, `appendRows`, `clearRange`, `createSpreadsheet`, `getSpreadsheetInfo`, `addSheet`, `deleteSheet`, `duplicateSheet`, `renameSheet`, `formatCells`, `readCellFormat`, `autoResizeColumns`, `freezeRowsAndColumns`, `setColumnWidths`, `addConditionalFormatting`, `copyFormatting`, `setDropdownValidation`, `createTable`, `deleteTable`, `getTable`, `listTables`, `appendTableRows`, `updateTableRange`, `insertChart`, `deleteChart`, `groupRows`, `ungroupAllRows`, `deleteColumns`
 
 ### `email` (16 tools)
 Gmail messages and drafts (hot-path tools stay granular).
@@ -386,12 +397,24 @@ Google Forms — create/read forms, manage responses, and publish settings.
 
 `create_form`, `get_form`, `batch_update_form`, `get_form_response`, `list_form_responses`, `set_publish_settings`
 
+### `slides` (16 tools)
+Google Slides presentation creation and editing.
+
+`createPresentation`, `updatePresentation`, `getPresentation`, `formatSlidesText`, `formatSlidesParagraph`, `styleSlidesShape`, `setSlidesBackground`, `createSlidesTextBox`, `createSlidesShape`, `getSpeakerNotes`, `updateSpeakerNotes`, `deleteSlide`, `duplicateSlide`, `reorderSlides`, `replaceAllTextInSlides`, `exportSlideThumbnail`
+
+### `tasks` (8 tools)
+Google Tasks task-list and task management.
+
+`listTaskLists`, `createTaskList`, `deleteTaskList`, `listTasks`, `createTask`, `updateTask`, `completeTask`, `deleteTask`
+
 ### `maps` (6 tools)
 Google Maps and Places tools for geocoding, reverse geocoding, nearby and text search, place details, and directions.
 
 `mapsGeocode`, `mapsReverseGeocode`, `mapsSearchNearby`, `mapsSearchPlaces`, `mapsPlaceDetails`, `mapsDirections`
 
 These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separate from the Google OAuth credentials used everywhere else and not covered by the setup wizard or by [Step 1](#step-1-create-google-oauth-credentials) above. To get one: enable the **Geocoding API**, **Places API (New)**, and **Routes API** for your Google Cloud project, then go to **Credentials** → **Create Credentials** → **API key**, and set it as `GOOGLE_MAPS_API_KEY`. Without it, the `maps` tools are still listed, but calling any of them fails with a clear error telling you to set the key.
+
+The categories above contain 152 service-specific tools. Four general utilities — `help`, `logout`, `troubleshoot`, and `feedback` — bring the default server surface to 156 tools. See [Common Workflows](docs/workflows.md) for practical examples.
 
 ## Local Working Copies
 
