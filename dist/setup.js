@@ -12,7 +12,7 @@ import { google } from 'googleapis';
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const APIS = [
+export const REQUIRED_APIS = [
     'docs.googleapis.com',
     'sheets.googleapis.com',
     'drive.googleapis.com',
@@ -20,10 +20,11 @@ const APIS = [
     'calendar-json.googleapis.com',
     'forms.googleapis.com',
     'slides.googleapis.com',
+    'tasks.googleapis.com',
 ];
 
 const ENABLE_APIS_URL =
-    `https://console.cloud.google.com/flows/enableapi?apiid=${APIS.join(',')}`;
+    `https://console.cloud.google.com/flows/enableapi?apiid=${REQUIRED_APIS.join(',')}`;
 
 const CREATE_CREDENTIALS_URL =
     'https://console.cloud.google.com/apis/credentials/oauthclient';
@@ -215,7 +216,7 @@ async function enableApisProgrammatically(authClient, projectNumber) {
     const serviceUsage = google.serviceusage({ version: 'v1', auth: authClient });
     const batchRes = await serviceUsage.services.batchEnable({
         parent: `projects/${projectNumber}`,
-        requestBody: { serviceIds: APIS },
+        requestBody: { serviceIds: REQUIRED_APIS },
     });
     const opName = batchRes.data?.name;
     if (!opName) {
@@ -254,7 +255,7 @@ export async function runSetup() {
         chalk.green('If you don\'t have one yet, the next page (consent screen) will prompt you to create one.'),
         '',
         chalk.dim('APIs to be enabled (we\'ll do this automatically after authentication):'),
-        chalk.dim('  ') + APIS.map(a => chalk.yellow(a.replace('.googleapis.com', ''))).join(chalk.dim(', ')),
+        chalk.dim('  ') + REQUIRED_APIS.map(a => chalk.yellow(a.replace('.googleapis.com', ''))).join(chalk.dim(', ')),
     ].join('\n'));
 
     const wantManualEnable = await p.confirm({
@@ -466,11 +467,11 @@ export async function runSetup() {
         if (p.isCancel(fallback)) cancelled();
     } else {
         const s = p.spinner();
-        s.start(`Enabling ${APIS.length} APIs in project ${projectNumber}...`);
+        s.start(`Enabling ${REQUIRED_APIS.length} APIs in project ${projectNumber}...`);
         try {
             const result = await enableApisProgrammatically(authClient, projectNumber);
             if (result.ok) {
-                s.stop(chalk.green(`Enabled ${APIS.length} APIs in project ${projectNumber}`));
+                s.stop(chalk.green(`Enabled ${REQUIRED_APIS.length} APIs in project ${projectNumber}`));
                 p.log.message(chalk.dim('(May take ~30s to propagate. The server will auto-open the enable page if any API is still disabled when you first use it.)'));
             } else {
                 s.stop(chalk.yellow('Auto-enable failed — falling back to manual.'));
