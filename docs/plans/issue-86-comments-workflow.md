@@ -1,6 +1,6 @@
 # Plan: make the Docs comment workflow reliable, incremental, and complete (#86)
 
-Issue: [#86](https://github.com/karthikcsq/google-tools-mcp/issues/86) (canonical for closed #90, #102) · Verified against `main` @ 8640240.
+Issue: [#86](https://github.com/karthikcsq/google-tools-mcp/issues/86) (canonical for closed #90, #102) · Verified against `main` @ 8640240. Revised after adversarial review.
 
 ## Root causes (three independent defects, one shared cause underneath)
 
@@ -28,14 +28,14 @@ then verify with `comments.get` (`fields: 'resolved'`) and **throw `UserError` o
 
 ### 2. Fix `listComments` for real review loops
 
-- Field mask → `nextPageToken,comments(id,content,quotedFileContent,author,createdTime,modifiedTime,resolved,replies(id,content,action,author,createdTime))`.
-- Params: `pageToken` (string, optional), `maxResults` (1–100, default 100 → maps to `pageSize`), `updatedAfter` (ISO datetime, optional → maps to `startModifiedTime`), `includeDeleted` (bool, default false), `includeQuotedText` (bool, default true — when false, drop `quotedText` from output to save tokens), `unansweredOnly` (bool, default false — client-side filter: keep comments whose latest activity is not an owner reply and which are unresolved; document the heuristic in the description).
-- Output: keep the `{ comments }` shape, now accurate `replyCount`, real `modifiedTime`, plus `nextPageToken` and `totalCount` to match the Drive list-tool envelope (`listSharedWithMe.js:81-87`).
+- Field mask → `nextPageToken,comments(id,content,quotedFileContent,author(displayName,me),createdTime,modifiedTime,resolved,replies(id,content,action,author(displayName,me),createdTime))`. `author.me` is required for any ownership-based filtering — `displayName` alone cannot identify the authenticated user.
+- Params: `pageToken` (string, optional), `maxResults` (1–100, default 50 → maps to `pageSize`; default lowered from the hardcoded 100 to bound response size now that replies are included), `updatedAfter` (ISO datetime, optional → maps to `startModifiedTime`), `includeDeleted` (bool, default false), `includeQuotedText` (bool, default true — when false, drop `quotedText` from output to save tokens), `unansweredOnly` (bool, default false — client-side filter: keep unresolved comments whose latest reply is not by the authenticated user, using `author.me`; state the heuristic verbatim in the description).
+- Output: keep the `{ comments }` shape, now with accurate `replyCount`, real `modifiedTime`, plus `nextPageToken` and `count` (comments in *this page* — deliberately not named `totalCount`, which would be misleading under pagination; the `listSharedWithMe.js:81-87` envelope's `totalCount` has exactly that defect). Truncate `content`, reply `content`, and `quotedText` to 2,000 chars each with a `…[truncated]` marker so a comment-heavy doc cannot blow the response size; note the limit in the description.
 - Delete the dead work: `docs.documents.get` and the discarded `getDriveClient()` at `listComments.js:12-16` (one wasted Docs round-trip per call today).
 
 ### 3. Add `updateComment`
 
-New `dist/tools/docs/comments/updateComment.js`: `updateComment(documentId, commentId, content)` → `drive.comments.update` with `requestBody: { content }`, `fields: 'id,content,modifiedTime'` (content **is** writable; resolved is not). Register in `comments/index.js`. Note: registering a new tool changes the pinned counts — update `tests/toolRegistration.test.js` (156→157, alias totals) and the README/package description via the existing `documentationConsistency` test failing loudly.
+New `dist/tools/docs/comments/updateComment.js`: `updateComment(documentId, commentId, content)` → `drive.comments.update` with `requestBody: { content }`, `fields: 'id,content,modifiedTime'` (content **is** writable; resolved is not). Register in `comments/index.js`. Count bookkeeping, precisely: default registry 156→157 and alias-enabled total 228→229 in `tests/toolRegistration.test.js`; the 72-alias count is untouched (the alias registry is a fixed opt-in set, `legacyAliases.js:29-68` — no alias is added for a new camelCase tool). Also update the README **docs category** section (currently "22 tools" with a name list, `README.md:358-361`) — the `documentationConsistency` test checks only the global count and category headings, not per-category counts or names, so this line must be edited deliberately or it rots silently.
 
 ### 4. Shared cleanup while touching every file
 
@@ -48,9 +48,10 @@ New `tests/comments.test.js`, mocking `dist/clients.js` (the established pattern
 
 - **resolve → verify:** mock `replies.create` + `comments.get({resolved:true})` → success message; mock `comments.get({resolved:false})` → expect `UserError` (hard failure). Assert `comments.update` is **never called** by resolve.
 - **reply → list:** mock a comment with two replies; `listComments` returns `replyCount: 2` and reply metadata.
-- **incremental:** `updatedAfter` forwarded as `startModifiedTime`; `pageToken` round-trips; `nextPageToken` surfaced.
+- **incremental & pagination, end to end:** `updatedAfter` forwarded as `startModifiedTime`; `includeDeleted` and `maxResults` visibly alter the request; two-page fixture — first call returns `nextPageToken`, second call with that `pageToken` returns the second page's comments (proving the >100-comment workflow, not just token forwarding).
 - **update-in-place:** `updateComment` sends only `{content}` and surfaces `modifiedTime`.
-- **filters:** `unansweredOnly` drops resolved and owner-answered fixtures.
+- **filters:** `unansweredOnly` keeps a comment whose last reply has `author.me: false`, drops resolved ones and those last-answered with `author.me: true`; truncation markers applied at the content cap.
+- **whole-directory regression:** all seven tools (`addComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `deleteComment`, `updateComment`) registered, and each `execute` observed using the shared `getDriveClient()` mock — i.e., the test's client mock is the *only* Drive surface, so any tool still constructing a private `google.drive` client fails its test by never touching the mock.
 
 ## Acceptance criteria
 

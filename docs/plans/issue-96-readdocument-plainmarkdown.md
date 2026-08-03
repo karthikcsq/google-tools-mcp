@@ -1,6 +1,6 @@
 # Plan: add plainMarkdown to readDocument (#96)
 
-Issue: [#96](https://github.com/karthikcsq/google-tools-mcp/issues/96) · Verified against `main` @ 8640240.
+Issue: [#96](https://github.com/karthikcsq/google-tools-mcp/issues/96) · Verified against `main` @ 8640240. Revised after adversarial review.
 
 ## Root cause
 
@@ -14,35 +14,39 @@ There is nothing deeper under this: the option exists, one call site doesn't for
 
 ## Design decisions
 
-1. **Working copy stays rich.** `readDocument` writes a working-copy file (`dist/workspace.js:61-65`) that `replaceDocumentWithMarkdown` pushes back. If `plainMarkdown: true` also stripped the working copy, a later push would silently discard the document's existing colors. So: the **inline response** honors `plainMarkdown`; the **working-copy file always gets the rich version**. The round trip stays lossless by default, and the flag remains a read/reasoning affordance. State this explicitly in the parameter description, because it is the one surprising part of the behavior.
+1. **Working copy stays rich.** `readDocument` computes a working-copy path (`dist/workspace.js:61-65`) and writes the file (`workspace.js:98-121`) that `replaceDocumentWithMarkdown` pushes back. If `plainMarkdown: true` also stripped the working copy, a later push would silently discard the document's existing colors. So: the **inline response** honors `plainMarkdown`; the **working-copy file always gets the rich version**. State this in the parameter description, and state the corollary bluntly: *the plain inline text is for reading and reasoning; pasting it into `replaceDocumentWithMarkdown(markdown=...)` will drop the document's colors — only the local working-copy file is safe for lossless round-trip editing.*
 2. **Default stays `false`.** Flipping the default is a breaking output change; not now. Note it as a candidate for the next major in CHANGELOG.
-3. **`diffFromLastRead` interaction.** The diff path (`readGoogleDoc.js:119-147`) compares against the *stored* snapshot from `getLastReadContent`. Snapshots must be internally consistent: keep `trackRead` and the diff comparison on the rich version unconditionally (same reasoning as the working copy — tracker content feeds conflict diffs against rich fetches in `guardMutation`), and apply the plain conversion only to the returned text. That means with `plainMarkdown: true` a second conversion call with `{plainMarkdown: true}` produces the response body while the rich result feeds `trackRead`/workspace. Conversion is cheap relative to the API fetch.
+3. **`diffFromLastRead` ignores `plainMarkdown`, explicitly.** The diff path (`readGoogleDoc.js:119-144`) patches between the *stored rich snapshot* and the current rich conversion; a plain-vs-rich diff would be garbage, and storing plain snapshots would corrupt cross-read diffs when flag usage varies. So the combination behaves like the existing `format: 'json'`/`'text'` interactions (`:91-93`, `:183-185`): the diff is produced from rich markdown, and a note line in the response says `plainMarkdown` was ignored for the diff. Tracker state (`trackRead`) stays rich unconditionally — it feeds conflict diffs in `guardMutation`, which compare against rich fetches.
+4. **`maxLength`/`totalLength` operate on what is returned.** Truncation and the reported `totalLength` (`readGoogleDoc.js:104-105`, `:160-166`) must be computed from the response variant (plain when the flag is set), not from the rich string — otherwise plain responses get truncated against the wrong length and report a size the caller never received.
 
 ## Implementation
 
 1. `dist/tools/docs/readGoogleDoc.js` schema (~line 32-51): add
    ```js
    plainMarkdown: z.boolean().optional().default(false)
-       .describe('For markdown format only. If true, suppresses rich HTML-style formatting extensions (color/background spans) and returns cleaner portable markdown. The local working-copy file and diff tracking always keep the rich version so a later replaceDocumentWithMarkdown push does not silently drop colors.'),
+       .describe('For markdown format only. If true, the returned text suppresses rich HTML-style formatting extensions (color/background spans) for cleaner portable markdown. The local working-copy file and diff/conflict tracking always keep the rich version — for lossless editing, edit the working-copy file, not this plain text. Ignored (with a note) when diffFromLastRead is true.'),
    ```
    Reuse the `readDriveFile.js:57-61` wording for the first sentence so the two tools document it identically.
-2. At `readGoogleDoc.js:104`: keep `const markdownContent = docsJsonToMarkdown(contentSource);` as the canonical rich version; add `const responseMarkdown = args.plainMarkdown ? docsJsonToMarkdown(contentSource, { plainMarkdown: true }) : markdownContent;` and return `responseMarkdown` in the response paths (full read ~:149-179 and diff path ~:119-147, where the *patch target* stays rich but the appended current-content fallthrough at :146 uses `responseMarkdown`).
-3. `trackRead` calls (:94/:130/:149/:214) and `writeWorkspaceFile` calls (:134/:154) keep receiving the rich `markdownContent` — no change.
-4. Mention the flag in the local-file advice string (~:171-179) so callers understand the file on disk may differ from the inline text when the flag is set.
+2. At `readGoogleDoc.js:104`: keep `markdownContent` (rich) as canonical; add `const responseMarkdown = args.plainMarkdown ? docsJsonToMarkdown(contentSource, { plainMarkdown: true }) : markdownContent;`. Full-read response path (~:149-179) returns `responseMarkdown`; `totalLength`/`maxLength` truncation computed on `responseMarkdown`.
+3. Diff path (~:119-144): unchanged output, plus the "plainMarkdown ignored for diff" note when the flag was set.
+4. `trackRead` calls (:94/:130/:149/:214) and `writeWorkspaceFile` calls (:134/:154) keep receiving rich `markdownContent` — no change.
+5. Local-file advice string (~:171-179): mention that the file on disk is the rich version when the flag is set.
 
 ## Tests
 
-- Extend `tests/readGoogleDocWorkspace.test.js` (already mocks `dist/clients.js`): a doc fixture with an explicit `foregroundColor` text run —
-  - default read: response contains `<span style=`; working copy content contains `<span style=`.
-  - `plainMarkdown: true`: response contains no `<span style=`; working copy **still** contains `<span style=`; `getLastReadContent` returns the rich version.
-- Parity test (the drift guard the issue asks for): one shared Docs-JSON fixture converted via the `readDocument` path and the `readDriveFile` path at the same flag value must produce byte-identical markdown. Put it in a new `tests/readToolParity.test.js` so future divergence between the two tools fails CI.
+- Extend `tests/readGoogleDocWorkspace.test.js` (already mocks `dist/clients.js`) with a doc fixture containing an explicit `foregroundColor` run:
+  - default read: response and working copy both contain `<span style=`.
+  - `plainMarkdown: true`: response contains no `<span style=`; working copy **still** contains `<span style=`; `getLastReadContent` returns rich.
+  - `plainMarkdown: true` + `maxLength` shorter than rich but longer than plain: response is **not** truncated and `totalLength` equals the plain length.
+  - `plainMarkdown: true` + `diffFromLastRead` on a second read: patch content derives from rich snapshots; response contains the ignored-flag note.
+- Parity test (`tests/readToolParity.test.js`): one shared Docs-JSON fixture through both tools' conversion paths at the same flag value; **extract the markdown content field from each response** (`readDocument` returns markdown + advice text; `readDriveFile` returns a JSON envelope with `content`, `readDriveFile.js:151-156`) and compare the extracted content byte-for-byte. Comparing raw responses would compare incompatible envelopes.
 
 ## Acceptance criteria
 
 - `plainMarkdown` absent → byte-identical behavior to today.
-- `plainMarkdown: true` on a colored doc → no `<span style=` in output, matching `readDriveFile` byte-for-byte on the same document/format.
-- Working copy and diff snapshots remain rich under both flag values; the interaction is stated in the tool description.
+- `plainMarkdown: true` on a colored doc → no `<span style=` in the returned content, matching `readDriveFile`'s content byte-for-byte on the same document/format; length accounting reflects the returned text.
+- Working copy and tracker snapshots remain rich under both flag values; the diff-path and round-trip implications are stated in the tool description.
 
 ## Follow-up (tracked, not in this change)
 
-The issue's "Related" section notes the capability split (`readDriveFile` lacks `diffFromLastRead`/`tabId`/working copy; `readDocument` lacked `plainMarkdown`). After this lands the remaining asymmetry is `readDriveFile`'s — fold that into #88's docs-editing work or a new small issue rather than widening this one.
+The issue's "Related" section notes the capability split (`readDriveFile` lacks `diffFromLastRead`/`tabId`/working copy). After this lands the remaining asymmetry is `readDriveFile`'s — fold that into #88's docs-editing work or a new small issue rather than widening this one.

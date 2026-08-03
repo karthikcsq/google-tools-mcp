@@ -1,49 +1,58 @@
 # Plan: correct Docs read/write state and isolate working copies (#87)
 
-Issue: [#87](https://github.com/karthikcsq/google-tools-mcp/issues/87) (canonical for closed #94, #97) · Verified against `main` @ 8640240.
+Issue: [#87](https://github.com/karthikcsq/google-tools-mcp/issues/87) (canonical for closed #94, #97) · Verified against `main` @ 8640240. Revised after adversarial review.
 
 ## Root causes
 
 The read-before-write layer has one conceptual defect with three visible symptoms, plus two adjacent gaps found during verification:
 
 1. **Wrong conflict signal.** `guardMutation` (`dist/readTracker.js:106-118`) compares Drive `modifiedTime`, which changes on comment activity, permission changes, and other metadata events that leave document *content* identical. The Docs API's own `revisionId` — which the tracker already stores (`readTracker.js:60`) and already uses for `WriteControl` — is the content-change signal. Result: adding a comment between read and write produces a rejected write whose "diff" is empty.
-2. **Creates don't seed the tracker.** Every `trackRead` call site is a *read* tool (`readGoogleDoc.js:94,130,149,214`, `readDriveFile.js:86,151`, `readFile.js:62`, `readSpreadsheet.js:26`, `getSpreadsheetInfo.js:20`). No creation tool seeds it — `createDocument.js` has no readTracker import at all — so create-then-write, where the caller *is* the sole author of the content, is rejected (7 occurrences across 6 of 13 reviewed sessions per the issue).
-3. **Working copies collide across sessions.** `dist/workspace.js:61-65` keys the file by `documentId[.tabId]` only, in a shared per-user temp dir. Read-tracker state is per-session (`readTracker.js:23-37`), but two HTTP sessions reading the same doc overwrite one file.
-4. **(Found in verification, not in the issue) Seven mutating Docs tools skip `guardMutation` entirely:** `insertTable.js`, `insertTableWithData.js`, `insertPageBreak.js`, `insertImage.js`, `addTab.js`, `renameTab.js`, `formatting/applyParagraphStyle.js` use only `getLastReadRevisionId` + `trackMutation`. On a never-read document, `getLastReadRevisionId` returns undefined, so they write with **no protection at all** — the guard the whole subsystem exists to provide.
+2. **Creates don't seed the tracker.** Every `trackRead` call site is a *read* tool. No creation tool seeds it — `createDocument.js` has no readTracker import at all — so create-then-write, where the caller authored the content, is rejected (7 occurrences across 6 of 13 reviewed sessions per the issue).
+3. **Working copies collide across sessions.** `dist/workspace.js:61-65` keys the file path by `documentId[.tabId]` only, in a shared per-user temp dir. Read-tracker state is per-session (`readTracker.js:23-37`), but two HTTP sessions reading the same doc overwrite one file.
+4. **(Found in verification) Seven mutating Docs tools skip `guardMutation` entirely:** `insertTable.js`, `insertTableWithData.js`, `insertPageBreak.js`, `insertImage.js`, `addTab.js`, `renameTab.js`, `formatting/applyParagraphStyle.js` use only `getLastReadRevisionId` + `trackMutation`. On a never-read document `getLastReadRevisionId` returns undefined, so they write with no protection at all.
 5. Freshness/cleanup/canonical-status semantics of the working copy are undocumented.
 
 ## Design decisions
 
-- **Revision-first conflict detection, content-equality fallback.** Primary signal: fetch the Docs `revisionId` (narrow field mask) and compare to the stored one. Equal → proceed (regardless of `modifiedTime`). Different → revisions are opaque and can advance without visible content change (Apps Script, autosave quirks — see the existing workaround note at `insertImage.js:89`), so before rejecting, fetch content via the existing `contentFetcher` hook and compare against the stored snapshot; identical content → proceed and re-arm the tracker with the new revisionId. Only genuinely different content rejects, with the existing unified-diff message (`readTracker.js:141-171`). Drive `modifiedTime` drops out of the decision entirely; keep storing it for diagnostics only. Non-Docs files (Sheets, Drive files) have no revisionId in the tracker — they keep the current modifiedTime path (documented as such).
-- **Seed on create, because the caller's knowledge is the point.** The guard exists to guarantee the writer knows current content. The creator of a document knows its content by construction. `createDocument` (and `copyFile`, `createFromTemplate`, sheets creators) should call `trackRead(id, { modifiedTime, content, revisionId })` with what they just wrote. For `createDocument` with markdown content, fetch `revisionId` after the insert (one narrow `documents.get`) so the seed is trustworthy rather than a blind pass.
-- **Namespace working copies per session.** `getWorkspacePath` gains the session component: `<docId>[.<tabId>][.<sessionSuffix>].md` where `sessionSuffix` = sanitized `currentSessionKey()` (from `dist/sessionContext.js`), empty for stdio (preserving today's paths for the single-session case that all existing docs/tests reference). Wire `clearSession` (`readTracker.js:44-46`, called on HTTP disconnect at `index.js:154-161`) to also delete that session's workspace files — bounded cleanup for free.
-- **Close the guard bypass (item 4) as part of this issue**, not a new one: it is the same subsystem and the fix is mechanical — add `guardMutation` calls mirroring `modifyText.js:110-119` to the seven tools. `tests/extraDocsToolsWriteControl.test.js` already exercises exactly these tools and will need its fixtures to perform a read first.
+- **Revision-first conflict detection, content-equality fallback.** Primary signal for Docs: fetch `revisionId` (narrow field mask) and compare to the stored one. Equal → proceed regardless of `modifiedTime`. Different → revisions can advance without visible content change (Apps Script, autosave — see `insertImage.js:89`), so fetch content via the existing `contentFetcher` and compare against the stored snapshot; identical → proceed and re-arm the tracker with the new revisionId; different → reject with the existing unified-diff message (`readTracker.js:141-171`). Drive `modifiedTime` drops out of the Docs decision; keep storing it for diagnostics.
+  - **Lossy-equality caveat, accepted deliberately:** the stored snapshot and fetched comparison are `docsJsonToMarkdown` output, which cannot represent all Docs state (images, some formatting — `readGoogleDoc.js:28-31`). Markdown-equality can therefore say "identical" across a change markdown can't see. This is acceptable because the **API-level `WriteControl.requiredRevisionId` still guards the actual write** — if the revision moved, the write only succeeds when we explicitly chose to proceed, and the failure mode is bounded to changes invisible in markdown. State this in the code comment; do not present the guard as bit-perfect.
+  - **Failure rule: fail-open with a warning**, matching current behavior (`readTracker.js:181-185`) — if the revision or content fetch itself errors, log a warning and allow the mutation (WriteControl still applies). Document the rule; test both fetch-failure paths.
+  - **Sheets and generic Drive files keep the `modifiedTime` path.** The Sheets tracker entries carry no content/revision (`readSpreadsheet.js:25-28` calls `trackRead(id)` bare); revision-first applies only where a Docs `revisionId` was stored. Say so in `guardMutation`'s doc comment.
+- **Tab-scoped snapshots must compare like with like.** `readDocument` with `tabId` stores a *tab's* markdown (`readGoogleDoc.js:69-89,130`), but tracker entries are keyed by documentId and guard fetchers convert the *whole* document (`modifyText.js:110-117`) — so tab A read + tab B write can diff wrong text today. Fix: store the read scope in the tracker entry (`scope: tabId ?? null`); `contentFetcher` receives the stored scope and fetches/converts the same scope. Revision comparison is unaffected (revisionId is document-global). One entry per document (last read scope wins) keeps the model simple; document that reading tab A then writing tab B without re-reading is treated as unread → guarded.
+- **Seed on create — with a canonical snapshot, not the caller's input.** The caller's markdown is *not* what the document canonically contains (conversion may warn/drop content, `createDocument.js:72-88`). Seed by doing a post-create fetch: `documents.get` → `revisionId` + `docsJsonToMarkdown` snapshot → `trackRead(id, { content, revisionId, modifiedTime })`. One extra narrow read per create is the price of a trustworthy seed. Per-tool:
+  - `createDocument` (both raw and markdown content, and the empty case — seed empty-string content with the fresh revisionId).
+  - `createFromTemplate`: seed only after all replacements succeeded; on partial failure (`createFromTemplate.js:40-68`), do **not** seed — forcing a read is correct when the content state is uncertain.
+  - `copyFile`: contents unknown to the caller by definition; seeding would defeat the guard's purpose. **Do not seed** — document that copy-then-edit requires a read, which is also the honest workflow.
+  - Sheets creators: `trackRead(spreadsheetId)` bare (all the Sheets guard model uses today).
+- **Namespace working copies per session, with a cleanup API.** `getWorkspacePath` gains a session component: `<docId>[.<tabId>][.<sessionSuffix>].md`, suffix = sanitized `currentSessionKey()`, empty for stdio (today's paths preserved for the single-session case). Cleanup needs an actual mechanism — `clearSession` only drops a Map (`readTracker.js:44-46`) and workspace exports no delete: add `deleteSessionWorkspaceFiles(sessionKey)` to `workspace.js` that globs the workspace dir for `*.<sessionSuffix>.md` and unlinks (best-effort, logged); call it from the disconnect handler (`index.js:154-161`) beside `clearSession`.
+- **Close the guard bypass (item 4) here**, mechanically mirroring `modifyText.js:110-119`. Placement matters for `insertImage`: it uploads the local image to Drive *before* the Docs write (`insertImage.js:58-80`) — the guard must run **before the upload**, and a rejected call must leave no uploaded file.
 
 ## Implementation
 
-1. `dist/readTracker.js`: restructure `guardMutation`'s external-change block (`:106-177`) per the decision above — `revisionFetcher` option (narrow `documents.get`, `fields: 'revisionId'`) for Docs callers; content-equality fallback via existing `contentFetcher`; keep `skipExternalCheck` escape hatch. Callers that pass `contentFetcher` today (`replaceDocumentWithMarkdown.js:40-49`) need no signature change.
-2. Seed sites: `dist/tools/drive/createDocument.js` (after `:63-66` insert), `copyFile.js`, `createFromTemplate.js`, `dist/tools/sheets/createSpreadsheet.js` (+ any other creators found by grepping `files.create|spreadsheets.create`) → `trackRead` with known content + fetched revision.
-3. `dist/workspace.js:61-65`: session-suffix path; `dist/index.js` disconnect handler: workspace cleanup alongside `clearSession`.
-4. The seven unguarded tools: add `guardMutation` (with `contentFetcher` where a docs client is already in scope).
-5. Docs: extend the tool descriptions of `readDocument`/`replaceDocumentWithMarkdown` and `docs/architecture.md` with the working-copy contract: convenience mirror, not canonical; freshness = last read; cleaned up on session end; path may include a session suffix.
+1. `dist/readTracker.js`: restructure `guardMutation` (`:106-185`) — `revisionFetcher` option, content-equality fallback with scope-aware `contentFetcher`, fail-open logging, re-arm on equal content; keep `skipExternalCheck`. `trackRead` accepts/stores `scope`.
+2. **Wire revision-first into the existing guarded tools** (the main write paths, not just the seven bypassers): all ten current `guardMutation` call sites — `modifyText.js:110`, `appendToGoogleDoc.js:29`, `deleteRange.js:33`, `findAndReplace.js:30`, `replaceDocumentWithMarkdown.js:40`, `appendMarkdownToGoogleDoc.js:37` pass a `revisionFetcher` (docs client already in scope); Sheets/Drive callers unchanged.
+3. Seed sites per the decisions above (`createDocument.js`, `createFromTemplate.js`, sheets creators).
+4. `dist/workspace.js`: session-suffix path + `deleteSessionWorkspaceFiles`; `dist/index.js`: call it on disconnect.
+5. The seven unguarded tools: add `guardMutation` (+ `revisionFetcher`); `insertImage` guard before upload.
+6. Docs: tool descriptions of `readDocument`/`replaceDocumentWithMarkdown` + `docs/architecture.md`: working-copy contract (convenience mirror, not canonical; freshness = last read; session-suffixed under HTTP; cleaned up on disconnect), the guard's signals and its lossy-equality bound, the copy-then-edit rule.
 
 ## Tests
 
-- `tests/readTracker.test.js` additions: comment-activity simulation (modifiedTime changes, revisionId same → write proceeds); revision changed + content identical → proceeds and re-arms; revision changed + content different → rejects with diff.
-- New create-then-write regression (shared with #56's plan): `createDocument` → `modifyText` on the returned id succeeds without an intervening read; same for Sheets. Mock at `dist/clients.js` per the established pattern.
+- `tests/readTracker.test.js`: modifiedTime changed + revision same → proceeds; revision changed + content identical → proceeds and re-arms; revision changed + content different → rejects with diff; revisionFetcher throws → proceeds with warning; contentFetcher throws → proceeds with warning; scope-aware comparison (tab-A snapshot never compared against whole-doc fetch).
+- Create-then-write regression (shared with #56): `createDocument` (markdown, raw, and empty variants) → `modifyText` succeeds without an intervening read; `createFromTemplate` full success → write succeeds; **partial-failure → write is rejected** (unseeded); `copyFile` → write rejected (unseeded, by design); Sheets create → sheets write succeeds.
 - Consecutive writes advance tracker revision (extend `tests/writeControlRevisionAdvance.test.js`).
-- `tests/sessionIsolation.test.js`: two sessions reading the same doc produce distinct workspace paths; disconnect removes only that session's files.
-- Guard-bypass closure: extend `tests/extraDocsToolsWriteControl.test.js` — each of the seven tools now rejects on a never-read document.
+- `tests/sessionIsolation.test.js`: distinct workspace paths per session; `deleteSessionWorkspaceFiles` removes only that session's files.
+- Guard-bypass closure: extend `tests/extraDocsToolsWriteControl.test.js` — each of the seven tools rejects on a never-read document; `insertImage` rejection performs **no Drive upload** (mock asserts zero `files.create` calls).
 
 ## Acceptance criteria
 
 - Comment activity between read and write no longer rejects a content-identical write.
-- Create-then-immediately-write succeeds for Docs and Sheets creators.
-- All mutating Docs tools reject never-read documents; none bypass the guard.
-- Two concurrent HTTP sessions cannot overwrite each other's working copies; session teardown cleans them.
-- Working-copy semantics are documented where callers will see them.
-- The guard still rejects truly external edits with a useful diff (existing tests keep passing).
+- Create-then-immediately-write succeeds for creators whose content is knowable; is *correctly refused* for `copyFile` and failed template fills.
+- All mutating Docs tools reject never-read documents; `insertImage` rejects before uploading.
+- Two concurrent HTTP sessions cannot overwrite each other's working copies; disconnect cleans exactly that session's files.
+- Tab-scoped reads guard tab-scoped writes against the right snapshot.
+- The guard still rejects truly external edits with a useful diff (existing suites green), and its failure rule (fail-open + warn) is documented and tested.
 
 ## Sequencing
 
-Before #88 (its dryRun/diff features build on the corrected conflict signal). The create-then-write test satisfies part of #56. #96's plainMarkdown work touches `readGoogleDoc.js` — coordinate merges, no logical dependency.
+Before #88 (its dryRun/diff features build on the corrected conflict signal). The create-then-write test satisfies part of #56. #96 touches `readGoogleDoc.js` — coordinate merges, no logical dependency.

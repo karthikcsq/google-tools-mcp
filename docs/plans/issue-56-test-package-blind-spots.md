@@ -1,55 +1,58 @@
 # Plan: close high-risk test and package blind spots (#56)
 
-Issue: [#56](https://github.com/karthikcsq/google-tools-mcp/issues/56) (canonical for closed #100, #101) · Verified against `main` @ 8640240.
+Issue: [#56](https://github.com/karthikcsq/google-tools-mcp/issues/56) (canonical for closed #100, #101) · Verified against `main` @ 8640240. Revised after adversarial review.
 
 ## Root cause
 
 Three separate protections all failed quietly, and each failure is invisible from a green CI run:
 
-1. **The dist test is triply dead.** `dist/tools/docs/modifyText.test.js` doesn't match `testMatch` (`jest.config.js:3`), is excluded by `testPathIgnorePatterns` (`:4`), and — worse than the issue knew — even if it ran it tests a **local copy** of the normalization regex (`modifyText.test.js:56-58` defines its own `normalize()`), not the shipped path at `dist/tools/docs/modifyText.js:166-168`. So issue #9's fix has *never* been guarded by an executing test against production code. It also ships in the tarball (`npm pack` confirms, 3.6 kB) because `files: ["dist"]` has no exclusions, and it inflates the coverage denominator (`collectCoverageFrom` includes it).
-2. **`createDocument` and all four permissions tools have zero coverage** — not even registration assertions (`tests/toolRegistration.test.js:84-94` names only 9 of 24 drive tools). These are the tools where a silent regression means data loss (ownership transfer, permission broadening) or the #94 class of bug (create-then-write).
-3. **No structural guard prevents recurrence** — CI (`test.yml`) runs `npm test` only; the publish workflow's `npm pack --dry-run` step prints the manifest without asserting on it.
+1. **The dist test is triply dead.** `dist/tools/docs/modifyText.test.js` doesn't match `testMatch` (`jest.config.js:3`), is excluded by `testPathIgnorePatterns` (`:4`), and — worse than the issue knew — even if it ran it tests a **local copy** of the normalization regex (`modifyText.test.js:56-58`), not the shipped path at `dist/tools/docs/modifyText.js:166-168`. So issue #9's fix has never been guarded by an executing test against production code. It ships in the tarball (`npm pack` confirms, 3.6 kB; `files: ["dist"]` has no exclusions) and inflates the coverage denominator.
+2. **`createDocument` and the four permissions tools have no behavioral or identity coverage.** They *are* counted by the aggregate 156-tool assertion (`tests/toolRegistration.test.js:291-295`) — registration is indirectly covered — but no test names them (the drive `expectedTools` list at `:84-94` names only 9 of 24 drive tools) and zero tests execute them. These are the tools where a silent regression means data loss (ownership transfer, permission broadening) or the #94 class of bug.
+3. **No structural guard prevents recurrence** — CI (`test.yml`) runs the suite only; the publish workflow's `npm pack --dry-run` prints the manifest without asserting on it.
 
 ## Implementation
 
 ### 1. Dead test: port the unique assertions, delete the file, guard the class
 
-- Port to `tests/modifyText.test.js`: the six issue-#9 escape-normalization cases (`dist/.../modifyText.test.js:54-91`) — but **written against the real code path**. The regex lives inline in the `execute` handler (`modifyText.js:166-168`); extract it to an exported `normalizeEscapes(text)` beside `buildModifyTextRequests` so the test executes production code (this also removes the duplicated-regex disease that let the dead test drift). Port the three `stripMarkdownListMarkersForSearch` cases (`:93-108`) — that function is real and exported (`googleDocsApiHelpers.js:364`) but tested nowhere live.
+- Port to `tests/modifyText.test.js`: the six issue-#9 escape-normalization cases (`dist/.../modifyText.test.js:54-91`), **written against production code** — extract the inline regex (`modifyText.js:166-168`) into an exported `normalizeEscapes(text)` so the test executes the shipped path (also removing the duplicated-regex disease that let the dead test drift). Port the three `stripMarkdownListMarkersForSearch` cases (`:93-108`) — real, exported (`googleDocsApiHelpers.js:364`), tested nowhere live.
 - `git rm dist/tools/docs/modifyText.test.js`.
-- Class guard, in a new `tests/packageContents.test.js` (shared home with #74's dead-module assertions): run `npm pack --dry-run --json` (or glob `dist/`) and assert (a) no `*.test.js` under `dist/`, (b) no other non-runtime artifacts (recon: currently none besides this file — the test keeps it that way). This runs in normal CI on every PR, which beats a publish-time check.
+- Class guard in `tests/packageContents.test.js` (shared home with #74's dead-module assertions), **allowlist-based** — a deny-list of `*.test.js` would miss the next kind of non-runtime artifact: run `npm pack --dry-run --json` and assert every packed path matches exactly `package.json`, `README.md`, `LICENSE`, or `dist/**/*.js` excluding `dist/**/*.test.js`. Any future fixture, `.map`, `.md`, or helper under `dist/` fails deterministically. Runs in normal CI on every PR.
 
 ### 2. `createDocument` coverage
 
-New `tests/createDocument.test.js`, mocking `dist/clients.js` + `dist/markdown-transformer/index.js` (patterns exist):
+New `tests/createDocument.test.js`, mocking `dist/clients.js` + `dist/markdown-transformer/index.js` (established patterns):
 
-- root vs `parentFolderId` (parents array in `files.create` request), `supportsAllDrives` carried.
-- `initialContent` absent (no insert call) / `contentFormat:'raw'` (single `insertText` at index 1) / markdown (delegates to `insertMarkdown` with `firstHeadingAsTitle: true`).
-- Response: `id`, `name`, `webViewLink`, fidelity `warnings` + `warningNote` surfaced (`createDocument.js:72-74, 85-88`).
+- root vs `parentFolderId` (parents array in `files.create`), `supportsAllDrives` carried.
+- `initialContent` absent (no insert call) / `contentFormat:'raw'` / markdown (delegates to `insertMarkdown` with `firstHeadingAsTitle: true`). **Assert the raw path semantically** — an `insertText` of the content at index 1 is present — *not* "exactly one request": #14 adds a follow-up `updateTextStyle` on this same path, and a call-count assertion would create a cross-plan conflict.
+- Response: `id`, `name`, `webViewLink`, fidelity `warnings` + `warningNote` (`createDocument.js:72-74, 85-88`).
 - Error mapping: 404 → parent-folder message, 403 → permission message.
-- **The `:77-79` swallow**: content-insert failure currently logs and returns success with no warning — assert current behavior, then change it to include a `warnings` entry ("document created but initial content failed: …") and assert that. A created-but-empty doc reported as clean success is exactly the silent-partial-result pattern this repo keeps hitting.
-- Create-then-write regression: covered by #87's plan (seeding); the test lands there but is *this* issue's acceptance item too — cross-linked, not duplicated.
+- **The `:77-79` swallow**: content-insert failure currently logs and returns success shaped as clean. Change it to include a `warnings` entry ("document created but initial content failed: …") and assert that; a created-but-empty doc reported as clean success is exactly the silent-partial-result pattern this repo keeps hitting.
 
 ### 3. Permissions tools coverage
 
 New `tests/drivePermissions.test.js`, mocking `dist/clients.js`:
 
-- Registration: add all four (plus `createDocument` and the other missing 11) to the drive `expectedTools` list at `tests/toolRegistration.test.js:84-94` — make it the *complete* 24, so absence of any drive tool fails.
+- Identity assertions: extend the drive `expectedTools` list (`toolRegistration.test.js:84-94`) to the **complete set of 24** drive tools (15 are currently missing from the explicit list, including `createDocument` and all four permissions tools), so absence of any one fails by name rather than only perturbing the aggregate count.
 - `listPermissions`: exact field mask pinned; normalization defaults (`listPermissions.js:20-30`).
-- `addPermission` matrix: user/group require email (UserError), domain requires domain, `anyone` + `allowFileDiscovery`; role enum passed through **verbatim** (assert the request body role equals input — the "not broadened" criterion); notification default logic (`:63-64`) and `emailMessage` dropped when `sendNotify` false (`:70`); `role:'owner'` without `transferOwnership` rejected (`:43-51`); with it, `transferOwnership: true` in the request.
-- `updatePermission`: exact `permissionId` targeted; body is only `{role}`; owner guard.
-- `removePermission`: exact id in `permissions.delete`; `supportsAllDrives` on all four.
-- API failure propagation: mock a 403 → tool throws (not success-shaped output).
+- `addPermission` matrix: user/group require email (UserError), domain requires domain; `anyone` cases; **`allowFileDiscovery` omitted vs explicit false vs true** — the schema documents a false default (`addPermission.js:37-40`) but the implementation only sends the field when provided (`:60-62`), so all three request shapes must be pinned; role enum passed through verbatim (the "not broadened" criterion); notification default logic (`:63-64`) and `emailMessage` dropped when `sendNotify` false (`:70`); `role:'owner'` without `transferOwnership` rejected (`:43-51`), with it → `transferOwnership: true` in the request.
+- `updatePermission`: exact `permissionId` targeted; body only `{role}`; owner guard. `removePermission`: exact id; `supportsAllDrives` on all four.
+- API failure propagation: 403 mock → tool throws, never success-shaped.
 
-### 4. CI
+### 4. Create-then-write regression — explicit cross-plan contract
 
-`test.yml` already runs the suite on PRs — the new packageContents test rides it; no workflow edit needed beyond (optional) adding `npm pack --dry-run` output as an artifact for release archaeology. Defense in depth for publishing: add `"files"` exclusion `"!dist/**/*.test.js"` to `package.json` so even a reintroduced file can't ship.
+The test itself lands with #87 (tracker seeding), but it is **this issue's acceptance item too**: #56 is not closeable until the create-then-write test exists and runs, whether #87 has landed (test lives there) or not (in which case a pending/failing marker test documents the gap rather than silence). This replaces the earlier "independent" framing — the dependency is real and stated.
+
+### 5. CI / packaging defense in depth
+
+`test.yml` already runs the suite on PRs — `packageContents.test.js` rides it. Additionally narrow `package.json` `files` with `"!dist/**/*.test.js"` so even a reintroduced file can't ship regardless of test state.
 
 ## Acceptance criteria
 
-- Every listed test runs under plain `npm test`; deleting `normalizeEscapes`'s regex, any permission-role mapping, or reintroducing a dist test file makes CI fail.
-- Tarball contains runtime files only, enforced per-PR.
-- `createDocument` partial failure is visible in its response, and the suite pins it.
+- Every listed test runs under plain `npm test`; deleting `normalizeEscapes`, any permission-role mapping, or reintroducing any non-runtime file under `dist/` makes CI fail by name.
+- The packed tarball is provably allowlist-clean on every PR.
+- `createDocument` partial failure is visible in its response and pinned.
+- Create-then-write coverage exists (via #87) before this issue closes.
 
 ## Sequencing
 
-Independent; coordinate `tests/packageContents.test.js` with #74 (same file), the create-then-write test with #87, and the `createDocument` color test with #14. Good "first issue" territory once the plans are approved.
+Mostly independent; hard coordination points: `packageContents.test.js` with #74 (same file), create-then-write with #87 (stated above), raw-path assertion style with #14. Good "first issue" territory once plans are approved.

@@ -1,6 +1,6 @@
 # Plan: Gmail maintenance cleanup (#74)
 
-Issue: [#74](https://github.com/karthikcsq/google-tools-mcp/issues/74) (canonical for closed #53, #57) · Verified against `main` @ 8640240.
+Issue: [#74](https://github.com/karthikcsq/google-tools-mcp/issues/74) (canonical for closed #53, #57) · Verified against `main` @ 8640240. Revised after adversarial review.
 
 ## Root cause
 
@@ -19,6 +19,8 @@ Recon verified: `dist/tools/index.js` imports Gmail only from `./gmail/*` (`:148
 `git rm dist/tools/drafts.js dist/tools/labels.js dist/tools/messages.js dist/tools/settings.js dist/tools/threads.js`
 
 Prior comparisons (issue #53) found no unique fix in the dead forks worth porting; they *trail* the live files, not lead them. Do not diff-merge anything back.
+
+These paths ship in the npm package today (`files: ["dist"]`), so a consumer deep-importing `google-tools-mcp/dist/tools/messages.js` would break. No such import is supported or documented — the package's public surface is the `bin` entry — but note the removal in CHANGELOG.md as a defensive courtesy.
 
 ### 2. Extract the shared format dispatch
 
@@ -45,8 +47,10 @@ Three `.describe()` strings — `dist/tools/gmail/threads.js:87, 121, 186` — c
 ## Tests
 
 - Existing `tests/gmailThreads.test.js` and `tests/gmailConsolidation.test.js` must stay green — they pin the live behavior the extraction must not change (`maxMessages` slicing at `:65-134`, dispatch outcomes).
-- Add one `maxMessages: 0` case to `tests/gmailThreads.test.js` asserting all messages are returned (currently untested).
+- Add `maxMessages: 0` cases for **all three** slicing tools — `getThread`, `listThreads`, `batchGetThreads` slice independently (`threads.js:95, 140, 196`) — each asserting all messages are returned.
+- Schema-level tests: parse each of the three tools' `parameters` schema with `maxMessages: -1` and assert rejection (current tests call `execute()` directly and never exercise the zod schema, so `.int().min(0)` would otherwise be unverified).
 - Add dispatch-extraction tests: `formatMessageForOutput` for each of the three formats against a fixture message (pure function, no mocking needed).
+- Structural assertion that the extraction actually replaced the call sites: a test that reads `dist/tools/gmail/messages.js` and `dist/tools/gmail/threads.js` and asserts the old three-line dispatch pattern (`params.format === 'clean'` adjacent to `params.format === 'metadata'`) appears zero times outside `helpers.js` — otherwise the helper tests pass while stale copies linger.
 - Package guard: assert the tarball no longer contains the five paths. Cheapest durable form: extend `tests/` with a manifest test running `npm pack --dry-run --json` and asserting no `dist/tools/{drafts,labels,messages,settings,threads}.js` entries — this also becomes the home for #56's "no *.test.js under dist/" assertion, so coordinate the file with that plan (`tests/packageContents.test.js`).
 
 ## Acceptance criteria
