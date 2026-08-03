@@ -152,13 +152,42 @@ npm view google-tools-mcp version                 # registry updated
 ```
 
 Then confirm the published tarball actually runs. There is no `--help` flag, so
-start the server with an immediately-closed stdin: it logs its ready line and
-then shuts down cleanly when the pipe ends.
+install it into a scratch directory and start it with stdin held open long
+enough to finish booting, then let the pipe close to shut it down:
 
 ```bash
-echo "" | npx -y google-tools-mcp@X.Y.Z 2>&1 | head -3
+mkdir verify && cd verify
+npm install google-tools-mcp@X.Y.Z
+(sleep 30) | node node_modules/google-tools-mcp/dist/index.js
 ```
 
-Expect a line like `MCP Server running using stdio in 1123ms`, followed by
-`stdin ended — MCP client disconnected`. A hang or a module-resolution error
-here means the tarball is broken even though the publish succeeded.
+Expect a line like `MCP Server running using stdio in 13970ms`, then
+`stdin ended — MCP client disconnected. Shutting down.` and exit 0. A hang, a
+module-resolution error, or a missing ready line means the tarball is broken
+even though the publish succeeded.
+
+The install and the run are separate commands on purpose, and the wait has to
+outlast startup. Two ways to get this wrong, both of which report a broken build
+for a package that is fine:
+
+- **Closing stdin immediately.** With `echo "" |` the stream ends before
+  `server.start()` logs, the shutdown handler wins, and you get
+  `Loaded all 12 categories` followed straight by `stdin ended` with no ready
+  line at all.
+- **Combining the install and the run**, as in `(sleep 30) | npx -y
+  google-tools-mcp@X.Y.Z`. Both sides of a pipe start at once, so the timer runs
+  during `npx`'s resolve and unpack rather than during startup. `npx` is measured
+  at 23-34 seconds on affected machines (see the troubleshooting section in
+  `README.md`) and startup at 8-14 seconds, so the server can be handed an
+  already-closed stdin before it prints anything. Installing first takes the
+  resolve time out of the timed window entirely.
+
+If you do want to exercise the `npx` path specifically, run it once to warm the
+cache and then time a second run, so only the second one is racing the timer.
+
+**Do not pipe any of this into `head`.** `head` exits after its line quota and
+the resulting SIGPIPE can kill `npx` partway through unpacking, leaving a
+half-written directory under `npm-cache/_npx/<hash>`. Every later `npx` run for
+that package then fails with `ENOENT ... could not read package.json` and keeps
+failing until you delete that directory. The failure message says nothing about
+the cache, so it reads as a bad publish when it is purely local.
