@@ -1,67 +1,73 @@
 # Plan: make the conflict guard precise, informative, and overridable (#108)
 
-Issue: [#108](https://github.com/karthikcsq/google-tools-mcp/issues/108) · Verified against `main` @ 7572a8b. Builds directly on [#87](issue-87-read-write-state.md).
+Issue: [#108](https://github.com/karthikcsq/google-tools-mcp/issues/108) · Verified against `main` @ 7572a8b. Revised after adversarial review. Builds directly on [#87](issue-87-read-write-state.md).
 
 ## Root cause
 
-The guard answers a question nobody asked. It compares the Drive **file-level `modifiedTime`** (`dist/readTracker.js:106-118`) — a string inequality on whole-file metadata — and rejects the write if it moved. It has no notion of *what* changed, *where* it changed, or whether it overlaps the pending edit. The stored `revisionId` (`:60`) is never consulted here; it is only passed downstream as `writeControl.requiredRevisionId`.
+The guard answers a question nobody asked. It compares the Drive **file-level `modifiedTime`** (`dist/readTracker.js:106-118`) — a string inequality on whole-file metadata — and rejects the write if it moved. It has no notion of *what* changed, *where*, or whether it overlaps the pending edit. The stored `revisionId` (`:60`) is never consulted here.
 
-Consequences, all verified:
+Verified consequences:
 
-1. **Metadata-only changes block edits.** Nothing distinguishes a content edit from a rename or permission change. The reporter's case — a title edit while the target text was byte-identical — is the canonical instance. Sharpest evidence: **this server's own `renameFile` tool trips its own guard.** `dist/tools/drive/renameFile.js:18-25` calls `drive.files.update({requestBody:{name}})` and never touches the tracker, so renaming a tracked doc through the server guarantees the next `modifyText` fails with an *empty* diff.
-2. **The unblock path is a full re-read**, and the read mode six tool descriptions recommend (`format='json'`) is itself unusable at real document sizes (#105).
-3. **The error usually carries no information.** The diff branch requires `entry.content && typeof opts.contentFetcher === 'function'` (`:120`), and `trackRead` stores content **only for markdown reads** (`readGoogleDoc.js:130,149` vs `:94` json / `:214` text — `readTracker.js:55-61` stores `null` otherwise). So a caller who followed the documented json workflow always gets the bare two-timestamp message (`:173-177`).
-4. **No override exists.** Zero occurrences of `force`/`expectedRevisionId`/`ifMatch` anywhere in `dist/`; the only bypass is the internal `skipExternalCheck` used by `deleteFile.js:20`.
+1. **Metadata-only changes block edits.** The reporter's case (a title edit while the target text was byte-identical) is canonical. Sharpest evidence: **this server's own `renameFile` trips its own guard** — `dist/tools/drive/renameFile.js:18-25` calls `drive.files.update({requestBody:{name}})` and never touches the tracker, so renaming a tracked doc guarantees the next `modifyText` fails with an *empty* diff.
+2. **The unblock path is a full re-read**, and the mode six tool descriptions recommend (`format='json'`) is itself unusable at real sizes (#105).
+3. **The error usually carries no information.** The diff branch needs `entry.content && typeof opts.contentFetcher === 'function'` (`:120`), and `trackRead` stores content **only for markdown reads** (`readGoogleDoc.js:130,149` vs `:94` json / `:214` text; `readTracker.js:55-61`). Callers following the documented json workflow always get the bare two-timestamp message (`:173-177`).
+4. **No override exists** — zero occurrences of `force`/`expectedRevisionId`/`ifMatch` in `dist/`; the only bypass is the internal `skipExternalCheck` (`deleteFile.js:20`).
 
-Root cause in one sentence: **the guard's signal is file metadata rather than document content, and its failure mode is a dead end rather than a decision point.**
+Root cause: **the guard's signal is file metadata rather than document content, and its failure mode is a dead end rather than a decision point.**
 
-## Relationship to #87 (read first)
+## Relationship to #87
 
-#87 replaces the metadata signal with revision-first detection plus content-equality fallback. That alone resolves symptom 1: a rename does not advance the Docs `revisionId`, and where a revision did advance without a content change, the content comparison lets the write proceed. **#108 is not a duplicate** — it adds the three things #87 does not: *range* precision, *explanatory* failures, and an *escape hatch*. Land #87 first; this plan assumes its `revisionFetcher`/scope-aware `contentFetcher` exist.
+#87 replaces the metadata signal with revision-first detection plus content-equality fallback, resolving symptom 1. **#108 adds what #87 does not:** range precision, explanatory failures, and an escape hatch. Land #87 first.
 
 ## Design decisions
 
-- **Range-scoped conflict evaluation, computed from the diff we already have.** When revision + content comparison says the document genuinely changed, don't stop at "changed" — diff the stored snapshot against current content (the existing `createPatch` machinery, `readTracker.js:141-171`) and map each hunk to a document range. Block only when a hunk **overlaps the pending edit's range**, with a small context margin; otherwise proceed and re-arm the tracker. The pending range is already known at every call site: `modifyText` resolves it before mutating (`modifyText.js:149`), and range-target tools have it directly. `guardMutation` gains an optional `targetRange` — callers that can't supply one (whole-body replace, Sheets) keep today's document-scoped behavior, which is correct for them.
-  - Honest bound, stated in the code and the docs: hunk↔index mapping is computed on the **markdown projection**, not on Docs indices, so overlap is approximate. It is therefore used to *permit* narrowly and *block* generously — any hunk that cannot be confidently mapped counts as overlapping. The API-level `WriteControl.requiredRevisionId` remains the backstop for anything this misjudges.
-- **Every rejection explains itself**, regardless of read format. Three tiers, best available:
-  1. Full unified diff (today's best case) when a content snapshot exists.
-  2. When no snapshot exists (json/text reads), fetch current content in the guard and report a **change summary** — "title changed", "N paragraphs inserted near index X", "M paragraphs modified, none overlapping your target range" — rather than two timestamps. The fetcher is already available; the bare message exists only because the *stored* side was null.
-  3. Always name the concrete next step, and never recommend a read mode that can't complete: point at `format='index'` (#105) or `diffFromLastRead`, not `format='json'`.
-  - Also: make `trackRead` store a content snapshot for **text and index reads**, not only markdown (`readGoogleDoc.js:94,214`) — cheap, and it moves most callers from tier 2 to tier 1.
-- **An override that requires stating what you believe.** Add `expectedRevisionId` (proceed if the document's current revision matches what the caller asserts) rather than a bare `force: true`. A caller who has verified safety can express *why* it is safe, and a stale assertion still fails. Bare `force` would let an agent paper over exactly the corruption this subsystem exists to prevent; `expectedRevisionId` costs one field and preserves the invariant. Document `readDocument`'s returned revision as the way to obtain it.
-- **Exact-unique-match as evidence (#108's last suggestion): accepted, narrowly.** When the target is `textToFind`, the match is **unique** in the current document, and the pending operation does not span a changed hunk, the guard proceeds — a unique exact match against *current* content is direct proof the anchor survived. Not accepted for index-based targets, where identical text says nothing about position.
-- **Fix the tracker-desync source while here:** `renameFile.js` (and any other server tool mutating Drive metadata on a tracked file) must refresh the tracker's stored `modifiedTime` instead of leaving it stale. A tool that guarantees its sibling tools will fail is a defect independent of everything above.
+- **Range precision requires re-resolution, not just an overlap test.** The review caught a real hole in the naive design: permitting a write because a change was "non-overlapping" is unsafe if that change was an *insertion or deletion before the target*, which shifts the target's indices — `modifyText` resolves indices once (`modifyText.js:141-160`) and writes those same indices later (`:169-187`). So the rule is:
+  - The guard evaluates against the **current** document, and when it permits a write over a changed document, the caller **must re-resolve its target against that same fetched snapshot** before writing. `guardMutation` returns the snapshot it fetched (rather than discarding it), and the permitting path is only available to callers that pass a re-resolution callback. A caller that cannot re-resolve gets today's conservative rejection.
+  - For `textToFind` targets, re-resolution is exactly `findTextRangeInDoc` against the returned snapshot (#88's refactor) — cheap and already needed.
+  - For explicit-index targets, the caller cannot re-resolve (an index is not a semantic anchor), so **any** content change before or overlapping the range blocks. Index targets get precision only for changes strictly *after* the range end.
+- **Overlap classification is conservative and explicitly bounded.** Hunks come from the existing `createPatch` machinery (`readTracker.js:141-171`), computed on the **markdown projection**, which trims text, adds markers, and omits non-text structure (`docsToMarkdown.js:176-204`). Mapping markdown hunks to Docs indices is therefore approximate, so: any hunk that cannot be confidently mapped, any change touching tables/images/structure, and any change at or before the target counts as **overlapping** (block). Precision is claimed only for the clean case — text changes wholly after the target, or a re-resolvable `textToFind` anchor that still matches uniquely. This is deliberately narrow: it fixes the reported scenario without inventing a mapping the data cannot support.
+- **`findAndReplace` stays document-scoped.** Correction from review: it replaces every occurrence across the document/tab (`findAndReplace.js:44-52`), so there is no single pending range; passing one would permit a conflict at another occurrence. It keeps today's behavior.
+- **Every rejection explains itself**, three tiers:
+  1. Full unified diff when a content snapshot exists.
+  2. No snapshot (json/text reads) → fetch current content in the guard and report a **change summary**: paragraphs added/removed/modified with approximate locations, and whether any of them are near the target. **Metadata changes need a Drive fetch to name** — a title rename is `files.update` (`renameFile.js:18-25`) and is invisible to `documents.get`/`docsToMarkdown`, so "title changed" is reported only when the guard compares the Drive `name` field it fetches alongside `modifiedTime` (one extra field on a call already being made). Anything not so identified is reported generically, not guessed.
+  3. Always name a next step that works — `format='index'` (#105) or `diffFromLastRead`, never `format='json'`.
+  Also: `trackRead` stores content snapshots for **text and index reads**, not only markdown, moving most callers from tier 2 to tier 1.
+- **`expectedRevisionId`, wired end to end.** Correction from review: an override that only bypasses the external check would still fail against the stale `getLastReadRevisionId` fed to WriteControl (`modifyText.js:180-185`). So when supplied and matching the document's current revision, it **both** satisfies the guard **and** becomes the `requiredRevisionId` for the mutation — the caller's assertion is what the API enforces. A stale assertion fails at the guard, naming expected vs actual. Chosen over bare `force: true` because it still requires the caller to be right.
+- **Exact-unique-match as evidence: accepted, narrowly, and only with re-resolution.** A `textToFind` target that still matches uniquely in the *current* snapshot, where the re-resolved range does not intersect a changed hunk, proceeds using the **re-resolved** indices. Not available for index targets.
+- **Fix the tracker-desync source:** `renameFile` must refresh the tracker's stored `modifiedTime`/name. A tool that guarantees its siblings will fail is a defect on its own.
 
 ## Implementation
 
-1. `dist/readTracker.js`: `guardMutation` accepts `targetRange`; hunk extraction from the computed patch; overlap decision with the conservative fallback; tiered error construction; `expectedRevisionId` handling.
-2. Thread `targetRange` from `modifyText.js:110` (post-resolution), `deleteRange.js:33`, `findAndReplace.js:30`, and #88's `batchModifyText`/#107's `replaceRangeWithMarkdown` (whole-range).
-3. `expectedRevisionId` parameter on the mutating Docs tools that take a guard; document it in each description.
+1. `dist/readTracker.js`: `guardMutation` accepts `targetRange` + `reresolve` callback, returns the fetched snapshot; hunk extraction and conservative overlap classification; Drive `name` compared alongside `modifiedTime`; tiered error construction; `expectedRevisionId` handling that also supplies `requiredRevisionId`.
+2. Thread `targetRange` + `reresolve` from `modifyText.js:110` (post-resolution), `deleteRange.js:33`, and #88's `batchModifyText` / #107's `replaceRangeWithMarkdown`. `findAndReplace` and Sheets callers stay document-scoped.
+3. `expectedRevisionId` parameter on the guarded mutating Docs tools; documented per tool.
 4. `trackRead` content snapshots for text/index reads (`readGoogleDoc.js:94,214`).
 5. `renameFile.js`: refresh tracker metadata post-rename.
-6. Error strings: replace `format='json'` guidance with `format='index'` / `diffFromLastRead`.
+6. Replace `format='json'` guidance in guard error strings with `format='index'`.
 
 ## Tests
 
-Extend `tests/readTracker.test.js` and add `tests/guardRangePrecision.test.js`:
+Extend `tests/readTracker.test.js`; add `tests/guardRangePrecision.test.js`:
 
-- **The #108 repro:** stored snapshot vs current differing only in the title / only in a far-away paragraph, with a `targetRange` elsewhere → write proceeds; the tracker re-arms.
-- Overlapping change → still blocked, with the diff.
-- Unmappable/ambiguous hunk → blocked (conservative fallback proven, not just claimed).
-- Tier 2: json-read-then-conflict produces a change **summary**, not two bare timestamps.
-- `expectedRevisionId`: correct value proceeds; stale value fails naming both revisions; absent behaves as today.
-- Unique `textToFind` still matching current content + non-overlapping change → proceeds; **non-unique** match → does not get the exemption.
-- `renameFile` on a tracked document → subsequent `modifyText` is not blocked (the self-inflicted-failure regression).
-- Sheets/whole-body callers with no `targetRange` → unchanged document-scoped behavior.
+- **The #108 repro:** change confined to the title / to a far-away paragraph, target elsewhere → proceeds; tracker re-armed.
+- **The stale-index case (the hole this revision closes):** a paragraph *inserted before* the target with the target text unchanged → an explicit-index target is **blocked**; a `textToFind` target is permitted **and the write uses re-resolved indices** (assert the emitted request's range equals the new position, not the old one).
+- Overlapping change → blocked with diff. Unmappable hunk, table/image change, structural change → blocked (conservative fallback proven).
+- Tab-scoped ranges: change in tab A with target in tab B → correct classification (no cross-tab false permit).
+- Tier 2: json-read-then-conflict yields a change summary, not two timestamps; a rename yields "title changed" (Drive `name` comparison), while an unidentified metadata change is reported generically.
+- `expectedRevisionId`: correct value proceeds **and appears as `requiredRevisionId` in the batchUpdate**; stale value fails naming both; absent behaves as today.
+- Unique `textToFind` + non-overlapping change → proceeds; non-unique → no exemption; unique but shifted by an earlier edit → proceeds only with re-resolved indices.
+- `findAndReplace` remains document-scoped (no `targetRange` accepted).
+- `renameFile` on a tracked doc → next `modifyText` not blocked.
+- Sheets/whole-body callers unchanged.
 
 ## Acceptance criteria
 
-- An unrelated edit elsewhere in the document — including a title change or a collaborator's edit in another section — no longer blocks a safe, non-overlapping write.
+- An unrelated edit elsewhere — a title change, or a collaborator's edit in another section — no longer blocks a safe write, and a permitted write over a changed document always uses freshly resolved indices.
 - Every rejection says what changed and gives a next step that works at real document sizes.
-- A caller who has verified safety can proceed via `expectedRevisionId`; a caller who is wrong about the revision still cannot.
+- `expectedRevisionId` lets a verified caller proceed and is enforced by the API; a wrong assertion cannot.
 - Renaming a document through this server no longer breaks this server's next edit.
-- Genuine overlapping conflicts are still rejected with a diff (existing suites green).
+- Genuine overlapping conflicts, structural changes, and index-target ambiguity are still rejected (existing suites green).
 
 ## Sequencing
 
-Strictly after #87 (revision-first signal, scope-aware fetchers). Benefits from #105 (`format='index'` as the recommended unblock path) and feeds #88/#107, whose range-scoped tools supply `targetRange` naturally.
+Strictly after #87. Benefits from #105 (`format='index'` as the unblock path) and #88 (`findTextRangeInDoc` is the re-resolution primitive). **#88 ships first with document-scoped guarding; this plan then adds `targetRange`/`reresolve` to it** — resolving the ordering ambiguity flagged between the two plans.

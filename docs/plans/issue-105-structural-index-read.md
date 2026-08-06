@@ -1,63 +1,69 @@
 # Plan: an affordable way to get document indices (#105)
 
-Issue: [#105](https://github.com/karthikcsq/google-tools-mcp/issues/105) · Verified against `main` @ 7572a8b.
+Issue: [#105](https://github.com/karthikcsq/google-tools-mcp/issues/105) · Verified against `main` @ 7572a8b. Revised after adversarial review.
 
 ## Root cause
 
 **Seven places in the tool surface instruct callers to use `readDocument format='json'` to find indices, and that read mode returns the raw Docs API document with no field pruning.** Verified:
 
-- The mask is `'*'` — "Get everything for structure analysis" (`dist/tools/docs/readGoogleDoc.js:58-65`) — and the whole response object is stringified at 2-space indent (`:95`, `contentSource = res.data` at `:88`). Nothing strips inherited `textStyle`/`paragraphStyle` objects, `suggested*` maps, `namedStyles`, `inlineObjects`, or `positionedObjects`. Hence 1.36 MB for 9.6 KB of text.
+- The mask is `'*'` — "Get everything for structure analysis" (`dist/tools/docs/readGoogleDoc.js:58-65`) — and the whole response object is stringified at 2-space indent (`:95`, `contentSource = res.data` at `:88`). Nothing strips inherited `textStyle`/`paragraphStyle`, `suggested*` maps, `namedStyles`, `inlineObjects`, or `positionedObjects`. Hence 1.36 MB for 9.6 KB of text.
 - The instruction appears in `modifyText.js:101`, `deleteRange.js:11`, `insertPageBreak.js:16`, `insertImage.js:25`, `insertTable.js:18`, `insertTableWithData.js:88`, and a runtime error string at `googleDocsApiHelpers.js:799`.
-- **No lightweight structural view exists.** `getFormatting` (`formatting/getFormatting.js`) is the closest, but it *requires* a target range (`:15-23` — no whole-document mode), skips every non-paragraph element (`:34`), and never emits `nestingLevel`. `listDocumentTabs` returns only tab-level metadata.
-- Docs tools have **no response budget at all**: `DEFAULT_MAX_RESPONSE_CHARS` / `capToResponseBudget` (`helpers.js:439-534`) are imported only by `gmail/threads.js:5`.
+- **No lightweight structural view exists.** `getFormatting` requires a target range (`formatting/getFormatting.js:15-23` — no whole-document mode), skips every non-paragraph element (`:34`), and never emits `nestingLevel`.
+- Docs tools have **no response budget**: `DEFAULT_MAX_RESPONSE_CHARS` / `capToResponseBudget` (`helpers.js:439-534`) are imported only by `gmail/threads.js:5`.
 
-**One claim in the issue is wrong and the correction matters:** `maxLength` *is* applied to the json path (`readGoogleDoc.js:96-101`). What is actually broken is that it has **no default** (`:38-41`) and its description says *"Maximum character limit for text output."* — so a caller has no reason to think it applies to json, and omitting it returns the full payload. The truncation is also a blind `substring`, producing invalid JSON — useless for index discovery even when it does fire.
+**One claim in the issue is wrong and the correction matters:** `maxLength` *is* applied to the json path (`readGoogleDoc.js:96-101`). What is broken is that it has **no default** (`:38-41`) and its description says *"Maximum character limit for text output."*, so a caller has no reason to think it applies to json; and the truncation is a blind `substring` producing invalid JSON — useless for index discovery even when it fires.
 
-So the root cause is not "json is big"; it is that **the index-based tools have no affordable addressing surface, and the documentation points at the most expensive possible one.**
+Root cause: **the index-based tools have no affordable addressing surface, and the documentation points at the most expensive possible one.**
 
 ## Design decisions
 
-- **Add `format: 'index'` to `readDocument`** rather than a new tool: index discovery is a *read* of the same document, callers already reach for `readDocument`, and it inherits `tabId`/`maxLength` handling. Output — one entry per structural element, as compact JSON:
+- **Add `format: 'index'` to `readDocument`** rather than a new tool. Output — one entry per structural element:
   ```json
   {"elements":[{"start":1,"end":42,"type":"heading","level":1,"nesting":null,"preview":"To Do List"},
                {"start":42,"end":97,"type":"listItem","ordered":true,"nesting":1,"preview":"Follow up on the table…"},
-               {"start":97,"end":150,"type":"table","rows":3,"cols":2,"preview":null},
-               {"start":150,"end":151,"type":"horizontalRule","preview":null}],
-   "documentEnd":151,"truncated":false}
+               {"start":97,"end":150,"type":"table","rows":3,"columns":2,"cells":[{"start":99,"end":118,"row":0,"col":0,"preview":"Name"}]},
+               {"start":150,"end":151,"type":"horizontalRule"}],
+   "documentEnd":151,"revisionId":"…","truncated":false}
   ```
-  `preview` is the first 60 chars of the element's text, whitespace-collapsed. Types cover paragraph, heading, listItem, table, sectionBreak, horizontalRule, image/inlineObject anchor, tableOfContents — every element kind, so the index view never silently omits document structure the way `getFormatting.js:34` does.
-- **`nesting` is included** — this is the field that makes the index view answer #104/#107's questions ("what level is this list item at"), and it is the field `getFormatting` conspicuously lacks.
-- **Narrow field mask for this mode.** Not `'*'`: request only `body.content(startIndex,endIndex,paragraph(paragraphStyle(namedStyleType),bullet(listId,nestingLevel),elements(textRun(content))),table(rows,columns),sectionBreak,tableOfContents)` plus `lists(listProperties(nestingLevels(glyphType)))` for ordered/unordered resolution — so the *fetch* is cheap too, not merely the output.
-- **A real response budget for Docs reads.** Adopt the Gmail mechanism (`capToResponseBudget`, `helpers.js:534`) for `format:'index'`: a `maxResponseChars` parameter defaulting to `DEFAULT_MAX_RESPONSE_CHARS`, truncating at **element boundaries** with an explicit `truncated: true` + `nextStartIndex` so a large document is paginated rather than corrupted. This is the piece that makes the mode reliable where `format:'json'`'s blind substring is not.
-- **Fix `format:'json'` too, without breaking it.** It stays the raw-document escape hatch, but: (a) `maxLength`'s description is corrected to say it applies to text, markdown, and json; (b) when json output exceeds the response budget and no `maxLength` was given, fail with a *directive* error — "N chars; use format='index' for index discovery, or pass maxLength" — instead of dumping 1.36 MB into the transport; (c) add `stripInheritedStyles` (default **true** for json) that prunes `suggested*` keys and style objects that are empty or wholly default, which is where the bulk of the 52K lines live. Default-true is a deliberate output-shape change for a mode that is currently unusable at real document sizes; note it in CHANGELOG.
-- **Retarget the seven pointers** to `format='index'`. This is the actual user-visible fix — the workflow the tools recommend must be one that completes.
-- **`textToFind` diagnostics** (the issue's closing ask): when `findTextRange` fails, report the longest matching prefix and the first divergent character with a small context window. `findTextRange` already normalizes and retries through four strategies (`googleDocsApiHelpers.js:411-485`); on total failure it should say *where* matching stopped rather than only that it failed. This is what makes long multi-line finds debuggable, and it is cheap — the comparison data is already in hand.
+- **Element typing is one entry per element, most specific type wins** — a paragraph is exactly one of `heading` | `listItem` | `paragraph`, never two (mirroring `docsToMarkdown.js:176-204`, where heading and list classification are already mutually exclusive). Ranges never overlap **except** table cells, which are nested inside their table entry as a `cells` array with their own indices — because cell content is separately addressable and callers editing table text need those indices. Document the nesting rule explicitly so callers can flatten or ignore.
+- **`nesting` is included** — the field that answers #104/#107's structural questions and the one `getFormatting` conspicuously lacks.
+- **Field masks, corrected to the real API shape.** Tables are `tableRows`/`tableCells`, not `rows`/`columns` (`googleDocsApiHelpers.js:274-283, 802-811`). Legacy body:
+  `revisionId,body.content(startIndex,endIndex,paragraph(paragraphStyle(namedStyleType),bullet(listId,nestingLevel),elements(startIndex,endIndex,textRun(content),inlineObjectElement(inlineObjectId),horizontalRule)),table(rows,columns,tableRows(startIndex,endIndex,tableCells(startIndex,endIndex,content(paragraph(elements(textRun(content))))))),sectionBreak,tableOfContents),lists(listProperties(nestingLevels(glyphType)))`.
+  **Tabs use a narrow tab mask, not `'*'`** — today `includeTabsContent` forces `fields:'*'` (`readGoogleDoc.js:56-65`), which would silently defeat the entire affordability claim for tabbed documents; index mode passes `tabs(tabProperties(tabId),documentTab(<the same body/lists subtree>))`. `revisionId` is in both masks, so index reads seed the tracker exactly like every other read path (`readGoogleDoc.js:94,149,214`) — index-then-write behaves identically to text-then-write.
+- **A real response budget.** `maxResponseChars` defaulting to `DEFAULT_MAX_RESPONSE_CHARS` (`helpers.js:439`), truncating at **element boundaries** with `truncated: true`.
+  **Pagination is explicit, and honest about its cost:** the Docs API has no start-index cursor, so resumption cannot avoid refetching. Add `fromIndex` (default 0): the fetch is the same narrow-mask call, and elements ending at or before `fromIndex` are dropped locally before serialization; the response returns `nextFromIndex` when truncated. So pagination costs one (cheap, narrow) fetch per page and is gap-free by construction because slicing happens on a single consistent snapshot per call. State the refetch cost in the description rather than implying a free cursor.
+- **`format:'json'` stays the raw escape hatch and stays raw.** Pruning would change the meaning of the mode callers use precisely when they need everything (suggestions, style provenance). So: (a) `maxLength`'s description corrected to say it applies to text, markdown, **and json**, with `0`/negative explicitly documented and validated — `.int().positive()` on the schema, rejecting `0`/negatives instead of today's ambiguous falsy-means-unlimited (`:38-41`); (b) when json output would exceed the response budget and no `maxLength` was given, fail with a **directive** error naming `format='index'` and `maxLength`, instead of emitting 1.36 MB; (c) `stripInheritedStyles` is offered as an **opt-in** (default `false`) for callers who want a smaller raw document — not a silent default change to a mode whose contract is fidelity.
+- **Retarget the seven pointers** to `format='index'`. This is the actual user-visible fix — the recommended workflow must be one that completes.
+- **`textToFind` diagnostics.** Correction from review: the divergence data is *not* currently in hand — `findTextRange` logs a generic failure and returns `null` (`googleDocsApiHelpers.js:486-489`), and callers convert that into their own message (`modifyText.js:149-152`). So this requires a real change: the helper returns a structured failure `{ found: false, bestPrefixLength, divergenceIndex, contextBefore, contextAfter, candidateCount }`, and **each caller is updated** to render it. Threading that through is part of the work, not a logging tweak.
 
 ## Implementation
 
-1. `readGoogleDoc.js`: add `'index'` to the format enum; narrow-mask fetch; element walker producing the shape above (shared heading extraction with #107/#88 — one helper, used by the index mode, `afterHeading` resolution, and any heading map); budget-capped serialization with `truncated`/`nextStartIndex`.
-2. `maxLength` description fix; json budget-exceeded directive error; `stripInheritedStyles` pruner.
-3. Retarget the six tool descriptions + the `googleDocsApiHelpers.js:799` error string.
-4. `findTextRange` failure diagnostics (longest common prefix + divergence context).
-5. Tabs: index mode honors `tabId` exactly as the other formats do (`readGoogleDoc.js:69-89`).
+1. `readGoogleDoc.js`: `'index'` format; the two narrow masks above; recursive element walker (paragraphs, lists, tables + cells, section breaks, TOC, inline-object anchors, horizontal rules); budget-capped serialization with `truncated`/`nextFromIndex`; `fromIndex` slicing; `trackRead` with the fetched `revisionId`.
+2. `maxLength` description + `.positive()` validation; json budget-exceeded directive error; opt-in `stripInheritedStyles`.
+3. Retarget six tool descriptions + the `googleDocsApiHelpers.js:799` error string.
+4. `findTextRange` structured failure + caller rendering (`modifyText.js:149-152` and any other consumer).
+5. Export the element walker — #107's `afterHeading` resolution and #88's post-write heading map both consume it (one implementation, three consumers).
 
 ## Tests
 
-- Index mode on a fixture with headings, nested ordered + unordered lists, a table, an image, and a horizontal rule → every element present with correct `start`/`end`/`type`/`nesting`; output is orders of magnitude smaller than the json mode for the same fixture (assert a ratio, e.g. < 5% — the concrete "1.36 MB → a few KB" claim).
-- Round-trip usefulness: indices returned by index mode are accepted by `modifyText`/`deleteRange` against the same fixture (proving the mode actually serves the workflow it is advertised for).
-- Budget: oversized fixture truncates at an element boundary, `truncated: true`, `nextStartIndex` resumes without gap or overlap; output is always parseable JSON (contrast with json mode's substring).
-- `format:'json'`: `maxLength` honored (pin existing behavior); oversized without `maxLength` → directive error naming `format='index'`; `stripInheritedStyles` removes default style/suggested keys while preserving every `startIndex`/`endIndex` (indices must survive pruning — that is the whole point of the mode).
-- Description consistency test: every tool description and error string mentioning index discovery names `format='index'` (a grep-style assertion, so this can't rot back).
-- `findTextRange` failure: near-miss multi-line search reports the divergence position; exact match still succeeds through all four fallback strategies.
+- Index mode on a fixture with headings, nested ordered + unordered lists, a table with cell text, an inline image, a section break, and a horizontal rule → every element present with correct `start`/`end`/`type`/`nesting`; **table cells carry their own indices**; output < 5% of the json mode's size for the same fixture.
+- **Index semantics parity:** ranges returned by index mode are end-exclusive in the same sense the mutating tools expect — assert an index-mode range fed to `deleteRange`/`modifyText` targets exactly the intended element on the fixture (guards against off-by-one against `googleDocsApiHelpers.js:562-568`).
+- Tabs: index mode on a tabbed fixture returns tab-local indices **and** issues the narrow tab mask (assert the request's `fields`, not just the output — the affordability claim is about the fetch).
+- `revisionId` present in both masks; an index read seeds the tracker such that a subsequent write is not rejected as unread.
+- Budget/pagination: oversized fixture truncates at an element boundary with valid JSON; `fromIndex` resumption returns the remaining elements with no gap or overlap; the response documents the refetch.
+- `format:'json'`: `maxLength` honored (pin existing); `0`/negative rejected by schema; oversized without `maxLength` → directive error naming `format='index'`; `stripInheritedStyles` **off** by default (raw fidelity preserved), and when on, preserves every `startIndex`/`endIndex`.
+- Description consistency: a grep-style assertion that no tool description or error string recommends `format='json'` for index discovery.
+- `findTextRange` failure: near-miss multi-line search returns the structured failure and `modifyText` renders the divergence position; exact match still succeeds through all four fallback strategies.
 
 ## Acceptance criteria
 
-- Getting the indices needed for a `modifyText` call on a 10 KB document costs one call and a few KB — not a 1.36 MB failure and a 279-chunk file recovery.
-- The index view reports list nesting, so callers can reason about structure before editing (feeding #104/#107).
+- Getting indices for a `modifyText` call on a 10 KB document costs one narrow call and a few KB — including for tabbed documents, where the *fetch* is narrow too.
+- The index view reports list nesting and table-cell addresses, so callers can reason about structure before editing.
 - No documented workflow points at a read mode that cannot complete.
-- Large documents paginate at element boundaries with valid JSON at every step.
-- A failed `textToFind` says where matching diverged.
+- Large documents paginate at element boundaries with valid JSON at every step, with the refetch cost stated.
+- `format:'json'` still returns a faithful raw document by default.
+- A failed `textToFind` tells the caller where matching diverged.
 
 ## Sequencing
 
-Independent, but it is the enabler for #104/#107 (structure-aware editing) and it **supersedes `listHeadings` from #88** — that plan's heading tool becomes a thin filter over this walker, or is dropped in favor of `format:'index'`; #88 has been updated to say so. Land the shared element/heading walker here first.
+Independent, and the enabler for #104/#107/#108. **Supersedes `listHeadings` from #88** — that plan now consumes this walker. Land the walker here first.

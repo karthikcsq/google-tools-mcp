@@ -18,9 +18,9 @@ Ordering is driven by three constraints: the dependency swap (#71) touches almos
 | 6 | [Markdown round-trip fidelity + working-copy safety](issue-106-markdown-roundtrip-fidelity.md) | [#106](https://github.com/karthikcsq/google-tools-mcp/issues/106) | M | — |
 | 7 | [Comments workflow](issue-86-comments-workflow.md) | [#86](https://github.com/karthikcsq/google-tools-mcp/issues/86) | M | — |
 | 8 | [Docs read/write state](issue-87-read-write-state.md) | [#87](https://github.com/karthikcsq/google-tools-mcp/issues/87) | M | — |
-| 9 | [Conflict-guard precision](issue-108-conflict-guard-precision.md) | [#108](https://github.com/karthikcsq/google-tools-mcp/issues/108) | M | #87, helped by #105 |
-| 10 | [Section-scoped markdown replace](issue-107-section-scoped-markdown-replace.md) | [#107](https://github.com/karthikcsq/google-tools-mcp/issues/107) (canonical for #104) | M | #87, #105 |
-| 11 | [Safe structured Docs editing](issue-88-safe-docs-editing.md) | [#88](https://github.com/karthikcsq/google-tools-mcp/issues/88) | L | #87, #105 |
+| 9 | [Section-scoped markdown replace](issue-107-section-scoped-markdown-replace.md) | [#107](https://github.com/karthikcsq/google-tools-mcp/issues/107) (canonical for #104) | M | #87, #105, #106 |
+| 10 | [Safe structured Docs editing](issue-88-safe-docs-editing.md) | [#88](https://github.com/karthikcsq/google-tools-mcp/issues/88) | L | #87, #105, #86 |
+| 11 | [Conflict-guard precision](issue-108-conflict-guard-precision.md) | [#108](https://github.com/karthikcsq/google-tools-mcp/issues/108) | M | #87, #88 (adds targetRange to it) |
 | 12 | [Gmail MIME compliance](issue-73-gmail-mime.md) | [#73](https://github.com/karthikcsq/google-tools-mcp/issues/73) | M | #74 (hard) |
 | 13 | [Explicit font color](issue-14-explicit-font-color.md) | [#14](https://github.com/karthikcsq/google-tools-mcp/issues/14) | S | — |
 | 14 | [Config loading order](issue-82-config-loading.md) | [#82](https://github.com/karthikcsq/google-tools-mcp/issues/82) | M | — |
@@ -33,4 +33,6 @@ Sizes: S = under a day, M = 1–3 days, L = a week-scale effort that should be s
 
 ## The Docs editing cluster
 
-Issues #87, #88, #104–#108, #96, and #14 are one subsystem with a common shape: **the Docs tools can address text but not structure.** Reading that cluster in dependency order — #105 (get indices affordably) → #106 (round-trip faithfully) → #87 (know when the document really changed) → #108 (know *where* it changed) → #107 (write structure into a range) → #88 (batch and preview it) — is more useful than reading any one plan alone.
+Issues #87, #88, #104–#108, #96, and #14 are one subsystem with a common shape: **the Docs tools can address text but not structure.** Reading that cluster in dependency order — #105 (get indices affordably) → #106 (round-trip faithfully) → #87 (know when the document really changed) → #107 (write structure into a range) → #88 (batch and preview it) → #108 (know *where* it changed, and re-resolve safely) — is more useful than reading any one plan alone.
+
+Two cross-plan contracts are easy to break and are stated in both places: the **workspace filename composition** (#87's session suffix × #106's `.remote.md` and `.sha256` baseline, including the cleanup glob), and the **guard interface** (#88 ships against the document-scoped guard; #108 then adds `targetRange`/`reresolve`).
