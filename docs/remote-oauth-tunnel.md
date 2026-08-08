@@ -16,7 +16,7 @@ GOOGLE_MCP_OAUTH_PORT=37547 google-tools-mcp auth
 
 ## 2. Create the local forward on the laptop
 
-Install `autossh` on the laptop, then create `~/.config/systemd/user/google-tools-mcp-oauth-tunnel.service` with the following content. Replace `YOUR_REMOTE_SSH_HOST` with the SSH host alias or hostname for the computer that runs the MCP.
+Create `~/.config/systemd/user/google-tools-mcp-oauth-tunnel.service` with the following content. Replace `YOUR_REMOTE_SSH_HOST` with the SSH host alias or hostname for the computer that runs the MCP.
 
 ```ini
 [Unit]
@@ -25,7 +25,7 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-ExecStart=/usr/bin/autossh -M 0 -N \
+ExecStart=/usr/bin/ssh -N \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
