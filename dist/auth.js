@@ -236,10 +236,25 @@ function openBrowser(url) {
 // ---------------------------------------------------------------------------
 // Interactive OAuth browser flow
 // ---------------------------------------------------------------------------
+function getOAuthCallbackPort() {
+    const configured = process.env.GOOGLE_MCP_OAUTH_PORT;
+    if (configured === undefined || configured === '') return 0;
+
+    if (!/^\d+$/.test(configured)) {
+        throw new Error('GOOGLE_MCP_OAUTH_PORT must be an integer from 1 through 65535.');
+    }
+    const port = Number(configured);
+    if (port < 1 || port > 65535) {
+        throw new Error('GOOGLE_MCP_OAUTH_PORT must be an integer from 1 through 65535.');
+    }
+    return port;
+}
+
 async function authenticate() {
     const { client_secret, client_id } = await loadClientSecrets();
     const server = http.createServer();
-    await new Promise((resolve) => server.listen(0, 'localhost', resolve));
+    const requestedPort = getOAuthCallbackPort();
+    await new Promise((resolve) => server.listen(requestedPort, 'localhost', resolve));
     const port = server.address().port;
     const redirectUri = `http://localhost:${port}`;
     const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
@@ -299,7 +314,7 @@ async function authenticate() {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-export { getTokenPath, getConfigDir, SCOPES };
+export { getTokenPath, getConfigDir, getOAuthCallbackPort, SCOPES };
 
 export async function authorize() {
     if (process.env.SERVICE_ACCOUNT_PATH) {

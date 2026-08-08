@@ -93,6 +93,7 @@ With the following contents:
 ```env
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_MCP_OAUTH_PORT=37547  # optional: fixed localhost callback port for remote OAuth
 ```
 
 #### Option C: Set env vars in your MCP config
@@ -243,6 +244,8 @@ Every example above works with `npx -y google-tools-mcp` in place of `google-too
 ### Step 4: Authenticate
 
 On your first tool call, the server will automatically open your browser for Google OAuth consent. Sign in and grant access — the token is saved to `~/.config/google-tools-mcp/token.json` for future use.
+
+**Remote MCP host / local browser:** Set `GOOGLE_MCP_OAUTH_PORT` to a fixed loopback port and create a persistent SSH local forward from the browser machine. See [Remote OAuth with a persistent SSH tunnel](docs/remote-oauth-tunnel.md).
 
 You can also run the auth flow manually anytime:
 
@@ -431,6 +434,7 @@ These files live in a per-user directory under the OS temp dir (`google-tools-mc
 | `GOOGLE_CLIENT_ID` | No* | OAuth 2.0 Client ID |
 | `GOOGLE_CLIENT_SECRET` | No* | OAuth 2.0 Client Secret |
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
+| `GOOGLE_MCP_OAUTH_PORT` | No | Fixed loopback port for the interactive OAuth callback. Defaults to an ephemeral port; set a fixed port when forwarding the callback over SSH. See [Remote OAuth with a persistent SSH tunnel](docs/remote-oauth-tunnel.md). |
 | `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients)) |
 | `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
 | `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
