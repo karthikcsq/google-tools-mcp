@@ -16,6 +16,9 @@
         "file": "dist/clients.js"
       },
       {
+        "file": "dist/errors.js"
+      },
+      {
         "file": "dist/googleDocsApiHelpers.js"
       },
       {
@@ -514,6 +517,9 @@
       },
       {
         "file": "tests/documentationConsistency.test.js"
+      },
+      {
+        "file": "tests/errorsAndLogger.test.js"
       },
       {
         "file": "tests/extraDocsToolsWriteControl.test.js"

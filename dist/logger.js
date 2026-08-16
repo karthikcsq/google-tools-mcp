@@ -4,6 +4,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { redactDiagnostic } from './errors.js';
 
 const LOG_LEVELS = {
     debug: 0,
@@ -47,7 +48,13 @@ function initLogFile() {
     if (!logPath) return;
     try {
         fs.mkdirSync(path.dirname(logPath), { recursive: true });
-        logStream = fs.createWriteStream(logPath, { flags: 'a' });
+        const stream = fs.createWriteStream(logPath, { flags: 'a' });
+        stream.on('error', () => {
+            // File logging is optional. Fail closed without writing a fallback
+            // diagnostic to stdout or risking an unhandled stream error.
+            if (logStream === stream) logStream = null;
+        });
+        logStream = stream;
     } catch {
         // If we can't open the log file, continue without file logging
     }
@@ -59,12 +66,17 @@ function timestamp() {
 }
 
 function formatArgs(args) {
-    return args.map(a => {
-        if (a instanceof Error) return a.stack || a.message;
-        if (typeof a === 'object') {
-            try { return JSON.stringify(a); } catch { return String(a); }
+    return args.map((arg) => {
+        const safe = redactDiagnostic(arg);
+        let isError = false;
+        try { isError = arg instanceof Error; } catch { /* hostile proxies are formatted generically */ }
+        if (isError && safe && typeof safe === 'object') {
+            return safe.stack || `${safe.name}: ${safe.message}`;
         }
-        return String(a);
+        if (typeof safe === 'object') {
+            try { return JSON.stringify(safe); } catch { return '[Unserializable diagnostic]'; }
+        }
+        return String(safe);
     }).join(' ');
 }
 
@@ -75,7 +87,11 @@ function log(level, args) {
     const msg = formatArgs(args);
     console.error(`${ts} [${tag}] ${msg}`);
     if (logStream) {
-        logStream.write(`${ts} [${tag}] ${msg}\n`);
+        try {
+            logStream.write(`${ts} [${tag}] ${msg}\n`);
+        } catch {
+            logStream = null;
+        }
     }
 }
 
