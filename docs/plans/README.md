@@ -1,5 +1,7 @@
 # Execution plans
 
+**2026-08-08 update:** the [MCP 2026-07-28 migration plan](mcp-2026-07-28-migration.md) (fastmcp → official SDK v2, stateless protocol) supersedes parts of this queue: it absorbs #87 wholly and the transport core of #75, lands #108's `expectedRevisionId`, and must land **before** #71 (both rewrite every tool file's imports). Read it before executing #75, #87, #106, or #108 from the table below.
+
 One plan per open issue, written against the code as of 2026-08-06. Each plan states the verified root cause, the design decisions with rationale, concrete implementation steps anchored to `file:line`, the tests that prove it, and acceptance criteria. Line numbers drift as the tree changes; the anchors were verified on the commit each plan names.
 
 Triage context: of the 17 issues open at the first review (2026-08-03), #72 was closed (resolved by PR #103) and #7 was closed (mitigated by explicit snake_case notes in the calendar tool descriptions). Five further issues (#104–#108) were filed on 2026-08-06; #104 was consolidated into #107 as the same root cause. Every sub-issue referenced by the "Master:" issues was already closed by the earlier consolidation pass.
