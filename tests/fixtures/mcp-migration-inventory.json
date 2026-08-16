@@ -519,6 +519,9 @@
         "file": "tests/extraDocsToolsWriteControl.test.js"
       },
       {
+        "file": "tests/fixtures/mcpSdkV2Fixture.js"
+      },
+      {
         "file": "tests/gmailConsolidation.test.js"
       },
       {
@@ -550,6 +553,12 @@
       },
       {
         "file": "tests/markdownTransformer.test.js"
+      },
+      {
+        "file": "tests/mcpMigrationInventory.test.js"
+      },
+      {
+        "file": "tests/mcpSdkV2Compatibility.test.js"
       },
       {
         "file": "tests/modifyText.test.js"
@@ -1270,6 +1279,11 @@
         "file": "tests/maps.test.js",
         "line": 2,
         "match": "import { UserError } from 'fastmcp'"
+      },
+      {
+        "file": "tests/mcpSdkV2Compatibility.test.js",
+        "line": 4,
+        "match": "import { FastMCP } from 'fastmcp'"
       },
       {
         "file": "tests/mutatingDocsToolsWriteControl.test.js",

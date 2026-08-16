@@ -194,9 +194,9 @@ describe('manageGmailSettings resource/action validation (issue #31)', () => {
         const server = createMockServer();
         registerSettings(server);
         const mgs = server.getTools().get('manageGmailSettings');
-        await expect(mgs.execute({ resource: 'sendAs', action: 'verify' })).rejects.toThrow(/payload validation failed.*sendAsEmail: Required/);
+        await expect(mgs.execute({ resource: 'sendAs', action: 'verify' })).rejects.toThrow(/payload validation failed.*sendAsEmail/i);
         await expect(mgs.execute({ resource: 'delegate', action: 'create', payload: {} })).rejects.toThrow(/delegateEmail/);
-        await expect(mgs.execute({ resource: 'imap', action: 'update' })).rejects.toThrow(/payload validation failed.*enabled: Required/);
+        await expect(mgs.execute({ resource: 'imap', action: 'update' })).rejects.toThrow(/payload validation failed.*enabled/i);
         expect(calls).toHaveLength(0);
     });
 
@@ -206,10 +206,10 @@ describe('manageGmailSettings resource/action validation (issue #31)', () => {
         const mgs = server.getTools().get('manageGmailSettings');
         // maxFolderSize alone is not enough — the original update_imap schema required `enabled`.
         await expect(mgs.execute({ resource: 'imap', action: 'update', payload: { maxFolderSize: 500 } }))
-            .rejects.toThrow(/payload validation failed.*enabled: Required/);
+            .rejects.toThrow(/payload validation failed.*enabled/i);
         // autoForwarding update requires all three of enabled, emailAddress, disposition.
         await expect(mgs.execute({ resource: 'autoForwarding', action: 'update', payload: { enabled: true } }))
-            .rejects.toThrow(/emailAddress: Required.*disposition: Required/);
+            .rejects.toThrow(/payload validation failed.*emailAddress.*disposition.*(?:leaveInInbox|archive|trash|markRead)/i);
         expect(calls).toHaveLength(0);
     });
 
@@ -296,7 +296,7 @@ describe('manageGmailSettings rejects mistyped/invalid-enum payload values', () 
         const mgs = server.getTools().get('manageGmailSettings');
         await expect(
             mgs.execute({ resource: 'imap', action: 'update', payload: { enabled: 'false' } })
-        ).rejects.toThrow(/enabled: Expected boolean, received string/);
+        ).rejects.toThrow(/payload validation failed.*enabled.*boolean/i);
         expect(calls).toHaveLength(0);
     });
 
@@ -310,7 +310,7 @@ describe('manageGmailSettings rejects mistyped/invalid-enum payload values', () 
                 action: 'update',
                 payload: { enabled: true, emailAddress: 'a@b.com', disposition: 'shredIt' },
             })
-        ).rejects.toThrow(/disposition.*Invalid enum value/);
+        ).rejects.toThrow(/payload validation failed.*disposition.*(?:leaveInInbox|archive|trash|markRead)/i);
         expect(calls).toHaveLength(0);
     });
 
@@ -320,7 +320,7 @@ describe('manageGmailSettings rejects mistyped/invalid-enum payload values', () 
         const mgs = server.getTools().get('manageGmailSettings');
         await expect(
             mgs.execute({ resource: 'imap', action: 'update', payload: { enabled: true, maxFolderSize: 'lots' } })
-        ).rejects.toThrow(/maxFolderSize: Expected number, received string/);
+        ).rejects.toThrow(/payload validation failed.*maxFolderSize.*number/i);
         expect(calls).toHaveLength(0);
     });
 
