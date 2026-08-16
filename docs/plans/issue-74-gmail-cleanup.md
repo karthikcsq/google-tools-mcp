@@ -4,13 +4,11 @@ Issue: [#74](https://github.com/karthikcsq/google-tools-mcp/issues/74) (canonica
 
 ## Root cause
 
-The Gmail consolidation (merge `53bf2ad`) moved the live implementations to `dist/tools/gmail/*` but left the five pre-consolidation modules in place at `dist/tools/`. They are not copies — they are **stale forks**: `dist/tools/messages.js` predates both the header-folding fix and HTML auto-detect (its import list at `dist/tools/messages.js:4` lacks `foldHeader`/`isHtmlBody`/`formatMessageClean`; its reply/forward paths at `:149,264` call the old un-folded builder). The hazard is not runtime behavior — nothing imports them — it is that a contributor greps, lands in the dead file, and "fixes" code that never runs. 65 KB of them also ships in every npm tarball (`package.json:9-11` includes all of `dist/`).
-
-Secondary duplication in the *live* code: the clean/metadata/full format dispatch is copy-pasted six times, and `maxMessages` is the only Gmail size knob whose zero-value behavior is undocumented.
+The Gmail consolidation (merge `53bf2ad`) moved the live implementations to `dist/tools/gmail/*` but left five stale root-level forks at `dist/tools/`. They are unreferenced, trail the live builders, and still ship in the tarball, so a contributor can fix code that never runs. The live clean/metadata/full format dispatch is also copy-pasted six times, and `maxMessages` has an undocumented zero-value contract.
 
 ## Pre-deletion check (one final gate)
 
-Recon verified: `dist/tools/index.js` imports Gmail only from `./gmail/*` (`:148,149,156,162,168`); repo-wide grep for `tools/(drafts|labels|messages|settings|threads).js` and relative-import variants finds no references; all dynamic `import()` sites are enumerated (`tools/index.js:126-198`, `index.js:30,42`, `setup.js:421`, `googleDocsApiHelpers.js:931-932`, `extras/readFile.js:32`) and none touch them; no `readdir`/glob-based loading exists anywhere in `dist/`. Re-run exactly that check at implementation time (greps are cheap; the tree may have moved), then run the full suite once with the five files renamed to `.bak` before deleting — a green run with them absent is the definitive proof.
+Recon verified: `dist/tools/index.js` imports Gmail only from `./gmail/*` (`:148,149,156,162,168`); repo-wide grep for `tools/(drafts|labels|messages|settings|threads).js` and relative-import variants finds no references; all dynamic `import()` sites are enumerated (`tools/index.js:126-198`, `index.js:30,42`, `setup.js:421`, `googleDocsApiHelpers.js:931-932`, `extras/readFile.js:32`) and none touch them; no `readdir`/glob-based loading exists anywhere in `dist/`. Re-run these checks at implementation time, delete the five files in the implementation worktree with `git rm`, then run the full suite and `npm pack --dry-run` with that deletion staged. If a gate fails, restore only these paths with Git and investigate; do not use temporary rename proof mechanisms.
 
 ## Implementation
 
@@ -18,9 +16,7 @@ Recon verified: `dist/tools/index.js` imports Gmail only from `./gmail/*` (`:148
 
 `git rm dist/tools/drafts.js dist/tools/labels.js dist/tools/messages.js dist/tools/settings.js dist/tools/threads.js`
 
-Prior comparisons (issue #53) found no unique fix in the dead forks worth porting; they *trail* the live files, not lead them. Do not diff-merge anything back.
-
-These paths ship in the npm package today (`files: ["dist"]`), so a consumer deep-importing `google-tools-mcp/dist/tools/messages.js` would break. No such import is supported or documented — the package's public surface is the `bin` entry — but note the removal in CHANGELOG.md as a defensive courtesy.
+Do not diff-merge anything back: prior comparison established that the forks trail the live files. Note the unsupported deep-import removal in CHANGELOG.md as a defensive courtesy.
 
 ### 2. Extract the shared format dispatch
 
@@ -55,10 +51,10 @@ Three `.describe()` strings — `dist/tools/gmail/threads.js:87, 121, 186` — c
 
 ## Acceptance criteria
 
-- Full suite green with the five modules deleted; `npm pack --dry-run` shows 5 fewer files and no `dist/tools/{drafts,…}.js`.
+- Full suite green with the five modules deleted; `npm pack --dry-run` contains no `dist/tools/{drafts,…}.js`.
 - The clean/metadata/full dispatch exists in exactly one place per concern; the six former sites are one-line calls.
 - `maxMessages: 0` returns all messages, is documented as such, and is covered by a test.
 
 ## Sequencing
 
-Land before #73 (MIME work): #73 edits the same live builders, and deleting the dead forks first means the MIME fix has exactly one copy of each function to change.
+Land before #73: #73 edits the same live builders, and the MIME fix must have exactly one copy of each function to change.

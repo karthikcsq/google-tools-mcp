@@ -1,68 +1,47 @@
 # Plan: markdown round-trip fidelity and working-copy safety (#106)
 
-Issue: [#106](https://github.com/karthikcsq/google-tools-mcp/issues/106) · Verified against `main` @ 7572a8b. Revised after adversarial review. **The reported symptoms are real; two of the three diagnoses in the issue are wrong, and the true cause is a different bug in the same file.**
+Issue: [#106](https://github.com/karthikcsq/google-tools-mcp/issues/106). Revised for the MCP 2026-07-28 stateless migration.
 
 ## What verification found
 
-### Confirmed: the working copy is clobbered on every read
+`readDocument(format='markdown')` truncates and rewrites the working copy on normal and `diffFromLastRead` reads, so a documented edit-and-push workflow can silently destroy a local edit. The reported whitespace-only lines were not reproducible. The claimed list-export flattening was also wrong, but it hid a real round-trip loss: the exporter uses two spaces for every list nesting level, while an ordered parent marker `1. ` occupies three columns. Re-importing an ordered nested list therefore emits no tabs and flattens it. A following non-list paragraph is also swallowed as a lazy list continuation, and ordered numbering is always `1.`.
 
-`readDocument(format='markdown')` writes the working copy unconditionally at **two** sites — `readGoogleDoc.js:154` (normal read) and `:134` (even on a `diffFromLastRead` read, comment: *"Keep the on-disk working copy in sync even on diff reads"*) — with no existence, mtime, or content check. `writeWorkspaceFile` opens with `O_TRUNC` (`dist/workspace.js:104-105`). Since the documented workflow is "readDocument → edit that file → push it back", **any read between edit and push silently destroys the caller's work.**
+## Migration boundary
 
-### Not reproducible: "blank lines containing three trailing spaces"
-
-`docsToMarkdown.js` has no path that can emit a whitespace-only line: list items return `${indent}${marker} ${text.trim()}\n` (`:191`) — a **tight** list; indent is only prefixed to a line that passed `text.trim()` (`:188`); empty paragraphs return bare `'\n'` (`:204`); output is `.trim()`ed (`:170`). Empirically a nested list converts to `"- A\n  - B\n    - C\n- D"`. The likeliest explanation is the clobbering above replacing the author's file with a serialization of a document `modifyText` had already damaged (#104). Treated as unreproducible pending a fixture; a regression assertion is added anyway.
-
-### Wrong diagnosis, real bug underneath: nesting *is* exported — but ordered lists don't survive re-import
-
-The exporter reads `bullet.nestingLevel` and indents by it (`:188-192`, `getListInfo` `:218-237`), so "the exporter flattens nesting" is false. **But the indent width is wrong for ordered lists:**
-
-- It emits **2 spaces per level** for both list kinds (`:189`).
-- An ordered marker `1. ` occupies 3 columns, so a nested ordered item needs **3 spaces** to sit in its parent's content block. At 2 spaces the parser sees a sibling.
-- Verified end to end: `"1. one\n  1. sub\n  1. sub2\n1. two"` re-imported through `convertMarkdownToRequests` yields `["one","\n","sub","\n","sub2","\n","two","\n"]` — **zero tabs, all items at level 0**. With 3 spaces: `["one","\n","\t","sub","\n","two","\n"]` — nesting preserved. Unordered lists (`- `, 2 columns) round-trip correctly.
-
-So markdown read → push back **loses every level of ordered-list nesting**, silently. Two adjacent defects:
-
-- **List → following paragraph has no blank separator** (`:191` ends with one `\n`), so `"- D\nAfter"` re-imports with the paragraph swallowed into the bullet as a lazy continuation — exactly the "extensions of the same line" complaint in the issue.
-- **Ordered numbering is always `1.`** (`:190`, hardcoded; `convertParagraph` is stateless per paragraph).
+The migration owns and implements opaque, principal-bound read handles plus the core per-handle workspace, shared immutable baseline, TTL, and dirty-retention primitives. #106 consumes and extends those primitives for markdown no-clobber behavior, `.remote.md` divergence copies, and push reconciliation. There is no session suffix or disconnect cleanup in the new protocol.
 
 ## Design decisions
 
-- **Never clobber a modified working copy.** On read: if the file exists and its content differs from what this server last wrote, do **not** overwrite; write the fresh version to a sibling remote file and return both paths with a note. First read (no local file) is unchanged.
-  - **Baseline tracking must be its own durable record, not the read tracker.** `readGoogleDoc` updates the tracker *before* writing the workspace file (`:119-134`), so the tracker snapshot is not necessarily what is on disk. Store a sidecar `<workspaceFile>.sha256` (or a small JSON manifest in the workspace dir) written atomically **after** each successful workspace write; "modified" = file hash ≠ recorded hash. An existing file with **no recorded baseline** is treated as user-owned (divert, don't overwrite) — the safe default.
-  - **Filename composes with #87's session suffix**, resolving the conflict between the two plans: canonical `<docId>[.<tabId>][.<session>].md`, remote `<docId>[.<tabId>][.<session>].remote.md`. #87's disconnect cleanup glob must match both (`*.<session>.md` and `*.<session>.remote.md`) — stated in both plans.
-  - **Push closes the loop.** After a successful `replaceDocumentWithMarkdown`, update the baseline for the canonical file to the pushed content — including the `filePath` branch, which today mirrors only when `!args.filePath` (`replaceDocumentWithMarkdown.js:212-225`). Without this, the documented edit-and-push workflow would mark the file divergent forever and spawn a `.remote.md` on every subsequent read.
-- **Indent width derived from marker width, not a constant.** Per level, indent by the *parent's* rendered marker width: 3 for `1. `, 2 for `- `, and wider for `10.`+ — which is why numbering and indentation must be computed in the same pass. Mixed ordered/unordered nesting resolves per ancestor.
-- **Ordered numbering: normalized decimal, stated as the contract.** Correction from review: the exporter cannot faithfully reproduce Docs numbering — `getListInfo` derives only `ordered` from `glyphType` (`:218-236`) and has no access to restart values or alpha/Roman formats. Markdown cannot express most of them anyway. So the contract is: **ordered lists export as sequential decimal per level, starting at 1**; alpha/Roman/restart information is a known, documented export loss (it is preserved in the *document* and only absent from the markdown projection). Say so in the fidelity notes rather than implying full fidelity.
-- **Blank line after a list block** before a non-list paragraph.
-- **Round-trip is the test contract.** This shipped because nothing tested markdown → Docs → markdown as a cycle.
+- **Read-handle-scoped editable paths.** The migration returns a high-entropy opaque read handle, never a revision identity. The managed editable path is `<docId>[.<tabId>].<readHandle>.md`; the exact encoding is sanitized and collision-safe. Every read handle has its own editable copy, including two reads of identical content by the same or different clients.
+- **Immutable baseline is shared, editable files are not.** The migration initializes each handle workspace from one content-addressed immutable baseline keyed by profile/file/tab/revision/fingerprint. #106 compares each editable file hash with that baseline and never mutates it in place to make a later conflict disappear. An unmanaged existing file with no baseline is treated as user-owned.
+- **Never clobber a dirty file.** If editable content differs from its baseline, keep it untouched and write fresh remote content to that handle's `<editable>.remote.md`, returning both paths and a clear note. This rule applies to ordinary and `diffFromLastRead` reads.
+- **TTL is dirty-file-safe.** The migration's sweep may delete expired clean handle workspaces only. A dirty editable file and its recovery material are retained and reported for manual recovery; they are never deleted merely because the handle expired. #106 relies on that primitive; the shared immutable baseline is retained or collected only when no retained handle workspace needs it.
+- **Push reconciliation trusts canonical Docs state, never submitted markdown.** After any successful push, refetch canonical Docs content, revision, and structural fingerprint. Mint the successor handle and baseline from that actual state, then reconcile only the successor editable workspace. Do not baseline the submitted inline markdown or `filePath` bytes, because conversion, fidelity handling, and concurrent canonicalization can differ from the request payload.
+- **Round-trip formatting is stateful.** Compute list counters and ancestor marker widths in the outer conversion loop. Indent each level by its parent's rendered marker width, preserve mixed ordered/unordered nesting, normalize ordered lists to sequential decimal numbers per level, and add a blank line between a list block and the following non-list paragraph. Alpha/Roman/restart values remain documented projection loss.
 
 ## Implementation
 
-1. `dist/markdown-transformer/docsToMarkdown.js`: **the stateful pass lives in the outer loop.** `docsJsonToMarkdown` (`:146-170`) currently calls a stateless `convertParagraph` (`:176-204`); introduce a conversion-state object (per-level counters, ancestor marker widths, current `listId`) threaded from the loop into `convertParagraph`/`getListInfo`, with resets on list-id change, level exit, and list interruption by a non-list element. Marker-width indentation and sequential numbering both read from that state.
-2. `dist/workspace.js`: no-clobber write mode + atomic baseline sidecar; `deleteSessionWorkspaceFiles` (from #87) extended to remove baselines and `.remote.md`.
-3. `readGoogleDoc.js:134,154`: no-clobber mode; local-file advice string (`:171-179`) explains the two-path outcome.
-4. `replaceDocumentWithMarkdown.js:212-225`: baseline update on success for both the inline-markdown and `filePath` branches.
-5. Document the working-copy contract (convenience mirror; your edits are never destroyed; divergent remote appears as `.remote.md`) and the ordered-numbering export loss.
+1. `docsToMarkdown.js`: introduce outer conversion state for list IDs, per-level counters, and ancestor marker widths; correct ordered nesting, numbering, and list-to-paragraph separation.
+2. `workspace.js`: consume migration-owned unique handle workspace, shared-baseline, dirty-detection, and TTL primitives; add markdown-specific no-clobber, remote-divergence, and reconciliation helpers. Do not reuse session-name or disconnect-cleanup APIs.
+3. `readGoogleDoc.js`: use no-clobber managed writes for normal and diff reads, return the editable/remote/baseline state in its advice, and use the migration's read handle.
+4. `replaceDocumentWithMarkdown.js`: after any successful inline or `filePath` push, refetch canonical Docs content/revision/fingerprint, mint the successor handle/baseline from it, and reconcile only that successor editable workspace. Never baseline submitted markdown or mark a dirty source clean merely because a push request was attempted.
+5. Document the convenience-copy, divergence, expiry, recovery, and ordered-numbering contracts.
 
 ## Tests
 
-New `tests/markdownRoundTrip.test.js` — the missing contract. **Full cycle, not half of one:** Docs JSON → markdown → `convertMarkdownToRequests` → **apply the requests to an in-memory Docs model** (or assert against the request stream *and* re-export the resulting structure) → markdown again, comparing structure. Asserting tab counts alone would pass while the real `readDocument → replaceDocumentWithMarkdown` workflow still changes structure, since `insertMarkdown` converts and batch-updates separately (`markdown-transformer/index.js:120-147`).
-
-- Cycle fixtures: nested unordered, nested ordered, mixed ordered/unordered, 3-level deep, `10.`+ numbering (marker-width edge), list interrupted by a paragraph then resumed, headings + inline formatting alongside lists. Ordered cases fail today — the regression guard.
-- List followed by a paragraph → separate paragraph, not a bullet continuation.
-- Numbering sequential per level, resetting on level exit and list change.
-- Exporter never emits a whitespace-only line or trailing whitespace on any line (#106's reported artifact).
-- Existing `tests/markdownTransformer.test.js` expectations reviewed diff-by-diff where indent width changes — no blanket snapshot updates.
-- Working copy: hand-modified file + read → original untouched, `.remote.md` written, both paths named; unmodified file → overwritten; first read → unchanged; **no recorded baseline → treated as user-owned**; `diffFromLastRead` read → same rule (today's `:134` write is the sharpest edge, since a diff read is exactly when a caller is mid-edit); **successful push via `filePath` → baseline updated, and the next read does not create a `.remote.md`**; session suffix composes with #87's naming and cleanup removes all three file kinds.
+- Full Docs JSON → markdown → request conversion → in-memory application/re-export cycles for nested unordered, ordered, mixed, three-level, `10.`-width, interrupted/resumed lists, and headings/inline formatting. Ordered cases fail before this work.
+- List-followed-by-paragraph remains two structures; sequential numbering resets at the correct list and level boundaries; output never contains whitespace-only or trailing-whitespace lines.
+- Dirty editable copy plus normal or diff read remains unchanged, writes `.remote.md`, and returns both paths; clean copy overwrites; first managed read creates baseline; unmanaged file with no baseline is never overwritten.
+- Successful inline and `filePath` pushes refetch canonical Docs content/revision/fingerprint, then mint and reconcile a successor handle/baseline from that state; the next read does not produce a perpetual remote copy. Submitted markdown alone is never accepted as the baseline.
+- TTL removes a clean expired handle workspace, but retains an expired dirty editable copy and its baseline/remote recovery material. Two handles for the same revision use distinct editable paths and may reference one shared immutable baseline.
 
 ## Acceptance criteria
 
-- A document read as markdown and pushed back unchanged produces no structural change — ordered-list nesting survives, proven by a full apply-and-re-export cycle.
-- Sub-bullets remain sub-bullets; paragraphs after lists remain paragraphs.
-- Exported ordered lists carry sequential numbers; the alpha/Roman/restart export loss is documented, not silent.
-- A caller's hand-edits are never destroyed by a read; after a successful push the workflow settles (no perpetual `.remote.md`).
-- The trailing-whitespace artifact has a regression assertion despite being unreproducible.
+- Reading and pushing unchanged markdown causes no ordered-list nesting loss, proven by an apply-and-re-export cycle.
+- Sub-bullets remain nested and paragraphs after lists remain paragraphs; documented numbering loss is the only deliberate list projection loss.
+- A caller's hand edits are never overwritten or TTL-deleted. A divergent remote response is preserved and named.
+- The handle, baseline, editable, remote, and TTL rules agree with the migration and do not rely on HTTP sessions.
 
 ## Sequencing
 
-Independent of the Gmail/config tracks. Owns the no-clobber rule; #87 owns session namespacing and must match the composed filenames and cleanup glob. **#107's read→export→replace test depends on this landing first** — otherwise a section replace fed by exported markdown inherits the ordered-list flattening.
+After migration establishes opaque read handles and before #107's exported-markdown workflow. Coordinate with #96's markdown output behavior and #88/#108 only through the shared handle contract.

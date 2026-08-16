@@ -38,9 +38,9 @@ New `tests/drivePermissions.test.js`, mocking `dist/clients.js`:
 - `updatePermission`: exact `permissionId` targeted; body only `{role}`; owner guard. `removePermission`: exact id; `supportsAllDrives` on all four.
 - API failure propagation: 403 mock → tool throws, never success-shaped.
 
-### 4. Create-then-write regression — explicit cross-plan contract
+### 4. Migration-owned create-then-write coverage
 
-The test itself lands with #87 (tracker seeding), but it is **this issue's acceptance item too**: #56 is not closeable until the create-then-write test exists and runs, whether #87 has landed (test lives there) or not (in which case a pending/failing marker test documents the gap rather than silence). This replaces the earlier "independent" framing — the dependency is real and stated.
+The MCP migration absorbs #87 and owns tracker seeding, the real-transport mock seam, and the create-then-write regression. #56 reviews that landed coverage as a dependency but does not duplicate it or remain open waiting on a parallel #87 PR. This issue owns the dead-test, `createDocument` behavioral, permissions, and package-manifest blind spots described above.
 
 ### 5. CI / packaging defense in depth
 
@@ -51,8 +51,8 @@ The test itself lands with #87 (tracker seeding), but it is **this issue's accep
 - Every listed test runs under plain `npm test`; deleting `normalizeEscapes`, any permission-role mapping, or reintroducing any non-runtime file under `dist/` makes CI fail by name.
 - The packed tarball is provably allowlist-clean on every PR.
 - `createDocument` partial failure is visible in its response and pinned.
-- Create-then-write coverage exists (via #87) before this issue closes.
+- Migration-owned create-then-write coverage is present and passing; #56's independently owned behavioral and package protections pass under plain `npm test`.
 
 ## Sequencing
 
-Mostly independent; hard coordination points: `packageContents.test.js` with #74 (same file), create-then-write with #87 (stated above), raw-path assertion style with #14. Good "first issue" territory once plans are approved.
+After the MCP migration. Hard coordination points: `packageContents.test.js` with #74 (same file), migration-owned create-then-write coverage (verify, do not reimplement), and raw-path assertion style with #14. Good early follow-on once the migration is green.

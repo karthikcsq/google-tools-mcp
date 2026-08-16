@@ -1,160 +1,159 @@
-# Plan: adopt MCP specification 2026-07-28 (fastmcp → official TypeScript SDK v2)
+# Plan: adopt MCP specification 2026-07-28 (fastmcp to official TypeScript SDK v2)
 
-Written 2026-08-08 against `main` @ 873270a. Spec citations verified against the published documents the same day.
+Written 2026-08-08, revised after adversarial review. This is a migration plan, not implementation authorization. Re-verify every source anchor and SDK API against the exact locked dependency before coding.
 
-## Why
+## Root cause
 
-The [2026-07-28 MCP specification](https://modelcontextprotocol.io/specification/2026-07-28) makes the protocol stateless, and this repo's hardest open problems — session-keyed tracker state, the HTTP request-guard monkey-patch, the always-on legacy SSE surface, working-copy collisions between clients — are all consequences of the *old* protocol's session model or of fastmcp's implementation of it. The announcement's framing matches this repo's #75 goal almost verbatim:
+The current runtime (`dist/`) uses fastmcp and the v1 MCP SDK. It couples Docs read/write state and temporary working files to HTTP sessions, then compensates with an `http.createServer` request-guard interception in `dist/httpAuth.js`. That design cannot safely represent a stateless 2026-07-28 HTTP request, and [fastmcp 4.15.1](https://www.npmjs.com/package/fastmcp/v/4.15.1) still declares `@modelcontextprotocol/sdk: ^1.24.3`. The upstream fastmcp migration issue previously cited here, [#300](https://github.com/punkpeye/fastmcp/issues/300), is closed and is not a dependency or a reason to wait.
 
-> "Every request is self-describing, with an optional discovery call for clients that want capabilities up front, so any request can land on any instance behind a plain round-robin load balancer."
-> — [MCP blog, 2026-07-28 release post](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
+The protocol removes server-managed HTTP sessions and uses self-describing requests. See the [2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28), its [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), and the official SDK's [2026-07-28 migration guide](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28). The root fix is to own the small server integration layer directly, give cross-call Docs state an authenticated explicit capability, and remove the session-era transport code.
 
-### Why the framework must change
+## Scope and compatibility contract
 
-This server is built on `fastmcp` (`package.json` pins `^3.24.0`, installed 3.34.0). fastmcp cannot speak the new revision, and this is not a version-bump problem:
+- Replace `fastmcp` with exact `@modelcontextprotocol/server@2.0.0` and `@modelcontextprotocol/node@2.0.0`, update `package-lock.json`, require Node `>=20`, and migrate all schemas to Zod `>=4.2`. Audit Zod v4 parsing/error-shape changes before changing any tool contract.
+- Preserve existing stdio configuration (`command` and `args`) and test both a modern 2026-07-28 stdio client and a legacy stdio client.
+- Keep the official SDK's stateless legacy HTTP compatibility path and test a legacy HTTP request against the same authenticated endpoint.
+- Removing current sessionful HTTP, including `/sse` and session lifecycle routes, is a documented breaking change. Release notes, `docs/http-mode.md`, and setup output must name the removed endpoints and the required client reconfiguration. This is not silently presented as transparent compatibility.
+- Retain a minimal authenticated `GET /healthz`. It returns liveness only, after the same bearer-token and Origin checks as MCP requests. Its fixed minimal payload contains no server version, profile, tool, handle, client, or environment identity. It is operational health, not a second MCP discovery or status endpoint.
+- This first release explicitly supports one process serving one configured Google profile and one effective service principal. In-memory handles, trackers, and workspace ownership are valid only for that deployment. Horizontal scale or multiple profiles requires a separately designed shared, credential/profile-partitioned state store and is out of scope.
 
-- The latest published `fastmcp` (4.13.1, verified via `npm view fastmcp@4.13.1 dependencies` on 2026-08-08) still depends on the **legacy v1 SDK**: `"@modelcontextprotocol/sdk": "^1.24.3"`.
-- fastmcp's own migration effort is unresolved: [punkpeye/fastmcp#300](https://github.com/punkpeye/fastmcp/issues/300) documents the codemod state and two blocking API decisions awaiting a maintainer call, with no timeline.
-- The official TypeScript SDK v2 shipped stable: the monolithic `@modelcontextprotocol/sdk` is retired in favor of split packages; `@modelcontextprotocol/server` **2.0.0** is on npm (verified 2026-08-08).
+## Verified inventory and guardrail
 
-Decision: **migrate to `@modelcontextprotocol/server` 2.0.0** and drop fastmcp. The inventory below shows the fastmcp API surface actually used here is small enough that a thin façade preserves every tool module, every test, and the local CLI unchanged.
+The affected runtime seam is `dist/index.js` (FastMCP construction/start), `dist/httpAuth.js` (request interception), `dist/tools/index.js` (registration patch layers), `dist/readTracker.js`, `dist/sessionContext.js`, `dist/workspace.js`, and every `fastmcp` `UserError` import. `dist/cachedToolsList.js` is the only raw v1 SDK import and is unused.
 
-### Backwards compatibility is handled by the SDK, not by us
-
-Existing installed clients (Claude Desktop, older Claude Code, Cursor…) mostly still speak 2025-era MCP. The SDK v2 adoption guide ([Supporting protocol revision 2026-07-28](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28)) covers both directions:
-
-- **stdio:** replace `server.connect(new StdioServerTransport())` with `serveStdio(() => buildServer())`. New clients probe with `server/discover`; legacy clients fall back to the `initialize` handshake — *"the opening exchange selects the connection's era, and one factory instance is pinned per connection."* The spec makes the probe normative:
-  > "Add `server/discover`: servers MUST implement this RPC to advertise their supported protocol versions, capabilities, and identity. Clients MAY call it before any other request for up-front version selection, or use it as a backward-compatibility probe on STDIO."
-  > — [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), major change 3 (SEP-2575)
-- **HTTP:** `createMcpHandler(() => buildServer())` — *"the v2 HTTP entry that serves 2026-07-28 per request — and, by default (`legacy: 'stateless'`), also serves 2025-era traffic per request… One factory, one endpoint, both eras."*
-
-So the migration cannot strand any existing client configuration; `setup.js`'s stdio registrations keep working as-is.
-
-## Verified current coupling (inventory, 2026-08-08)
-
-| Coupling | Blast radius | Migration cost |
-|---|---|---|
-| `new FastMCP(...)` + `server.start(...)` | `dist/index.js:138-202` only | The core swap |
-| `server.addTool({name, description, parameters(zod), execute})` | 235 call sites (~156 live tools), but all flow through two patch layers in `dist/tools/index.js:96-120,223-228` | Thin façade; tool modules untouched |
-| `context.log` (2nd `execute` arg) | 281 calls in 116 files — the **only** context member used | Façade provides it |
-| `UserError` from `'fastmcp'` | 128 files, 605 refs | Local `dist/errors.js` + mechanical import rewrite |
-| `authenticate` option + `startWithRequestGuard` `http.createServer` monkey-patch | `dist/httpAuth.js:154-167,242-296`, `dist/index.js:145-193` | **Deleted** — SDK v2 accepts ordinary Node/Express middleware |
-| Session-keyed state: `sessionContext.js` (AsyncLocalStorage of `sessionId`), `readTracker.js:23-46` per-session Maps, `server.on('disconnect')` eviction at `dist/index.js:154-161` | The conceptual core | Redesigned (below) — sessions no longer exist |
-| Raw v1-SDK usage | `dist/cachedToolsList.js` only — dead code, imported by nothing | Delete |
-| Never used: sampling, roots, elicitation, resources, prompts, progress, streamContent | — | Nothing to migrate |
-
-Also relevant: tests never construct a FastMCP instance — all 37 suites and `scripts/call-local-tool.js` duck-type a `{ addTool }` server and call `tool.execute(args, { log })` directly. **A façade that preserves that shape leaves the entire test suite and local CLI untouched.**
+Do not carry forward stale hand-counts of tools, registrations, calls, or imports. The first PR adds `scripts/inventory-mcp-migration.mjs`, which enumerates tracked runtime/test files and reports: FastMCP imports, raw SDK imports, `addTool` registrations, `UserError` imports, `context.log` call sites, and loaded tool count. The committed output and a test snapshot become the migration baseline. Any count stated in implementation PRs must be generated by that script.
 
 ## Design decisions
 
-### 1. Registration façade, not a 156-tool rewrite
+### 1. Choose the official SDK only after a constrained facade spike
 
-`dist/mcpServer.js` exports `buildServer()`: creates `new McpServer({ name: 'google-tools-mcp', version: <package.json version> })` (also fixing the hardcoded `1.0.0` at today's `dist/index.js:138-141`), and wraps it in an `addTool`-shaped adapter that maps to v2 `registerTool`, converts string returns to text content, converts thrown `UserError` into `isError` tool results, and passes `{ log }` in the context slot. The two existing `addTool` patch layers (auth-retry/session wrap at `dist/tools/index.js:96-120`; raw-def snapshot for legacy aliases at `:223-228`) patch the façade exactly as they patch fastmcp today. Zod stays at v3.24+: tool schemas are accepted because v2 takes Standard Schema — *"Tool schemas now use Standard Schema, so you can bring Zod v4, Valibot, ArkType, or any compatible library"* ([SDK beta announcement](https://blog.modelcontextprotocol.io/posts/sdk-betas-2026-07-28/)) — and Zod implements Standard Schema since 3.24.0.
+Compare two candidates in a disposable spike:
 
-### 2. Cross-call state: revision-keyed handles replace sessions (merges #87)
+1. A thin local facade over `@modelcontextprotocol/server@2.0.0`.
+2. ViteMCP, only if its exact release supports the target protocol, Node/Zod versions, stateless legacy HTTP, auth middleware, and all required lifecycle hooks.
 
-The spec removes the thing our state is keyed on:
+The spike must register one real tool, exercise real stdio and authenticated HTTP wire calls, preserve the current `addTool({ name, description, parameters, execute })` seam, carry `context.log`, convert `UserError`, cleanly shut down, and expose no session API. Record the matrix, package versions, API observations, and rejection rationale in this plan's implementation ADR. Retain the official SDK only if that record shows it meets every criterion with fewer runtime dependencies and a smaller compatibility surface. The expected outcome is the official SDK plus a local facade, but it is a decision gate, not an assertion disguised as one.
 
-> "Remove protocol-level sessions and the `Mcp-Session-Id` header from the Streamable HTTP transport. … Servers that need cross-call state use explicit, server-minted handles passed as ordinary tool arguments."
-> — [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), major change 1 (SEP-2567)
+The selected facade owns `buildServer()`, tool registration, result/error adaptation, logger context, and shutdown. Tool modules stay unchanged until a later issue intentionally changes their behavior. `UserError` moves to local `dist/errors.js`; imports are mechanically rewritten and verified by the inventory script.
 
-There is also no longer a disconnect event to evict on. The redesign — which **is** #87's plan, restated for a sessionless world:
+### 2. Explicit `readHandle` replaces HTTP session state (#87 replacement)
 
-- **Guard signal = Docs `revisionId`, exactly as #87 specifies** (revision-first, content-equality fallback, structural fingerprint bound). A read's identity is *what version was read*, not *who read it*.
-- **Tracker keyed by `(fileId, revisionId)` globally instead of per-session.** Content at a given revision is identical no matter which client fetched it, so global keying cannot cross-contaminate — this deletes `sessionContext.js` and the `'\0default'` sentinel rather than porting them.
-- **Mutations carry the handle as an ordinary argument.** `readDocument` returns the `revisionId` it read; guarded mutation tools accept `expectedRevisionId` and, when supplied, it both satisfies the guard and becomes the `WriteControl.requiredRevisionId` — which is #108's escape-hatch design, now as the primary mechanism. For stdio and single-client use, the process-local tracker still auto-fills this (no workflow regression; the spec removes *protocol* sessions, not server memory).
-- **Eviction by TTL sweep** (on access + startup) instead of `disconnect`; entries and working-copy files older than a configurable age are dropped.
-- **Working copies keyed by content, not by session:** `<docId>[.<tabId>].<rev-or-hash>.md`. Two clients reading the same doc at the same revision share one immutable-baseline copy; a divergent local edit is what #106's `.remote.md`/no-clobber contract already handles. #106's filename-composition contract must be revised to compose with this instead of a session suffix.
-- `requestState` is available for multi-step flows and must be integrity-protected when used: *"servers MUST treat `requestState` as an attacker-controlled input… MUST protect its integrity (e.g. HMAC or AEAD)"* ([MRTR spec](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr)). Phase 2 does not need it (handles are plain revision ids whose tampering can only cause a rejected write, the case the spec exempts), but the SDK's `createRequestStateCodec` is the tool if a future flow does.
+HTTP mutation authorization must use an explicit `readHandle`, never a revision ID alone and never a client-supplied unsigned object. On a successful Docs read, the server mints a high-entropy opaque handle and stores its record:
 
-### 3. Logging: `context.log` routes to stderr
+`servicePrincipalFingerprint`, configured Google `profile`, `fileId`, `tabId`, `revisionId`, structural `fingerprint`, `issuedAt`, `expiresAt`, and a credential/profile invalidation epoch.
 
-The spec deprecates the MCP Logging feature and constrains notifications:
+The authenticated bearer credential and configured Google profile define the one effective service principal in this release. Middleware derives and retains only a non-reversible credential fingerprint, never the raw token; it does not distinguish individual clients that share the token. Every guarded mutation requires the handle, looks it up in a process-local store, checks its credential fingerprint, configured profile, invalidation epoch, remaining bindings, and expiry, then applies the stored revision as Docs `WriteControl.requiredRevisionId`. Token rotation or configured-profile change invalidates every outstanding handle before a further mutation. Handles expire in less than 24 hours and are single-purpose only if the final tool contract requires it; otherwise their replay semantics and allowed mutation set must be explicit and tested. Guessing, swapping credential/profile/file/tab, or reusing an expired handle fails before a Google write.
 
-> "Deprecate the Roots, Sampling, and Logging features… Suggested migrations: … log to `stderr` (stdio) or use OpenTelemetry instead of Logging."
-> "Log level is now set per-request via `io.modelcontextprotocol/logLevel` in `_meta`; servers MUST NOT emit `notifications/message` for requests that did not include this field."
-> — [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), Deprecated 1 (SEP-2577) and major change 5 (SEP-2575)
+HTTP cross-client safety does not rely on distinguishing callers that hold the same token. It comes from an unguessable explicit capability per read and a unique editable workspace per handle. Two clients with the shared bearer may use only handles they possess; neither can infer another handle or alter that handle's editable file through its own handle.
 
-Today fastmcp turns all 281 `context.log.*` calls into `notifications/message`. The façade's `log` object routes to `dist/logger.js` (stderr + optional file) instead — spec-compliant on both eras, zero edits in the 116 tool files, and it converges with #91's diagnostics direction (structured logs live server-side, not in protocol notifications). Per-request `logLevel` gating on modern connections is left to the SDK.
+Only a pinned stdio connection may use implicit current-read state. That state is scoped to the live connection, never a global default, and is destroyed at connection shutdown. A stdio caller may also pass an explicit handle for parity. HTTP has no implicit fallback.
 
-### 4. HTTP transport: middleware replaces the monkey-patch; legacy SSE dies
+`expectedRevisionId` from #108 is retained as a caller-visible compare-and-write assertion, but it never authorizes a write by itself. If supplied with a handle it must equal the handle record's revision; the actual `WriteControl` value comes from the validated record. The separate #108 work still owns target-range overlap classification, re-resolution, and explanatory tiers after #88.
 
-- `createMcpHandler` + the Node adapter, with our bearer-token/Origin check (`checkHttpAuth`, unchanged logic) as ordinary middleware in front. `startWithRequestGuard` — the `http.createServer` interception hack that exists only because fastmcp has no middleware hook — is deleted, along with the GET-stream/DELETE-session guard rationale (those routes no longer exist: no sessions, and the GET endpoint is replaced by `subscriptions/listen`, which we do not serve — we emit no list-changed notifications; all 12 categories load eagerly).
-- The implicit `/sse` + `/messages` endpoints that mcp-proxy always stands up (`dist/httpAuth.js:220-229`) disappear with fastmcp. That transport is formally done: *"Reclassify the HTTP+SSE transport (deprecated since protocol version 2025-03-26) as Deprecated under the feature lifecycle policy… Migrate to Streamable HTTP"* ([changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), Deprecated 2).
-- Required headers are validated by the SDK: *"Require standard MCP request headers (`Mcp-Method`, `Mcp-Name`) on Streamable HTTP POST requests"* (changelog, minor change 4, SEP-2243) — and they give any future reverse-proxy/rate-limit setup something to route on without parsing bodies.
-- `GET /ping` and fastmcp's `/health`/`/ready` go away (`ping` is removed from the protocol; changelog major change 5). Liveness/identity is `server/discover` — which is also a better `/info` than the one #75 planned to hand-build, since it is mandatory, spec-shaped, and carries name/version/capabilities.
-- Auth hardening items (RFC 9207 `iss` validation, CIMD-over-DCR) target OAuth-based MCP authorization; this server's MCP-layer auth is a static bearer token and its Google OAuth is upstream of MCP, so they impose no work — noted here so the audit of the changelog is complete.
+### 3. Workspace ownership separates editable copies from immutable baselines
 
-### 5. Deletions the migration makes safe
+Each `readHandle` owns a unique editable workspace directory/file. The server also keeps a content-addressed immutable baseline keyed by `(profile, fileId, tabId, revisionId, fingerprint)` that can be shared safely. A handle workspace is initialized from that baseline and never shared with another handle, even when two reads see identical content.
 
-- `dist/cachedToolsList.js` (dead; only raw v1-SDK import in the repo).
-- The five dead duplicate Gmail modules at `dist/tools/` root (`settings.js`, `messages.js`, `threads.js`, `labels.js`, `drafts.js`, ~69 dead registrations) — this is the "dead modules" third of #74; porting dead code would be absurd.
-- `dist/sessionContext.js` and the disconnect handler (decision 2).
-- `fastmcp` (and transitively `mcp-proxy`, the v1 SDK) from `package.json`; `@modelcontextprotocol/server` in.
+Expiry cleanup may remove expired handles and immutable baselines with no live references. It must never delete a dirty editable workspace. A dirty workspace is retained, reported by status/diagnostics, and requires explicit recovery or an operator-approved cleanup policy. Cleanup uses an ownership manifest and exact paths, never a broad glob. This replaces #106's session-suffix filename contract; update that plan before it is implemented.
 
-### 6. Cacheable, deterministic tool lists
+### 4. HTTP is ordinary middleware plus a narrow authenticated health route
 
-> "Require `ttlMs` and `cacheScope` fields on results returned by `tools/list`, `prompts/list`, `resources/list`… `ttlMs` is a freshness hint (in milliseconds) allowing clients to cache responses and reduce polling."
-> "Servers SHOULD return tools from `tools/list` in a deterministic order to enable client-side caching and improve LLM prompt cache hit rates."
-> — [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), minor changes 5 (SEP-2549) and 3
+Delete `startWithRequestGuard`, the monkey-patched `http.createServer` path, session disconnect logic, and the legacy SSE endpoints. Put existing bearer-token and Origin validation ahead of the SDK handler and `GET /healthz`; test middleware ordering over the wire. Do not add #75's token persistence, process manager, setup rewrites, or operational commands to this migration.
 
-The tool set is fixed at process start (eager category load, no `list_changed` emitted — deliberate, `dist/tools/index.js:231-234`), so: sort registrations deterministically, set a long `ttlMs` (e.g. 1h) with `cacheScope: 'private'` (the set varies with env flags like `GOOGLE_MCP_ENABLE_LEGACY_ALIASES`, so it is per-deployment, not publicly cacheable). With 156 tools this is a real prompt-cache and reconnect-latency win for clients. This retires the idea `cachedToolsList.js` was groping toward, properly.
+`server/discover` remains protocol discovery. `/healthz` remains a liveness-only operational endpoint. Its response must not disclose token state, handles, profile identifiers, tool list, environment values, or server/client identity. Modern SDK `_meta` client identity is supplemental observability data after authentication, not an authorization input. The later #75 `status` command must authenticate as a modern SDK client and obtain server identity from the authenticated protocol response `_meta`, never from `/healthz` or a hand-parsed discovery body.
 
-### 7. MRTR: nothing to migrate, one future door opened
+The SDK's `subscriptions/listen` behavior needs an explicit compatibility check in the spike. The server has no dynamic tool/resource list changes and must not advertise or emit list-change events it cannot support. If the SDK installs a listen route/capability by default, document its exact behavior and ensure auth applies to it; otherwise disable or omit it through the supported SDK API.
 
-The breaking change — *"Servers MUST send server-to-client requests (such as `roots/list`, `sampling/createMessage`, or `elicitation/create`) using the MRTR pattern. The previous pattern of server-initiated requests is no longer supported."* ([MRTR spec](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr)) — costs this repo nothing: the inventory found zero uses of elicitation, sampling, or roots. Out of scope but now possible: returning `inputRequired()` with an elicitation from destructive Docs operations (#88's confirm/preview flow) and surfacing the Google OAuth consent URL via URL-mode elicitation instead of stderr. Both are follow-ups, not this PR.
+### 5. Cache hints, logging, and structural prerequisites
 
-## Issues this plan resolves
+Use the SDK-supported `ServerOptions.cacheHints` configuration for deterministic `tools/list` responses. Sort registrations deterministically, set an intentionally selected TTL and private cache scope, and prove the emitted v2 wire response carries the configured hints. Do not hand-roll an obsolete `tools/list` response or revive `cachedToolsList.js`.
 
-**Closed by this PR:**
+The facade maps existing `context.log` calls to server-side stderr/structured logging. Respect modern request log-level metadata where supported, and do not emit deprecated logging notifications when the request did not negotiate them.
 
-- **#75 — Master: make shared HTTP transport production-ready.** The session-bleed risk, the request-guard hack, the unauthenticated `/ping`, the missing instance identity (`server/discover` replaces the planned `/info`), and the stray SSE surface are all resolved by decisions 2 and 4. Phase 4 lands the remaining operational items from the #75 plan (persistent token file, `serve`/`status`/`stop`, setup writing native HTTP client configs) minus everything session-related, which is obsolete. The plan's mandatory "two clients, session isolation over real HTTP" E2E becomes "two clients, stateless handle correctness over real HTTP" — strictly simpler and finally buildable.
-- **#87 — Master: correct Docs read/write state and isolate working copies.** Decision 2 is #87's plan (revision-first guard, create-seeding, guard-bypass closure on the seven unguarded tools, working-copy isolation) re-founded on spec-blessed handles instead of session suffixes. All of #87's tests port; the session-suffix/disconnect-cleanup tests are replaced by TTL-sweep and revision-keying tests.
+#105 remains a public Docs feature, but this migration cannot hide it as a prerequisite. Add a small internal structural walker now, with no new public tool or parameter: it traverses tabs, structural elements, paragraphs, tables, and text runs using stable internal result types. #105 later exposes its public indexed/limited read behavior on top of that walker. Tests must prove the migration works when #105 has not landed.
 
-**Substantially resolved, issue stays open with reduced scope:**
+## Issue disposition and sequencing
 
-- **#108 — conflict-guard precision.** The headline symptom (metadata-only change blocks an edit with an empty diff) falls to revision-first detection, and `expectedRevisionId` lands here wired end-to-end (guard + `WriteControl`). Remaining for #108: `targetRange` overlap classification, tiered explanations, re-resolution — which depend on #88's `findTextRangeInDoc` and stay sequenced after it.
-- **#74 — Gmail maintenance.** Dead-module deletion happens here (decision 5); duplicate dispatch and parameter-doc work remain.
-- **#56 — test blind spots.** The real-transport E2E seam (mock `dist/clients.js` behind an env gate) and the create-then-write regression test land here as part of phases 2/4 testing; remaining package-blind-spot items stay.
-- **#91 — diagnostics.** Logging moves fully server-side per the spec (decision 3), which is the architecture #91 assumes; its JSONL/redaction/runbook content remains its own work. Bonus: the SDK's request layer replaces fastmcp dispatch, making #91's noted follow-up (instrumenting pre-execute dispatch failures) reachable.
+- **#87 stays open during migration.** Close it only after the handle replacement passes its stated migration tests: explicit HTTP handle binding, connection-pinned stdio state, write-control enforcement, isolated editable workspaces, immutable baselines, dirty-file preservation, expiry, and shutdown cleanup.
+- **#75 stays open, narrowed.** This migration removes its session-era transport core. Its remaining plan owns deployment operations, token persistence, lifecycle commands, configuration writing, and production hardening, sequenced after the migration is stable. Its former operational work is outside this plan.
+- **#108 remains open.** This migration lands `expectedRevisionId` only as a validated handle companion. Its precision/re-resolution work remains sequenced after #88.
+- **#105 remains open.** The internal walker lands here without changing its public API; the user-facing index/limit feature remains #105.
+- **#71 is hard-blocked on this migration.** Both touch every tool import/registration path. Land this first, then rebase #71 once.
+- #106 must adopt handle workspaces and immutable baselines before implementation. #74, #56, and #91 receive only the directly landed pieces documented in their issue comments. This migration does not delete or consolidate Gmail modules; that work remains wholly owned by #74.
 
-**Explicitly not resolved by the spec** (tool-design problems, unchanged plans): #105, #106 (its working-copy filename contract needs a small revision to compose with revision-keyed copies — flagged in its plan), #107, #88, #86, #96, #99, #14, #73, #71, #82, #48, #50.
+## Implementation sequence: rollback-safe PRs
 
-**Plan-queue impact:** land this migration **before** #71 (both touch every tool file's import block; two full-tree rebases would be miserable) and revise the `docs/plans/README.md` ordering accordingly. #82/#48 sequencing is unchanged; #75's plan file should be re-read through this document before its Phase-4 work starts.
+Each PR is independently reviewed and published only after its gates pass. A runtime-selection flag is permitted only after a proof that fastmcp and the selected SDK path can coexist with the same Zod version and tool schemas. If that proof fails, the cutover is atomic and rollback is the tested release-tag/git-revert path, not a false feature flag.
 
-## Implementation (one PR, four reviewable phases/commits)
+### PR 1: inventory, platform floor, and SDK decision spike
 
-**Phase 1 — core swap (behavior-neutral).**
-`package.json` deps; `dist/errors.js` (`UserError`) + mechanical import rewrite across 128 files; `dist/mcpServer.js` façade (`buildServer()`, addTool adapter, stderr `log`); `dist/index.js` rewired to `serveStdio(buildServer)` / `createMcpHandler(buildServer)` + auth middleware; delete `startWithRequestGuard`, `cachedToolsList.js`, dead Gmail root modules; fix served version string. All existing tests must pass unmodified — that is the phase's acceptance gate.
+- Add the inventory script/snapshot and Node 20/22 CI smoke matrix.
+- Build the official-SDK and ViteMCP comparison spike in an isolated fixture, including `@modelcontextprotocol/server@2.0.0`, `@modelcontextprotocol/node@2.0.0`, and Zod `>=4.2`. Commit the ADR record and select the facade only after the required wire/auth/shutdown proof passes.
+- Do not upgrade the production top-level Zod, replace fastmcp, or change production schemas in this PR. It has no default transport or user-visible Docs behavior change.
+- As a decision gate, prove whether fastmcp can register every existing tool schema under Zod v4 while the official SDK path is available. Record the result. Only a passing proof authorizes a dual-runtime flag in later PRs.
 
-**Phase 2 — state model (merges #87).**
-`readTracker.js`: revision-first `guardMutation` + content-equality fallback + structural fingerprint, global `(fileId, revisionId)` keying, TTL eviction, `scope` (tab) field; `expectedRevisionId` parameter on guarded Docs mutation tools, doubling as `WriteControl`; create-seeding (`createDocument`, `createFromTemplate` success-only; `copyFile` deliberately unseeded); guard the seven bypassing tools (`insertImage` pre-upload); `workspace.js` revision-keyed paths + sweep; delete `sessionContext.js`.
+### PR 2: facade and transport, using the proven rollout path
 
-**Phase 3 — protocol features.**
-Deterministic tool ordering + `ttlMs`/`cacheScope` on `tools/list`; `server/discover` identity fields verified; per-request `logLevel` behavior confirmed against SDK defaults; capability declarations audited (no roots/sampling/logging/elicitation advertised).
+- Add `dist/mcpServer.js`, `dist/errors.js`, and the internal structural walker. Preserve the current `addTool` testing seam while registering real SDK tools.
+- If PR 1 proved dual-runtime Zod/schema compatibility, add the new stdio and stateless HTTP serving path behind an explicit migration flag and retain fastmcp temporarily. If it did not, atomically install exact `@modelcontextprotocol/server@2.0.0`, `@modelcontextprotocol/node@2.0.0`, and Zod `>=4.2`, update the lockfile, replace fastmcp, and cut over every registered schema in this PR.
+- Implement authenticated `/healthz`, middleware ordering, deterministic registration, `ServerOptions.cacheHints`, server-side logging, and shutdown hooks.
+- In the dual-runtime path, delete no legacy transport or session code yet and use the tested flag as rollback. In the atomic path, tag the last fastmcp release before merge and rehearse a git revert/redeploy rollback before release.
 
-**Phase 4 — HTTP operational layer (the surviving #75 scope).**
-Persistent token file + `GOOGLE_MCP_HTTP_TOKEN` precedence; `serve`/`status`/`stop` subcommands with the atomic state file from #75's plan (status uses `server/discover` instead of `/ping`+`/info`); non-loopback refusal unconditional; `setup.js` HTTP registration (Claude Code `--transport http` + Codex TOML) with the live end-probe; `docs/http-mode.md`.
+### PR 3: handle and workspace replacement
 
-## Tests
+- Implement server-minted opaque handles, non-reversible credential-fingerprint/profile/epoch binding checks, rotation/profile invalidation, `<24h` expiry, connection-pinned stdio implicit state, and `expectedRevisionId` comparison.
+- Implement per-handle editable workspaces, immutable baselines, ownership manifests, dirty-file retention, safe expiry cleanup, and explicit shutdown handling.
+- Port #87 guard behavior and `WriteControl` wiring. Seed create/template flows only after a successful API response; leave deliberately unsupported flows unseeded and explicit.
+- Exercise the internal walker only internally. #105's public tool API remains untouched.
+- In the dual-runtime path, keep the handle path behind the already proven migration flag. In the atomic path, rely on the release-tag/git-revert rollback proven in PR 2.
 
-- Phase 1 gate: entire existing suite green with zero test edits (proves the façade contract).
-- New `tests/protocol.e2e.test.js` over real transports, using the env-gated `dist/clients.js` mock seam: (a) modern client via `server/discover` on stdio; (b) legacy client via `initialize` on stdio (era fallback); (c) HTTP: modern stateless request with `Mcp-Method`/`Mcp-Name` headers honored, legacy 2025-era request served from the same endpoint, `/sse` returns 404, unauthenticated request refused by middleware.
-- `tools/list`: deterministic order across two calls/instances; `ttlMs`/`cacheScope` present.
-- State model: all of #87's ported guard tests; two concurrent HTTP clients — client A reads at rev N, external edit → rev N+1, client A's write rejected with diff while a fresh read-then-write succeeds; `expectedRevisionId` correct → proceeds and appears as `requiredRevisionId`; stale → rejected naming both; TTL sweep removes aged entries and working-copy files.
-- Logging: a tool's `log.info` reaches stderr/file and produces **no** `notifications/message` on a request without `io.modelcontextprotocol/logLevel`.
+### PR 4: cutover and removals
+
+- Make the official SDK path the default after real-client smoke succeeds. Remove fastmcp, `mcp-proxy`, raw v1 SDK code, `cachedToolsList.js`, `sessionContext.js`, disconnect handlers, the request-guard monkey-patch, `/sse`, and other sessionful HTTP routes.
+- In the dual-runtime path, remove the feature flag only after the full suite, wire matrix, rollback rehearsal, and release-note review pass. In the atomic path, retain the release tag at the final fastmcp version and the rehearsed git-revert/redeploy procedure as the operational rollback.
+- Update docs/configuration with the HTTP breaking change and exact client migration instructions. Do not implement #75 operational scope here.
+
+## Required tests
+
+### Facade and protocol wire tests
+
+- A real SDK client over stdio performs modern discovery, lists tools, calls a tool, and shuts down cleanly.
+- A legacy stdio client completes its supported initialization path and calls the same tool.
+- A modern authenticated HTTP client makes discover/list/call requests. A legacy stateless HTTP client makes its supported request against the same endpoint.
+- The tests assert actual request/response wire shapes, cache hints, tool ordering, protocol identity, and that no session ID is required or returned.
+- `/sse` and former session endpoints return the documented removal response. `/healthz` rejects missing/invalid token or Origin before returning exactly its fixed liveness payload; a valid response contains no version, profile, server, client, tool, handle, or environment identity.
+- Test supported `_meta` client identity as authenticated observability metadata with modern SDK traffic, and prove spoofed/unauthenticated metadata has no authority. #75 separately tests its authenticated SDK `status` client reading server identity from the protocol response `_meta`.
+- Start, close, and restart stdio/HTTP servers in one process. Assert timers, connection state, handle stores, and filesystem resources are closed or retained according to the dirty-workspace rule.
+
+### Handle, guard, and workspace tests
+
+- A valid HTTP handle permits only its bound service-principal fingerprint, configured profile, invalidation epoch, file, tab, revision, and structural fingerprint. One negative case per binding, token rotation, configured-profile change, an expired handle, malformed/unknown handle, and random high-entropy guessing all fail without a Google write. Tests assert no raw credential is stored or logged.
+- HTTP without a handle fails even if it supplies a current revision. A pinned stdio connection succeeds from its own implicit read state; a second connection cannot consume it.
+- `expectedRevisionId` matching the validated handle reaches `WriteControl.requiredRevisionId`; mismatch fails before the write. A remote revision change produces the documented conflict result.
+- Two handles for identical content receive distinct editable files while sharing one immutable baseline. Handle A's edit never appears in B. Expiry never deletes a dirty workspace, and a clean unreferenced baseline is reclaimed only after its last handle expires.
+- An external structural change produces a fingerprint conflict. The migration's internal walker is unit-tested across text, tables, tabs, and nested structural elements without exposing #105's public index API.
+- The `subscriptions/listen` spike result is covered by a real authenticated request test matching the selected SDK configuration.
+
+### Package and regression gates
+
+- `npm ci` and the complete Jest suite pass under Node 20 and Node 22.
+- The generated inventory snapshot is clean; no fastmcp/raw v1 import remains after PR 4.
+- Existing direct-tool tests still work through the facade's `{ addTool }` shape. The load-bearing live-tool count tests remain green without hand-updating unrelated tool totals.
 
 ## Acceptance criteria
 
-- A 2026-07-28 client and a 2025-era client both work against the same build on both transports, per the SDK's dual-era contract (*"nothing in v2 puts a 2026-07-28 byte on the wire by default"* — serving modern is our explicit opt-in via `serveStdio`/`createMcpHandler`).
-- No `Mcp-Session-Id`, no `/sse`, no `/ping`, no session objects anywhere in `dist/`; grep-clean for `fastmcp`.
-- Two clients sharing one HTTP instance cannot corrupt each other's read/write guard state or working copies — proven over the wire, not just in unit tests.
-- Existing user configs (stdio `command`+`args`) work without any re-setup.
-- Issues #75 and #87 closable with links to the landed tests; #108/#74/#56/#91 updated with what landed and what remains.
+- `package.json` and lockfile install exact `@modelcontextprotocol/server@2.0.0` and `@modelcontextprotocol/node@2.0.0`, Zod `>=4.2`, and Node `>=20`; Node 20 and 22 CI are green.
+- The selected official SDK facade has a recorded ViteMCP comparison and passed real-SDK stdio/HTTP/auth/shutdown tests.
+- Modern stdio, legacy stdio, modern authenticated HTTP, and legacy stateless authenticated HTTP all call a real tool on the same release build. The removal of sessionful HTTP is documented and tested.
+- Every HTTP Docs mutation has a validated, unguessable, server-minted `readHandle` bound to the effective service-principal credential fingerprint, configured profile, invalidation epoch, file/tab/revision/fingerprint, and an expiry under 24 hours. A revision string alone cannot authorize it. The one-token deployment does not claim per-client identity isolation.
+- Stdio implicit read state is connection-pinned; no HTTP session state, global default read state, `Mcp-Session-Id`, or session cleanup remains.
+- Editable workspaces are unique per handle; immutable baselines are shareable; TTL cleanup preserves every dirty file. The deployment limitation is explicit in docs and startup diagnostics.
+- `/healthz` is authenticated and returns liveness only. `server/discover` is protocol discovery, while #75's later authenticated SDK `status` client reads server identity from response `_meta`. Auth, middleware ordering, metadata treatment, and `subscriptions/listen` behavior are verified over the wire.
+- #87 closes only after all replacement criteria pass; #75 and #108 stay open with their narrowed scopes recorded. #71 is not started until this migration lands.
 
-## Risks / open questions
+## Risks and open questions to resolve in PR 1
 
-- **SDK v2.0.0 is ~2 weeks old.** Mitigation: the façade confines SDK API churn to `mcpServer.js` + `index.js`; pin exact version.
-- **Per-request server construction cost on HTTP** (156 `registerTool` calls). Category imports are module-cached; if profiling shows registration overhead, memoize the built server per era — verify what `createMcpHandler` caches before optimizing. `docs/startup-performance.md` numbers should be re-measured after Phase 1.
-- **Client-era reality check:** confirm current Claude Code/Desktop behavior against `serveStdio` fallback early in Phase 1 (manual smoke), since the era handshake is the one thing unit tests can't fully prove.
-- The legacy-alias layer re-registers tools through the same façade — verify alias count and the double-wrap invariant (`dist/tools/index.js:211-222`) still hold under v2 registration.
+- Verify the exact 2.0.0 API names/signatures for HTTP serving, `ServerOptions.cacheHints`, stateless legacy mode, shutdown, client identity metadata, and `subscriptions/listen`. The plan deliberately does not invent undocumented SDK calls.
+- Derive a non-reversible credential fingerprint from the authenticated bearer without storing or logging the raw token, bind it to the configured Google profile and invalidation epoch, and prove token rotation and profile changes invalidate outstanding handles. This release intentionally does not distinguish clients sharing the bearer.
+- Measure 156-tool registration cost with the selected official SDK and document whether the supported factory/caching pattern already addresses it. Do not add ad hoc server reuse that can leak request state.
+- Decide the dirty-workspace recovery operator workflow and disk-pressure alert threshold before enabling automatic expiry cleanup in production.

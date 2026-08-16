@@ -2,6 +2,10 @@
 
 Issue: [#71](https://github.com/karthikcsq/google-tools-mcp/issues/71) · Verified against `main` @ 8640240. Revised after adversarial review.
 
+## Migration precondition
+
+The MCP 2026-07-28 migration must complete first. It replaces fastmcp and rewrites every tool module's `UserError` import, so this plan's ten-import inventory and every line anchor must be re-verified against the final SDK v2 runtime. Do not begin package edits from the `8640240` inventory below.
+
 ## Root cause
 
 `package.json` depends on the 196 MB / 1,823-file umbrella `googleapis` (`^171.4.0`) to use **ten** of its several hundred API surfaces. The cost is paid at every launch twice: module import (~80 % of startup per `docs/startup-performance.md:62-66`) and, for npx launches, per-file dependency verification. All ten import sites are top-level static, so the full load precedes the MCP handshake — the lazy category loader is defeated because `tools/index.js:15` itself imports googleapis.
@@ -52,4 +56,4 @@ Recon shows the swap is smaller than the issue estimated:
 
 ## Sequencing
 
-The open-PRs precondition is satisfied (PRs #103/#77 merged 2026-08-03). Land early and alone — it touches the same files as most other plans; do not interleave with #86/#91 mid-flight. If #86 lands first, step 6 disappears; if this lands first, #86 rebases trivially.
+Hard-blocked on the final MCP SDK runtime cutover. Re-baseline the import inventory, package tree, tests, startup measurement, and all line anchors after migration, then land this alone. The open-PRs precondition remains satisfied (PRs #103/#77 merged 2026-08-03). Do not interleave with #86/#91 mid-flight; if #86 lands first, step 6 disappears.
