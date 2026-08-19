@@ -16,6 +16,9 @@
         "file": "dist/clients.js"
       },
       {
+        "file": "dist/docsHandles.js"
+      },
+      {
         "file": "dist/docsStructure.js"
       },
       {
@@ -26,6 +29,9 @@
       },
       {
         "file": "dist/googleSheetsApiHelpers.js"
+      },
+      {
+        "file": "dist/handleRuntime.js"
       },
       {
         "file": "dist/helpers.js"
@@ -604,6 +610,9 @@
       },
       {
         "file": "tests/readGoogleDocWorkspace.test.js"
+      },
+      {
+        "file": "tests/readHandleIntegration.test.js"
       },
       {
         "file": "tests/readTracker.test.js"

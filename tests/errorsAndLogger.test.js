@@ -224,6 +224,47 @@ describe('diagnostic redaction', () => {
         expect(redactDiagnostic(revoked.proxy)).toBe('[Unserializable diagnostic]');
     });
 
+    it('redacts a registered secret that straddles the 65,536-character truncation boundary', () => {
+        // Mirrors dist/errors.js's MAX_DIAGNOSTIC_STRING_LENGTH. Not exported, so
+        // it is duplicated here deliberately; if that constant changes, this
+        // boundary math needs to move with it.
+        const MAX_DIAGNOSTIC_STRING_LENGTH = 65_536;
+        const secret = 'straddling-runtime-secret-0123456789ABCDEF';
+        const remove = registerSecret(secret);
+        try {
+            // Position the secret so it starts before the cutoff and ends well
+            // after it, i.e. it straddles the boundary the old truncate-first
+            // implementation would have sliced through.
+            const prefixLength = MAX_DIAGNOSTIC_STRING_LENGTH - Math.floor(secret.length / 2);
+            const value = `${'x'.repeat(prefixLength)}${secret}${'y'.repeat(256)}`;
+            expect(prefixLength).toBeLessThan(MAX_DIAGNOSTIC_STRING_LENGTH);
+            expect(prefixLength + secret.length).toBeGreaterThan(MAX_DIAGNOSTIC_STRING_LENGTH);
+
+            const redacted = redactDiagnostic(value);
+            expect(typeof redacted).toBe('string');
+
+            // No 8+ character window of the secret may survive anywhere in the
+            // output — including the prefix half that a truncate-then-redact
+            // implementation would have left behind.
+            for (let start = 0; start + 8 <= secret.length; start += 1) {
+                expect(redacted).not.toContain(secret.slice(start, start + 8));
+            }
+            expect(redacted).toContain('[REDACTED]');
+        } finally {
+            remove();
+        }
+    });
+
+    it('still bounds output length after redacting a very large string', () => {
+        const MAX_DIAGNOSTIC_STRING_LENGTH = 65_536;
+        const value = `${'z'.repeat(MAX_DIAGNOSTIC_STRING_LENGTH * 3)}token=${secretValues[1]}`;
+        const redacted = redactDiagnostic(value, { secrets: [secretValues[1]] });
+
+        expect(typeof redacted).toBe('string');
+        expect(redacted.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_STRING_LENGTH + '[Diagnostic truncated]'.length);
+        expect(redacted).not.toContain(secretValues[1]);
+    });
+
     it('bounds diagnostic depth and node count', () => {
         const deep = {};
         let cursor = deep;

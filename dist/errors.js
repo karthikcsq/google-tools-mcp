@@ -165,13 +165,35 @@ function collectSecrets(extraSecrets) {
 }
 
 function redactString(value, secrets) {
-    let result = value.length > MAX_DIAGNOSTIC_STRING_LENGTH
-        ? `${value.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH)}${TRUNCATED}`
-        : value;
+    // Redact the FULL string before truncating, with no intermediate
+    // fixed-offset clamp of any kind. Any slice applied before the redaction
+    // passes run — no matter how large — cuts at a predictable offset, and a
+    // secret whose bytes straddle that cut keeps its surviving prefix in the
+    // output: the exact-match `split(secret)` below can no longer find the
+    // *complete* registered secret once it has been cut, and an unlabeled
+    // fragment won't match the labeled-pattern regexes either. That is true
+    // whether the clamp is 65,536 chars or 1,048,576 — a fixed offset is a
+    // fixed offset. The only way to guarantee a secret can't be split is to
+    // let every redaction pass see every character of the input at least
+    // once before anything is cut.
+    //
+    // Cost: the regexes and the per-secret split/join loop below are O(length)
+    // (and O(length * secret count) for the loop), so a pathological
+    // multi-megabyte diagnostic string means more work than the old
+    // truncate-first order. This function only runs on the error/diagnostic
+    // path (bounded per call by MAX_DIAGNOSTIC_NODES), never on the request
+    // hot path, so a bounded number of full linear passes over a large string
+    // is an acceptable, deterministic cost for a guarantee that holds
+    // regardless of where a secret happens to land.
+    let result = value;
     result = result.replace(/([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|oauth[_-]?token|session[_-]?token|token|client[_-]?secret|api[_-]?key|google[_-]?api[_-]?key|key|password|credential)=)[^&#\s"']*/gi, `$1${REDACTED}`);
     result = result.replace(/((?:authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|oauth[_-]?token|session[_-]?token|token[_-]?value|token|client[_-]?secret|api[_-]?key|google[_-]?api[_-]?key|private[_-]?key|password|credential|cookie|set[_-]?cookie)\s*[=:]\s*["']?)(?:Bearer\s+)?[^\s,;"'}\]]+/gi, `$1${REDACTED}`);
     result = result.replace(/\bBearer\s+[^\s,;"'}\]]+/gi, `Bearer ${REDACTED}`);
     for (const secret of secrets) result = result.split(secret).join(REDACTED);
+
+    if (result.length > MAX_DIAGNOSTIC_STRING_LENGTH) {
+        result = `${result.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH)}${TRUNCATED}`;
+    }
     return result;
 }
 
