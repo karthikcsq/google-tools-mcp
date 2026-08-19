@@ -97,6 +97,22 @@ describe('official SDK v2 facade', () => {
         } finally { await handler.close(); }
     });
 
+    it('answers server/discover well-formed and inside a strict time bound (Claude Code stalls 30s on a slow/malformed reply)', async () => {
+        const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const start = Date.now();
+            const response = await handler.fetch(modern('server/discover'));
+            const discover = await response.json();
+            const elapsedMs = Date.now() - start;
+            expect(elapsedMs).toBeLessThan(2000);
+            expect(discover.result.supportedVersions).toContain(MCP_PROTOCOL_VERSION);
+            expect(discover.result.capabilities.tools.listChanged).toBe(false);
+            expect(discover.result._meta['io.modelcontextprotocol/serverInfo']).toEqual({ name: 'google-tools-mcp', version: '2.0.0' });
+            expect(discover.result.instructions).toContain('Google Workspace tools');
+        } finally { await handler.close(); }
+    });
+
     it('rejects missing and duplicate tool names before constructing an SDK server', async () => {
         await expect(factoryWith({ name: ' ', parameters: z.object({}), execute: async () => {} })).rejects.toThrow(/non-empty/);
         await expect(factoryWith(
@@ -156,6 +172,59 @@ describe('official SDK v2 facade', () => {
         } finally { await handler.close(); }
     });
 
+    // Gap #1 (docs/plans/mcp-2026-07-28-migration.md §4): modern POSTs must carry
+    // MCP-Protocol-Version, Mcp-Method, and Mcp-Name in agreement with the body, or
+    // fail 400/-32020 (HeaderMismatch). Per the plan, the facade is only required
+    // to add a check the SDK itself does not already enforce (historically
+    // typescript-sdk#2589: a modern POST with an absent MCP-Protocol-Version header).
+    // Exercising the installed @modelcontextprotocol/server@2.0.0 directly (see
+    // node_modules/@modelcontextprotocol/server/dist/src-CX2iR2pK.mjs
+    // classifyRequestBody/validateStandardRequestHeaders) shows this snapshot
+    // already rejects Mcp-Method/Mcp-Name mismatches and absences with 400/-32020
+    // on its own; only the MCP-Protocol-Version *absence* case is left unenforced
+    // by the SDK (the classifier only cross-checks the header when it is present),
+    // which is exactly what the facade's existing pre-SDK check above (missingHeader)
+    // covers. This test pins the SDK's native -32020 behavior for the header/method/
+    // name cells so an SDK upgrade that changes it is caught here, and confirms
+    // legacy POSTs (which carry none of these headers) are never affected.
+    it('rejects modern POST header/body mismatches with 400 and -32020, leaving legacy POSTs unaffected', async () => {
+        const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        const expectHeaderMismatch = async (request) => {
+            const response = await handler.fetch(request);
+            expect(response.status).toBe(400);
+            const body = await response.json();
+            expect(body.error.code).toBe(-32020);
+        };
+        try {
+            // Mcp-Method header disagrees with the body's method.
+            await expectHeaderMismatch(modern('tools/list', {}, { 'mcp-method': 'tools/call' }));
+
+            // Mcp-Method header absent entirely.
+            const noMethod = modern('tools/list');
+            noMethod.headers.delete('mcp-method');
+            await expectHeaderMismatch(noMethod);
+
+            // Mcp-Name header disagrees with params.name on tools/call.
+            await expectHeaderMismatch(modern('tools/call', { name: 'noop', arguments: {} }, { 'mcp-name': 'not-noop' }));
+
+            // Mcp-Name header absent while the body names params.name on tools/call.
+            const noName = modern('tools/call', { name: 'noop', arguments: {} }, { 'mcp-name': 'noop' });
+            noName.headers.delete('mcp-name');
+            await expectHeaderMismatch(noName);
+
+            // A correctly-headered modern call still succeeds (the checks are not overzealous).
+            const okCall = await (await handler.fetch(modern('tools/call', { name: 'noop', arguments: {} }, { 'mcp-name': 'noop' }))).json();
+            expect(okCall.result.content).toEqual([{ type: 'text', text: 'ok' }]);
+
+            // Legacy POSTs carry none of these headers and must keep working unchanged.
+            const initialized = await legacyJson(await handler.fetch(legacy('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } })));
+            expect(initialized.result.protocolVersion).toBe('2025-11-25');
+            const called = await legacyJson(await handler.fetch(legacy('tools/call', { name: 'noop', arguments: {} }, 2)));
+            expect(called.result.content).toEqual([{ type: 'text', text: 'ok' }]);
+        } finally { await handler.close(); }
+    });
+
     it('derives the same canonical principal fingerprint from every accepted bearer spelling', async () => {
         const factory = await factoryWith({ name: 'identity', parameters: z.object({}), execute: async () => getRequestContext().principalFingerprint });
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
@@ -168,6 +237,46 @@ describe('official SDK v2 facade', () => {
             expect(await call({ authorization: `bearer   ${TOKEN}` })).toBe(normal);
             expect(await call({ authorization: '', 'x-mcp-token': TOKEN })).toBe(normal);
             expect(normal).toMatch(/^hmac-sha256:[A-Za-z0-9_-]{43}$/);
+        } finally { await handler.close(); }
+    });
+
+    it('treats modern _meta client identity as non-authoritative observability data', async () => {
+        const factory = await factoryWith({ name: 'identity', parameters: z.object({}), execute: async () => getRequestContext().principalFingerprint });
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        const spoofedMeta = {
+            'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+            'io.modelcontextprotocol/clientCapabilities': {},
+            'io.modelcontextprotocol/clientInfo': { name: 'admin-console', version: 'root', role: 'administrator', privileged: true },
+        };
+        const buildRequest = ({ authorized }) => new Request('http://localhost/mcp', {
+            method: 'POST',
+            headers: {
+                ...(authorized ? { authorization: `Bearer ${TOKEN}` } : {}),
+                'content-type': 'application/json',
+                'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+                'mcp-method': 'tools/call',
+                'mcp-name': 'identity',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'identity', arguments: {}, _meta: spoofedMeta } }),
+        });
+        try {
+            const spoofedResponse = await handler.fetch(buildRequest({ authorized: true }));
+            const spoofedResult = await spoofedResponse.json();
+            const normalResponse = await handler.fetch(modern('tools/call', { name: 'identity', arguments: {} }, { 'mcp-name': 'identity' }));
+            const normalResult = await normalResponse.json();
+            // Spoofed client identity gets the exact same non-privileged fingerprint as an
+            // ordinary call authenticated with the same bearer token -- it grants nothing.
+            expect(spoofedResult.result.content[0].text).toBe(normalResult.result.content[0].text);
+            expect(spoofedResult.result.content[0].text).toMatch(/^hmac-sha256:[A-Za-z0-9_-]{43}$/);
+            // The spoofed identity claim never leaks into any response payload.
+            const serialized = JSON.stringify(spoofedResult);
+            expect(serialized).not.toContain('admin-console');
+            expect(serialized).not.toContain('administrator');
+            expect(serialized).not.toContain('privileged');
+
+            // The same spoofed _meta grants no bypass of authentication.
+            const unauthenticated = await handler.fetch(buildRequest({ authorized: false }));
+            expect(unauthenticated.status).toBe(401);
         } finally { await handler.close(); }
     });
 
@@ -249,6 +358,32 @@ describe('official SDK v2 facade', () => {
             send(3, 'tools/call', { name: 'echo', arguments: { text: 'wire' } });
             expect((await next()).result.content[0].text).toBe('wire');
             expect(logger.info).toHaveBeenCalledWith('stderr only');
+        } finally { await runtime.close(); }
+    });
+
+    it('serves a legacy (pre-2026-07-28) stdio client through its supported initialize handshake and a tool call', async () => {
+        // The installed @modelcontextprotocol/server@2.0.0 stdio entry (see
+        // node_modules/@modelcontextprotocol/server/dist/stdio.mjs serveStdio,
+        // default options.legacy === 'serve') classifies an opening message with
+        // no per-request _meta envelope claim as "legacy" and pins the connection
+        // to a legacy-era server instance for its lifetime -- observed real support,
+        // not a fake pin.
+        const input = new PassThrough();
+        const output = new PassThrough();
+        const logger = { info: jest.fn(), error: jest.fn() };
+        const factory = await prepareMcpServerFactory({ logger, registerTools: async (server) => server.addTool({ name: 'echo', description: 'e', parameters: z.object({ text: z.string() }), execute: async ({ text }) => text }) });
+        const runtime = startV2Stdio(factory, { input, output, logger });
+        const next = stdioMessages(output);
+        const send = (id, method, params = {}) => input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+        try {
+            send(1, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'legacy-test', version: '1' } });
+            const initialized = await next();
+            expect(initialized.result.protocolVersion).toBe('2025-11-25');
+            input.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })}\n`);
+            send(2, 'tools/list');
+            expect((await next()).result.tools.map(({ name }) => name)).toEqual(['echo']);
+            send(3, 'tools/call', { name: 'echo', arguments: { text: 'legacy-wire' } });
+            expect((await next()).result.content[0].text).toBe('legacy-wire');
         } finally { await runtime.close(); }
     });
 
