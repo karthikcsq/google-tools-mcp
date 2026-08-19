@@ -16,6 +16,9 @@
         "file": "dist/clients.js"
       },
       {
+        "file": "dist/docsStructure.js"
+      },
+      {
         "file": "dist/errors.js"
       },
       {
@@ -520,6 +523,9 @@
     "tests": [
       {
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
+      },
+      {
+        "file": "tests/docsStructure.test.js"
       },
       {
         "file": "tests/docsWriteControl.test.js"
