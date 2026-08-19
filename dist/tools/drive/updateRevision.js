@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -20,7 +20,7 @@ export function register(server) {
             if (args.published !== undefined) body.published = args.published;
             if (args.publishAuto !== undefined) body.publishAuto = args.publishAuto;
             if (Object.keys(body).length === 0) {
-                throw new UserError('No fields to update. Provide at least one of: keepForever, published, publishAuto.');
+                throw publicError('No fields to update. Provide at least one of: keepForever, published, publishAuto.');
             }
             try {
                 const response = await drive.revisions.update({
@@ -39,12 +39,13 @@ export function register(server) {
                 }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error updating revision: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`File or revision not found (fileId: ${args.fileId}, revisionId: ${args.revisionId}).`);
+                    throw publicError(`File or revision not found (fileId: ${args.fileId}, revisionId: ${args.revisionId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. You need edit access to update revisions.');
-                throw new UserError(`Failed to update revision: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. You need edit access to update revisions.');
+throw wrapOperationError('update Drive revision', error, { status: error?.code });
             }
         },
     });

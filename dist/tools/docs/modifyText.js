@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, TextFindParameter, TextStyleParameters, ParagraphStyleParameters } from '../../types.js';
@@ -132,10 +132,10 @@ export function register(server) {
                     });
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
                 // Resolve target to numeric indices
@@ -148,7 +148,7 @@ export function register(server) {
                 else if ('textToFind' in args.target) {
                     const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance, args.tabId);
                     if (!range) {
-                        throw new UserError(`Could not find text "${args.target.textToFind}"${args.target.matchInstance ? ` (instance ${args.target.matchInstance})` : ''}${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
+                        throw publicError(`Could not find text "${args.target.textToFind}"${args.target.matchInstance ? ` (instance ${args.target.matchInstance})` : ''}${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
                     }
                     startIndex = range.startIndex;
                     endIndex = range.endIndex;
@@ -202,9 +202,9 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error in modifyText for doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
-                throw new UserError(`Failed to modify text: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('modify document text', error, { status: error?.code });
             }
         },
     });

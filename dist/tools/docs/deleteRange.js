@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
@@ -42,7 +42,7 @@ export function register(server) {
             });
             log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
             if (args.endIndex <= args.startIndex) {
-                throw new UserError('End index must be greater than start index for deletion.');
+                throw publicError('End index must be greater than start index for deletion.');
             }
             try {
                 // If tabId is specified, verify the tab exists
@@ -54,10 +54,10 @@ export function register(server) {
                     });
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
                 const range = {
@@ -78,9 +78,9 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error deleting range in doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
-                throw new UserError(`Failed to delete range: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('delete document range', error, { status: error?.code });
             }
         },
     });

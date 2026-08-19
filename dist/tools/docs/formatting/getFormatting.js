@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../../clients.js';
 import { DocumentIdParameter, TextFindParameter } from '../../../types.js';
@@ -120,7 +120,7 @@ export function register(server) {
                         args.target.matchInstance, args.tabId
                     );
                     if (!range) {
-                        throw new UserError(
+                        throw publicError(
                             `Could not find instance ${args.target.matchInstance ?? 1} of text "${args.target.textToFind}"${args.tabId ? ` in tab ${args.tabId}` : ''}.`
                         );
                     }
@@ -143,7 +143,7 @@ export function register(server) {
                 if (args.tabId) {
                     const targetTab = GDocsHelpers.findTabById(res.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     bodyContent = targetTab.documentTab?.body?.content;
                 } else {
@@ -151,7 +151,7 @@ export function register(server) {
                 }
 
                 if (!bodyContent) {
-                    throw new UserError('Document has no content.');
+                    throw publicError('Document has no content.');
                 }
 
                 const result = extractFormattingFromContent(bodyContent, startIndex, endIndex);
@@ -163,8 +163,8 @@ export function register(server) {
                 }, null, 2);
             } catch (error) {
                 log.error(`Error in getFormatting for doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError) throw error;
-                throw new UserError(`Failed to get formatting: ${error.message || 'Unknown error'}`);
+                if (isPublicError(error)) throw error;
+throw wrapOperationError('get document formatting', error, { status: error?.code });
             }
         },
     });

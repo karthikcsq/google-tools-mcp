@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { getDocsClient } from '../../../clients.js';
 import { ApplyParagraphStyleToolParameters, NotImplementedError, } from '../../../types.js';
 import * as GDocsHelpers from '../../../googleDocsApiHelpers.js';
@@ -22,13 +22,13 @@ export function register(server) {
                     log.info(`Finding text "${args.target.textToFind}" (instance ${args.target.matchInstance ?? 'auto'})${args.tabId ? ` in tab ${args.tabId}` : ''}`);
                     const textRange = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance, args.tabId);
                     if (!textRange) {
-                        throw new UserError(`Could not find "${args.target.textToFind}" in the document${args.tabId ? ` (tab: ${args.tabId})` : ''}.`);
+                        throw publicError(`Could not find "${args.target.textToFind}" in the document${args.tabId ? ` (tab: ${args.tabId})` : ''}.`);
                     }
                     log.info(`Found text at range ${textRange.startIndex}-${textRange.endIndex}, now locating containing paragraph`);
                     // Then find the paragraph containing this text
                     const paragraphRange = await GDocsHelpers.getParagraphRange(docs, args.documentId, textRange.startIndex, args.tabId);
                     if (!paragraphRange) {
-                        throw new UserError(`Found the text but could not determine the paragraph boundaries.`);
+                        throw publicError(`Found the text but could not determine the paragraph boundaries.`);
                     }
                     startIndex = paragraphRange.startIndex;
                     endIndex = paragraphRange.endIndex;
@@ -39,7 +39,7 @@ export function register(server) {
                     log.info(`Finding paragraph containing index ${args.target.indexWithinParagraph}${args.tabId ? ` in tab ${args.tabId}` : ''}`);
                     const paragraphRange = await GDocsHelpers.getParagraphRange(docs, args.documentId, args.target.indexWithinParagraph, args.tabId);
                     if (!paragraphRange) {
-                        throw new UserError(`Could not find paragraph containing index ${args.target.indexWithinParagraph}${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
+                        throw publicError(`Could not find paragraph containing index ${args.target.indexWithinParagraph}${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
                     }
                     startIndex = paragraphRange.startIndex;
                     endIndex = paragraphRange.endIndex;
@@ -53,10 +53,10 @@ export function register(server) {
                 }
                 // Verify that we have a valid range
                 if (startIndex === undefined || endIndex === undefined) {
-                    throw new UserError('Could not determine target paragraph range from the provided information.');
+                    throw publicError('Could not determine target paragraph range from the provided information.');
                 }
                 if (endIndex <= startIndex) {
-                    throw new UserError(`Invalid paragraph range: end index (${endIndex}) must be greater than start index (${startIndex}).`);
+                    throw publicError(`Invalid paragraph range: end index (${endIndex}) must be greater than start index (${startIndex}).`);
                 }
                 // STEP 2: Build and apply the paragraph style request
                 log.info(`Building paragraph style request for range ${startIndex}-${endIndex}`);
@@ -75,12 +75,12 @@ export function register(server) {
                 // Detailed error logging
                 log.error(`Error applying paragraph style in doc ${args.documentId}:`);
                 log.error(error.stack || error.message || error);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
                 if (error instanceof NotImplementedError)
                     throw error;
                 // Provide a more helpful error message
-                throw new UserError(`Failed to apply paragraph style: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('apply document paragraph style', error, { status: error?.code });
             }
         },
     });

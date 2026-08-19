@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -35,7 +35,7 @@ export function register(server) {
                 let queryString = `'${args.folderId}' in parents and trashed=false`;
                 // Filter by type if specified
                 if (!args.includeSubfolders && !args.includeFiles) {
-                    throw new UserError('At least one of includeSubfolders or includeFiles must be true.');
+                    throw publicError('At least one of includeSubfolders or includeFiles must be true.');
                 }
                 if (!args.includeSubfolders) {
                     queryString += ` and mimeType!='application/vnd.google-apps.folder'`;
@@ -70,12 +70,13 @@ export function register(server) {
                 return JSON.stringify({ folders, files }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing folder contents: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Folder not found. Check the folder ID.');
+                    throw publicError('Folder not found. Check the folder ID.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have access to this folder.');
-                throw new UserError(`Failed to list folder contents: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have access to this folder.');
+throw wrapOperationError('list folder contents', error, { status: error?.code });
             }
         },
     });

@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -36,12 +36,13 @@ export function register(server) {
                 }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error creating folder: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Parent folder not found. Check the parent folder ID.');
+                    throw publicError('Parent folder not found. Check the parent folder ID.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have write access to the parent folder.');
-                throw new UserError(`Failed to create folder: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have write access to the parent folder.');
+throw wrapOperationError('create folder', error, { status: error?.code });
             }
         },
     });

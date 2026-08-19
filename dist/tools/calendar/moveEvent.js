@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -50,16 +50,17 @@ export function register(server) {
                     2
                 );
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error moving event: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(
+                    throw publicError(
                         'Event or calendar not found. Check the event_id and calendar IDs.'
                     );
                 if (error.code === 403)
-                    throw new UserError(
+                    throw publicError(
                         'Permission denied. You need edit access to both source and destination calendars.'
                     );
-                throw new UserError(`Failed to move event: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('move calendar event', error, { status: error?.code });
             }
         },
     });

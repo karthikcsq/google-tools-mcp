@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -87,10 +87,11 @@ export function register(server) {
                 return JSON.stringify(result, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing shared items: ${error.message || error}`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have the correct Drive API scopes.');
-                throw new UserError(`Failed to list shared items: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have the correct Drive API scopes.');
+throw wrapOperationError('list shared items', error, { status: error?.code });
             }
         },
     });

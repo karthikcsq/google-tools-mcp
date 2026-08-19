@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getTasksClient } from '../../clients.js';
 
@@ -16,10 +16,11 @@ export function register(server) {
                 const lists = response.data.items || [];
                 return JSON.stringify(lists.map((l) => ({ id: l.id, title: l.title })), null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing task lists: ${error.message || error}`);
                 if (error.code === 401)
-                    throw new UserError('Authentication failed. Try logging out and re-authenticating.');
-                throw new UserError(`Failed to list task lists: ${error.message || 'Unknown error'}`);
+                    throw publicError('Authentication failed. Try logging out and re-authenticating.');
+throw wrapOperationError('list task lists', error, { status: error?.code });
             }
         },
     });

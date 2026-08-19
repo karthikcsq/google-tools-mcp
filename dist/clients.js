@@ -1,7 +1,7 @@
 // Combined clients for google-tools-mcp.
 // Lazy-loads all Google API clients (Docs, Drive, Sheets, Script, Gmail) on first use.
 import { google } from 'googleapis';
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from './errors.js';
 import { exec } from 'child_process';
 import { authorize } from './auth.js';
 import { logger } from './logger.js';
@@ -24,9 +24,10 @@ async function ensureAuth() {
         authClient = await authorize();
         logger.info('Google API client authorized successfully.');
     } catch (error) {
+        if (isPublicError(error)) throw error;
         logger.error('Failed to initialize Google API client:', error);
         authClient = null;
-        throw new UserError(
+        throw publicError(
             'Google authentication required. A browser window should have opened automatically. ' +
             'If not, run: npx google-tools-mcp auth\n\n' +
             'Details: ' + (error.message || error)
@@ -198,6 +199,7 @@ export async function withAuthRetry(fn) {
     try {
         return await fn();
     } catch (error) {
+        if (isPublicError(error)) throw error;
         if (isInvalidGrantError(error)) {
             logger.warn('Got invalid_grant during API call. Re-authenticating...');
             await reauthorize();
@@ -212,7 +214,7 @@ export async function withAuthRetry(fn) {
                     logger.warn(`Auto-opening enable URL for ${apiLabel}: ${info.enableUrl}`);
                     openBrowser(info.enableUrl);
                 }
-                throw new UserError(
+                throw publicError(
                     `${apiLabel} is not enabled${info.projectId ? ` for project ${info.projectId}` : ''}. ` +
                     `A browser window was opened to the enable page — click "Enable", wait ~30 seconds for it to propagate, then retry your request.\n\n` +
                     `Enable URL: ${info.enableUrl}`
@@ -226,55 +228,55 @@ export async function withAuthRetry(fn) {
 // --- Individual client getters ---
 export async function getDocsClient() {
     const { googleDocs: docs } = await initializeGoogleClient();
-    if (!docs) throw new UserError('Google Docs client is not initialized.');
+    if (!docs) throw publicError('Google Docs client is not initialized.');
     return docs;
 }
 
 export async function getDriveClient() {
     const { googleDrive: drive } = await initializeGoogleClient();
-    if (!drive) throw new UserError('Google Drive client is not initialized.');
+    if (!drive) throw publicError('Google Drive client is not initialized.');
     return drive;
 }
 
 export async function getSheetsClient() {
     const { googleSheets: sheets } = await initializeGoogleClient();
-    if (!sheets) throw new UserError('Google Sheets client is not initialized.');
+    if (!sheets) throw publicError('Google Sheets client is not initialized.');
     return sheets;
 }
 
 export async function getAuthClient() {
     const { authClient: client } = await initializeGoogleClient();
-    if (!client) throw new UserError('Auth client is not initialized.');
+    if (!client) throw publicError('Auth client is not initialized.');
     return client;
 }
 
 export async function getScriptClient() {
     const { googleScript: script } = await initializeGoogleClient();
-    if (!script) throw new UserError('Google Script client is not initialized.');
+    if (!script) throw publicError('Google Script client is not initialized.');
     return script;
 }
 
 export async function getGmailClient() {
     const { gmailClient: gmail } = await initializeGmailClient();
-    if (!gmail) throw new UserError('Gmail client is not initialized.');
+    if (!gmail) throw publicError('Gmail client is not initialized.');
     return gmail;
 }
 
 export async function getCalendarClient() {
     const { calendarClient: calendar } = await initializeCalendarClient();
-    if (!calendar) throw new UserError('Google Calendar client is not initialized.');
+    if (!calendar) throw publicError('Google Calendar client is not initialized.');
     return calendar;
 }
 
 export async function getFormsClient() {
     const { formsClient: forms } = await initializeFormsClient();
-    if (!forms) throw new UserError('Google Forms client is not initialized.');
+    if (!forms) throw publicError('Google Forms client is not initialized.');
     return forms;
 }
 
 export async function getSlidesClient() {
     const { slidesClient: slides } = await initializeSlidesClient();
-    if (!slides) throw new UserError('Google Slides client is not initialized.');
+    if (!slides) throw publicError('Google Slides client is not initialized.');
     return slides;
 }
 
@@ -288,6 +290,6 @@ export async function initializeTasksClient() {
 
 export async function getTasksClient() {
     const { tasksClient: tasks } = await initializeTasksClient();
-    if (!tasks) throw new UserError('Google Tasks client is not initialized.');
+    if (!tasks) throw publicError('Google Tasks client is not initialized.');
     return tasks;
 }

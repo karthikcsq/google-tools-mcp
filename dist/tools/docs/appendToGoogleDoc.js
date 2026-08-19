@@ -1,5 +1,5 @@
 import * as fs from 'fs/promises';
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
@@ -43,11 +43,11 @@ export function register(server) {
                     text = await fs.readFile(args.filePath, 'utf-8');
                     log.info(`Read ${text.length} chars from file: ${args.filePath}`);
                 } catch (err) {
-                    throw new UserError(`Failed to read file at "${args.filePath}": ${err.message}`);
+throw wrapOperationError('read local text file', err, { code: err?.code });
                 }
             }
             if (!text || text.length === 0) {
-                throw new UserError('Either text or filePath must be provided with non-empty content.');
+                throw publicError('Either text or filePath must be provided with non-empty content.');
             }
             log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
             try {
@@ -65,10 +65,10 @@ export function register(server) {
                 if (args.tabId) {
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                     bodyContent = targetTab.documentTab.body?.content;
                 }
@@ -101,11 +101,11 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error appending to doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
                 if (error instanceof NotImplementedError)
                     throw error;
-                throw new UserError(`Failed to append to doc: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('append to Google document', error, { status: error?.code });
             }
         },
     });

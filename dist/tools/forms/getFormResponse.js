@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getFormsClient } from '../../clients.js';
 
@@ -33,12 +33,13 @@ export function register(server) {
                     2,
                 );
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error getting form response: ${error.message || error}`);
                 if (error.code === 401)
-                    throw new UserError('Authentication failed. Try logging out and re-authenticating.');
+                    throw publicError('Authentication failed. Try logging out and re-authenticating.');
                 if (error.code === 404)
-                    throw new UserError(`Form or response not found: ${args.formId} / ${args.responseId}`);
-                throw new UserError(`Failed to get form response: ${error.message || 'Unknown error'}`);
+                    throw publicError(`Form or response not found: ${args.formId} / ${args.responseId}`);
+throw wrapOperationError('get form response', error, { status: error?.code });
             }
         },
     });

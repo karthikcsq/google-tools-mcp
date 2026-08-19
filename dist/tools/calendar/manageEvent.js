@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -80,7 +80,7 @@ export function register(server) {
 
             try {
                 if (args.action === 'delete') {
-                    if (!args.event_id) throw new UserError('event_id is required for delete.');
+                    if (!args.event_id) throw publicError('event_id is required for delete.');
                     log.info(`Deleting event ${args.event_id} from ${args.calendar_id}`);
                     await calendar.events.delete({
                         calendarId: args.calendar_id,
@@ -91,9 +91,9 @@ export function register(server) {
                 }
 
                 if (args.action === 'create') {
-                    if (!args.summary) throw new UserError('summary is required for create.');
-                    if (!args.start_time) throw new UserError('start_time is required for create.');
-                    if (!args.end_time) throw new UserError('end_time is required for create.');
+                    if (!args.summary) throw publicError('summary is required for create.');
+                    if (!args.start_time) throw publicError('start_time is required for create.');
+                    if (!args.end_time) throw publicError('end_time is required for create.');
 
                     const eventBody = buildEventBody(args);
                     log.info(`Creating event "${args.summary}" on ${args.calendar_id}`);
@@ -110,7 +110,7 @@ export function register(server) {
                 }
 
                 if (args.action === 'update') {
-                    if (!args.event_id) throw new UserError('event_id is required for update.');
+                    if (!args.event_id) throw publicError('event_id is required for update.');
                     log.info(`Updating event ${args.event_id} on ${args.calendar_id}`);
 
                     // Fetch existing event to preserve fields
@@ -133,15 +133,15 @@ export function register(server) {
                     return JSON.stringify(formatResult('updated', response.data), null, 2);
                 }
 
-                throw new UserError(`Unknown action: ${args.action}`);
+                throw publicError(`Unknown action: ${args.action}`);
             } catch (error) {
-                if (error instanceof UserError) throw error;
+                if (isPublicError(error)) throw error;
                 log.error(`Error in manageEvent (${args.action}): ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Calendar or event not found. Check the IDs.');
+                    throw publicError('Calendar or event not found. Check the IDs.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. You may not have edit access to this calendar.');
-                throw new UserError(`Failed to ${args.action} event: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. You may not have edit access to this calendar.');
+throw wrapOperationError('manage calendar event', error, { status: error?.code });
             }
         },
     });

@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient, getDocsClient } from '../../clients.js';
 import { insertMarkdown, formatInsertResult } from '../../markdown-transformer/index.js';
@@ -89,12 +89,13 @@ export function register(server) {
                 }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error creating document: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Parent folder not found. Check the folder ID.');
+                    throw publicError('Parent folder not found. Check the folder ID.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have write access to the destination folder.');
-                throw new UserError(`Failed to create document: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have write access to the destination folder.');
+throw wrapOperationError('create document', error, { status: error?.code });
             }
         },
     });

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 
@@ -60,12 +60,12 @@ export function register(server) {
 
             // Validate file exists
             if (!fs.existsSync(args.localPath)) {
-                throw new UserError(`File not found: ${args.localPath}`);
+                throw publicError(`File not found: ${args.localPath}`);
             }
 
             const stats = fs.statSync(args.localPath);
             if (!stats.isFile()) {
-                throw new UserError(`Path is not a file: ${args.localPath}`);
+                throw publicError(`Path is not a file: ${args.localPath}`);
             }
 
             const fileName = args.name || path.basename(args.localPath);
@@ -99,12 +99,13 @@ export function register(server) {
                     size: file.size,
                 }, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error uploading file: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Destination folder not found. Check the parentFolderId.');
+                    throw publicError('Destination folder not found. Check the parentFolderId.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have write access to the destination folder.');
-                throw new UserError(`Failed to upload file: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have write access to the destination folder.');
+throw wrapOperationError('upload file', error, { status: error?.code });
             }
         },
     });

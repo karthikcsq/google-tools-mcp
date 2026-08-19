@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getTasksClient } from '../../clients.js';
 
@@ -17,8 +17,9 @@ export function register(server) {
                 const response = await tasks.tasklists.insert({ requestBody: { title: args.title } });
                 return JSON.stringify({ id: response.data.id, title: response.data.title }, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error creating task list: ${error.message || error}`);
-                throw new UserError(`Failed to create task list: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('create task list', error, { status: error?.code });
             }
         },
     });

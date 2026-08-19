@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from './errors.js';
 import { hexToRgbColor, NotImplementedError } from './types.js';
 import { logger } from './logger.js';
 // --- Constants ---
@@ -21,6 +21,7 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
         return response.data;
     }
     catch (error) {
+        if (isPublicError(error)) throw error;
         logger.error(`Google API batchUpdate Error for doc ${documentId}:`, error.response?.data || error.message);
         // Translate common API errors to UserErrors
         const apiMessage = error.response?.data?.error?.message || error.message || '';
@@ -33,7 +34,7 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
             ((error.code === 400 || error.code === 409) && /revision|write\s*control|updated since/i.test(apiMessage))
         );
         if (isRevisionConflict) {
-            throw new UserError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`);
+            throw publicError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`);
         }
         if (error.code === 400 && error.message.includes('Invalid requests')) {
             // Try to extract more specific info if available
@@ -42,12 +43,12 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
             if (details && Array.isArray(details)) {
                 detailMsg = details.map((d) => d.description || JSON.stringify(d)).join('; ');
             }
-            throw new UserError(`Invalid request sent to Google Docs API. Details: ${detailMsg || error.message}`);
+throw wrapOperationError('send Google Docs API request', error, { status: error?.code });
         }
         if (error.code === 404)
-            throw new UserError(`Document not found (ID: ${documentId}). Check the ID.`);
+            throw publicError(`Document not found (ID: ${documentId}). Check the ID.`);
         if (error.code === 403)
-            throw new UserError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`);
+            throw publicError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`);
         // Generic internal error for others
         throw new Error(`Google API Error (${error.code}): ${error.message}`);
     }
@@ -241,10 +242,10 @@ async function getDocumentTextAndSegments(docs, documentId, tabId) {
     if (tabId) {
         const targetTab = findTabById(res.data, tabId);
         if (!targetTab) {
-            throw new UserError(`Tab with ID "${tabId}" not found in document.`);
+            throw publicError(`Tab with ID "${tabId}" not found in document.`);
         }
         if (!targetTab.documentTab?.body?.content) {
-            throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
+            throw publicError(`Tab "${tabId}" does not have content (may not be a document tab).`);
         }
         bodyContent = targetTab.documentTab.body.content;
     }
@@ -491,7 +492,7 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         // so the caller can disambiguate
         if (instance === undefined && allOccurrences.length > 1) {
             const listing = allOccurrences.map((o) => `  ${o.instance}. index ${o.startIndex}-${o.endIndex}: ${o.context}`).join('\n');
-            throw new UserError(`Found ${allOccurrences.length} instances of "${textToFind}". ` +
+            throw publicError(`Found ${allOccurrences.length} instances of "${textToFind}". ` +
                 `Specify matchInstance to target the correct one:\n${listing}`);
         }
         // Use instance 1 if not specified (single match case)
@@ -509,13 +510,13 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         return { startIndex: match.startIndex, endIndex: match.endIndex };
     }
     catch (error) {
-        if (error instanceof UserError)
+        if (isPublicError(error))
             throw error;
         logger.error(`Error finding text "${textToFind}" in doc ${documentId}: ${error.message || 'Unknown error'}`);
         if (error.code === 404)
-            throw new UserError(`Document not found while searching text (ID: ${documentId}).`);
+            throw publicError(`Document not found while searching text (ID: ${documentId}).`);
         if (error.code === 403)
-            throw new UserError(`Permission denied while searching text in doc ${documentId}.`);
+            throw publicError(`Permission denied while searching text in doc ${documentId}.`);
         throw new Error(`Failed to retrieve doc for text searching: ${error.message || 'Unknown error'}`);
     }
 }
@@ -540,10 +541,10 @@ export async function getParagraphRange(docs, documentId, indexWithin, tabId) {
         if (tabId) {
             const targetTab = findTabById(res.data, tabId);
             if (!targetTab) {
-                throw new UserError(`Tab with ID "${tabId}" not found in document.`);
+                throw publicError(`Tab with ID "${tabId}" not found in document.`);
             }
             if (!targetTab.documentTab?.body?.content) {
-                throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
+                throw publicError(`Tab "${tabId}" does not have content (may not be a document tab).`);
             }
             bodyContent = targetTab.documentTab.body.content;
         }
@@ -603,11 +604,12 @@ export async function getParagraphRange(docs, documentId, indexWithin, tabId) {
         return paragraphRange;
     }
     catch (error) {
+        if (isPublicError(error)) throw error;
         logger.error(`Error getting paragraph range for index ${indexWithin} in doc ${documentId}: ${error.message || 'Unknown error'}`);
         if (error.code === 404)
-            throw new UserError(`Document not found while finding paragraph (ID: ${documentId}).`);
+            throw publicError(`Document not found while finding paragraph (ID: ${documentId}).`);
         if (error.code === 403)
-            throw new UserError(`Permission denied while accessing doc ${documentId}.`);
+            throw publicError(`Permission denied while accessing doc ${documentId}.`);
         throw new Error(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
     }
 }
@@ -642,14 +644,14 @@ export function buildUpdateTextStyleRequest(startIndex, endIndex, style, tabId) 
     if (style.foregroundColor !== undefined) {
         const rgbColor = hexToRgbColor(style.foregroundColor);
         if (!rgbColor)
-            throw new UserError(`Invalid foreground hex color format: ${style.foregroundColor}`);
+            throw publicError(`Invalid foreground hex color format: ${style.foregroundColor}`);
         textStyle.foregroundColor = { color: { rgbColor: rgbColor } };
         fieldsToUpdate.push('foregroundColor');
     }
     if (style.backgroundColor !== undefined) {
         const rgbColor = hexToRgbColor(style.backgroundColor);
         if (!rgbColor)
-            throw new UserError(`Invalid background hex color format: ${style.backgroundColor}`);
+            throw publicError(`Invalid background hex color format: ${style.backgroundColor}`);
         textStyle.backgroundColor = { color: { rgbColor: rgbColor } };
         fieldsToUpdate.push('backgroundColor');
     }
@@ -742,7 +744,7 @@ export function buildUpdateParagraphStyleRequest(startIndex, endIndex, style, ta
 // --- Specific Feature Helpers ---
 export async function createTable(docs, documentId, rows, columns, index, tabId, writeControl) {
     if (rows < 1 || columns < 1) {
-        throw new UserError('Table must have at least 1 row and 1 column.');
+        throw publicError('Table must have at least 1 row and 1 column.');
     }
     const location = { index };
     if (tabId) {
@@ -784,33 +786,33 @@ export async function getTableCellRange(docs, documentId, tableStartIndex, rowIn
         const allTabs = getAllTabs(res.data);
         const tab = allTabs.find((t) => t.tabProperties?.tabId === tabId);
         if (!tab)
-            throw new UserError(`Tab with ID "${tabId}" not found.`);
+            throw publicError(`Tab with ID "${tabId}" not found.`);
         bodyContent = tab.documentTab?.body?.content;
     }
     else {
         bodyContent = res.data.body?.content;
     }
     if (!bodyContent) {
-        throw new UserError(`No content found in document ${documentId}.`);
+        throw publicError(`No content found in document ${documentId}.`);
     }
     // Find the table element matching tableStartIndex
     const tableElement = bodyContent.find((el) => el.table && el.startIndex === tableStartIndex);
     if (!tableElement || !tableElement.table) {
-        throw new UserError(`No table found at startIndex ${tableStartIndex}. Use readGoogleDoc with format='json' to find the correct table startIndex.`);
+        throw publicError(`No table found at startIndex ${tableStartIndex}. Use readGoogleDoc with format='json' to find the correct table startIndex.`);
     }
     const table = tableElement.table;
     const rows = table.tableRows;
     if (!rows || rowIndex < 0 || rowIndex >= rows.length) {
-        throw new UserError(`Row index ${rowIndex} is out of range. Table has ${rows?.length ?? 0} rows (0-based).`);
+        throw publicError(`Row index ${rowIndex} is out of range. Table has ${rows?.length ?? 0} rows (0-based).`);
     }
     const cells = rows[rowIndex].tableCells;
     if (!cells || columnIndex < 0 || columnIndex >= cells.length) {
-        throw new UserError(`Column index ${columnIndex} is out of range. Row ${rowIndex} has ${cells?.length ?? 0} columns (0-based).`);
+        throw publicError(`Column index ${columnIndex} is out of range. Row ${rowIndex} has ${cells?.length ?? 0} columns (0-based).`);
     }
     const cell = cells[columnIndex];
     const cellContent = cell.content;
     if (!cellContent || cellContent.length === 0) {
-        throw new UserError(`Cell (${rowIndex}, ${columnIndex}) has no content elements.`);
+        throw publicError(`Cell (${rowIndex}, ${columnIndex}) has no content elements.`);
     }
     // Cell always has at least one paragraph with a trailing \n.
     // We want the range covering all content *before* that final \n.
@@ -821,7 +823,7 @@ export async function getTableCellRange(docs, documentId, tableStartIndex, rowIn
     // We subtract 1 to exclude it so delete operations don't remove the cell structure.
     const cellEndIndex = lastParagraph.endIndex;
     if (cellStartIndex == null || cellEndIndex == null) {
-        throw new UserError(`Could not determine content range for cell (${rowIndex}, ${columnIndex}).`);
+        throw publicError(`Could not determine content range for cell (${rowIndex}, ${columnIndex}).`);
     }
     return { startIndex: cellStartIndex, endIndex: cellEndIndex - 1 };
 }
@@ -894,7 +896,7 @@ export async function insertInlineImage(docs, documentId, imageUrl, index, width
         new URL(imageUrl);
     }
     catch (e) {
-        throw new UserError(`Invalid image URL format: ${imageUrl}`);
+        throw publicError(`Invalid image URL format: ${imageUrl}`);
     }
     // Build the insertInlineImage request
     const location = { index };
@@ -931,7 +933,7 @@ localFilePath, parentFolderId, skipPublicSharing = false) {
     const fs = await import('fs');
     const path = await import('path');
     if (!fs.existsSync(localFilePath)) {
-        throw new UserError(`Image file not found: ${localFilePath}`);
+        throw publicError(`Image file not found: ${localFilePath}`);
     }
     const fileName = path.basename(localFilePath);
     const mimeTypeMap = {

@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { createPatch } from 'diff';
 import { getDocsClient, getDriveClient } from '../../clients.js';
@@ -70,10 +70,10 @@ export function register(server) {
                 if (args.tabId) {
                     const targetTab = GDocsHelpers.findTabById(res.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                     // List definitions are scoped to the document tab. Without them,
                     // docsJsonToMarkdown cannot distinguish ordered lists from bullets.
@@ -233,13 +233,13 @@ export function register(server) {
                 log.error(`Error reading doc ${args.documentId}: ${error.message || error}`);
                 log.error(`Error details: ${JSON.stringify(error.response?.data || error)}`);
                 // Handle errors thrown by helpers or API directly
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
                 if (error instanceof NotImplementedError)
                     throw error;
                 // Generic fallback for API errors not caught by helpers
                 if (error.code === 404)
-                    throw new UserError(`Doc not found (ID: ${args.documentId}).`);
+                    throw publicError(`Doc not found (ID: ${args.documentId}).`);
                 if (error.code === 403) {
                     // The Docs API may be blocked by Workspace admin policy even when the Drive API is
                     // accessible. Fall back to drive.files.export() for plain-text format, which uses
@@ -261,12 +261,12 @@ export function register(server) {
                             log.error(`Drive export fallback also failed: ${exportError.message}`);
                         }
                     }
-                    throw new UserError(`Permission denied for doc (ID: ${args.documentId}). The Google Docs API may be restricted by your Workspace admin.`);
+                    throw publicError(`Permission denied for doc (ID: ${args.documentId}). The Google Docs API may be restricted by your Workspace admin.`);
                 }
                 // Extract detailed error information from Google API response
                 const errorDetails = error.response?.data?.error?.message || error.message || 'Unknown error';
                 const errorCode = error.response?.data?.error?.code || error.code;
-                throw new UserError(`Failed to read doc: ${errorDetails}${errorCode ? ` (Code: ${errorCode})` : ''}`);
+throw wrapOperationError('read Google document', error, { status: error?.code });
             }
         },
     });

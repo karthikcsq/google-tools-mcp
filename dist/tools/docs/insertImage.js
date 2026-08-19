@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient, getDriveClient, getScriptClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
@@ -48,10 +48,10 @@ export function register(server) {
                     });
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
                 // --- Apps Script path: local files when APPS_SCRIPT_DEPLOYMENT_ID is set ---
@@ -128,9 +128,9 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
-                throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('insert document image', error, { status: error?.code });
             }
         },
     });

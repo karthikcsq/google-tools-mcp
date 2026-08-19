@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
@@ -60,9 +60,9 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error in findAndReplace for doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
-                throw new UserError(`Failed to find and replace: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('find and replace document text', error, { status: error?.code });
             }
         },
     });

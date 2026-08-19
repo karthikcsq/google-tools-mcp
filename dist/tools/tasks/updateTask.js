@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getTasksClient } from '../../clients.js';
 
@@ -51,12 +51,13 @@ export function register(server) {
                     completed: t.completed || null,
                 }, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error updating task: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`Task not found (taskId: ${args.taskId}, listId: ${args.taskListId}).`);
+                    throw publicError(`Task not found (taskId: ${args.taskId}, listId: ${args.taskListId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have access to this task.');
-                throw new UserError(`Failed to update task: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have access to this task.');
+throw wrapOperationError('update task', error, { status: error?.code });
             }
         },
     });

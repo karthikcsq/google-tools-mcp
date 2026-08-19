@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -19,7 +19,7 @@ export function register(server) {
                 });
                 const file = response.data;
                 if (file.mimeType !== 'application/vnd.google-apps.folder') {
-                    throw new UserError('The specified ID does not belong to a folder.');
+                    throw publicError('The specified ID does not belong to a folder.');
                 }
                 const info = {
                     id: file.id,
@@ -36,12 +36,13 @@ export function register(server) {
                 return JSON.stringify(info, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error getting folder info: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`Folder not found (ID: ${args.folderId}).`);
+                    throw publicError(`Folder not found (ID: ${args.folderId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have access to this folder.');
-                throw new UserError(`Failed to get folder info: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have access to this folder.');
+throw wrapOperationError('get folder info', error, { status: error?.code });
             }
         },
     });

@@ -12,6 +12,8 @@ import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
 import { runWithSession } from '../sessionContext.js';
+import { getRequestContext } from '../requestContext.js';
+import { getPublicErrorMessage, publicError } from '../errors.js';
 import { google } from 'googleapis';
 import { registerLegacyAliases } from './legacyAliases.js';
 
@@ -80,8 +82,12 @@ function appendHintToError(error, toolName) {
     if (HINT_EXCLUDED_TOOLS.has(toolName)) return error;
     if (!error) return error;
     // Avoid double-appending if something else (or a retry) already added it.
-    const existingMsg = error.message || '';
+    const publicMessage = getPublicErrorMessage(error);
+    const existingMsg = publicMessage ?? (error.message || '');
     if (existingMsg.includes('`troubleshoot` tool')) return error;
+    // Public errors are immutable by design. Preserve their explicit caller-safe
+    // status while adding the established troubleshooting guidance.
+    if (publicMessage !== undefined) return publicError(existingMsg + ERROR_HINT);
     try {
         error.message = existingMsg + ERROR_HINT;
     } catch {
@@ -105,7 +111,10 @@ function wrapServerWithAuthRetry(server) {
                 // clients. context.sessionId is undefined for stdio (single
                 // client), which maps to the default namespace. (PR #36 review)
                 const sessionKey = args[1]?.sessionId ?? null;
-                return runWithSession(sessionKey, async () => {
+                const run = getRequestContext()
+                    ? async (fn) => fn()
+                    : (fn) => runWithSession(sessionKey, fn);
+                return run(async () => {
                     try {
                         return await withAuthRetry(() => originalExecute.apply(this, args));
                     } catch (err) {

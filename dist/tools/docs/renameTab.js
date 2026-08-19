@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
@@ -26,7 +26,7 @@ export function register(server) {
                 });
                 const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                 if (!targetTab) {
-                    throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                    throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                 }
                 const oldTitle = targetTab.tabProperties?.title || '(untitled)';
                 const revisionId = getLastReadRevisionId(args.documentId);
@@ -47,13 +47,13 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error renaming tab ${args.tabId} in doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
                 if (error.code === 404)
-                    throw new UserError(`Document not found (ID: ${args.documentId}).`);
+                    throw publicError(`Document not found (ID: ${args.documentId}).`);
                 if (error.code === 403)
-                    throw new UserError(`Permission denied for document (ID: ${args.documentId}).`);
-                throw new UserError(`Failed to rename tab: ${error.message || 'Unknown error'}`);
+                    throw publicError(`Permission denied for document (ID: ${args.documentId}).`);
+throw wrapOperationError('rename document tab', error, { status: error?.code });
             }
         },
     });

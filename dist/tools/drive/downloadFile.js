@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 import * as fs from 'fs/promises';
@@ -134,7 +134,7 @@ export function register(server) {
                 });
                 const file = metaResponse.data;
                 if (!file) {
-                    throw new UserError(
+                    throw publicError(
                         `File with ID ${args.fileId} not found.`
                     );
                 }
@@ -155,7 +155,7 @@ export function register(server) {
                         const available = Object.keys(
                             typeInfo.formats
                         ).join(', ');
-                        throw new UserError(
+                        throw publicError(
                             `Format '${format}' is not supported for ${typeInfo.label}. ` +
                             `Available formats: ${available}`
                         );
@@ -247,19 +247,19 @@ export function register(server) {
 
                 return JSON.stringify(result, null, 2);
             } catch (error) {
-                if (error instanceof UserError) throw error;
+                if (isPublicError(error)) throw error;
                 log.error(
                     `Error downloading file: ${error.message || error}`
                 );
                 if (error.code === 404)
-                    throw new UserError(
+                    throw publicError(
                         `File not found (ID: ${args.fileId}).`
                     );
                 if (error.code === 403)
-                    throw new UserError(
+                    throw publicError(
                         'Permission denied. Make sure you have access to this file.'
                     );
-                throw new UserError(
+                throw publicError(
                     `Failed to download file: ${error.message || 'Unknown error'}`
                 );
             }

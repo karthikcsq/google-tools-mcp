@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -45,12 +45,13 @@ export function register(server) {
                 return JSON.stringify(result, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error getting revision: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`File or revision not found (fileId: ${args.fileId}, revisionId: ${args.revisionId}).`);
+                    throw publicError(`File or revision not found (fileId: ${args.fileId}, revisionId: ${args.revisionId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have access to this file.');
-                throw new UserError(`Failed to get revision: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have access to this file.');
+throw wrapOperationError('get Drive revision', error, { status: error?.code });
             }
         },
     });

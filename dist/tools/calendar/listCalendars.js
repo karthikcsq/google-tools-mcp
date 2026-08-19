@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -28,10 +28,11 @@ export function register(server) {
 
                 return JSON.stringify(results, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing calendars: ${error.message || error}`);
                 if (error.code === 401)
-                    throw new UserError('Authentication failed. Try logging out and re-authenticating.');
-                throw new UserError(`Failed to list calendars: ${error.message || 'Unknown error'}`);
+                    throw publicError('Authentication failed. Try logging out and re-authenticating.');
+throw wrapOperationError('list calendars', error, { status: error?.code });
             }
         },
     });

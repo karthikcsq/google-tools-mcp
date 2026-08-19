@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getTasksClient } from '../../clients.js';
 
@@ -40,12 +40,13 @@ export function register(server) {
                 const items = response.data.items || [];
                 return JSON.stringify(items.map((t) => formatTask(t, args.taskListId)), null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing tasks: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`Task list not found (ID: ${args.taskListId}).`);
+                    throw publicError(`Task list not found (ID: ${args.taskListId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have access to this task list.');
-                throw new UserError(`Failed to list tasks: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have access to this task list.');
+throw wrapOperationError('list tasks', error, { status: error?.code });
             }
         },
     });

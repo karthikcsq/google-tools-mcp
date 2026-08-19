@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { z } from 'zod';
 import { google } from 'googleapis';
 import { getAuthClient } from '../../../clients.js';
@@ -46,10 +46,11 @@ export function register(server) {
                 }
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error resolving comment: ${error.message || error}`);
                 const errorDetails = error.response?.data?.error?.message || error.message || 'Unknown error';
                 const errorCode = error.response?.data?.error?.code;
-                throw new UserError(`Failed to resolve comment: ${errorDetails}${errorCode ? ` (Code: ${errorCode})` : ''}`);
+throw wrapOperationError('resolve document comment', error, { status: error?.code });
             }
         },
     });

@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -31,12 +31,13 @@ export function register(server) {
                 return JSON.stringify({ fileId: args.fileId, permissions }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing permissions: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`File not found (ID: ${args.fileId}).`);
+                    throw publicError(`File not found (ID: ${args.fileId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. You need access to the file to list its permissions.');
-                throw new UserError(`Failed to list permissions: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. You need access to the file to list its permissions.');
+throw wrapOperationError('list Drive permissions', error, { status: error?.code });
             }
         },
     });

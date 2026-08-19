@@ -16,6 +16,7 @@ import { getConfigDir } from './auth.js';
 import { checkForUpdate } from './updateCheck.js';
 import { resolveHttpAuthConfig, assertSafeHttpBinding, generateToken, createHttpAuthenticate, createHttpRequestGuard, startWithRequestGuard } from './httpAuth.js';
 import { clearSession } from './readTracker.js';
+import { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntimeLifecycle, selectRuntimeKind } from './mcpServer.js';
 
 // Read our own published version straight from package.json rather than
 // hardcoding it. `files: ["dist"]` in package.json only restricts what npm
@@ -57,6 +58,8 @@ if (process.argv[2] === 'auth') {
 // session. Accepts "http" or "httpStream" (both map to FastMCP httpStream).
 const transportEnv = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase();
 const useHttp = transportEnv === 'http' || transportEnv === 'httpstream';
+// Deliberately opt-in while FastMCP remains the rollback/default runtime.
+const useOfficialSdkV2 = selectRuntimeKind(process.env) === 'sdk-v2';
 const httpPort = Number(process.env.GOOGLE_MCP_PORT) || 3939;
 const httpEndpoint = process.env.GOOGLE_MCP_ENDPOINT || '/mcp';
 
@@ -105,31 +108,6 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, _promise) => {
     logger.error('Unhandled Promise Rejection:', reason);
 });
-process.on('SIGINT', () => {
-    logger.info('Received SIGINT — shutting down.');
-    process.exit(0);
-});
-process.on('SIGTERM', () => {
-    logger.info('Received SIGTERM — shutting down.');
-    process.exit(0);
-});
-// Exit when the MCP client closes the stdio pipe.
-// This is the primary shutdown path for stdio MCP servers — SIGTERM is not
-// reliably delivered on Windows when a parent process exits.
-//
-// IMPORTANT: only wire these in stdio mode. In HTTP mode the server is a
-// detached daemon whose stdin ends/closes immediately at launch — attaching
-// these there would make the daemon exit the instant it starts.
-if (!useHttp) {
-    process.stdin.on('close', () => {
-        logger.info('stdin closed — MCP client disconnected. Shutting down.');
-        process.exit(0);
-    });
-    process.stdin.on('end', () => {
-        logger.info('stdin ended — MCP client disconnected. Shutting down.');
-        process.exit(0);
-    });
-}
 process.on('exit', (code) => {
     logger.info(`Process exiting with code ${code}.`);
 });
@@ -137,7 +115,7 @@ process.on('exit', (code) => {
 // --- Server startup ---
 const serverOptions = {
     name: 'google-tools-mcp',
-    version: '1.0.0',
+    version: packageVersion,
 };
 if (useHttp) {
     // authenticate() runs before any tool; a throw becomes an HTTP 401. It is
@@ -147,6 +125,26 @@ if (useHttp) {
         logger,
     );
 }
+if (useOfficialSdkV2) {
+    const profile = (process.env.GOOGLE_MCP_PROFILE || 'default').trim() || 'default';
+    const factory = await prepareMcpServerFactory({ logger });
+    let runtime;
+    if (useHttp) {
+        runtime = await startV2HttpServer(factory, {
+            auth: { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
+            endpoint: httpEndpoint,
+            host: httpAuth.host,
+            port: httpPort,
+            profile,
+            logger,
+        });
+        logger.info(`MCP SDK v2 server running over HTTP at http://${httpAuth.host}:${httpPort}${httpEndpoint}.`);
+    } else {
+        runtime = startV2Stdio(factory, { profile, logger });
+        logger.info('MCP SDK v2 server running using stdio. Awaiting client connection...');
+    }
+    installRuntimeLifecycle(runtime, { useStdio: !useHttp, logger });
+} else {
 const server = new FastMCP(serverOptions);
 
 // Free per-session tracker state when an HTTP client disconnects, so a long-
@@ -208,6 +206,7 @@ try {
             'see the README troubleshooting section for a fix.');
     }
     logger.info('Google auth will run automatically on first tool call.');
+    installRuntimeLifecycle({ close: () => server.stop() }, { useStdio: !useHttp, logger });
 
     // Best-effort update nudge. This runs AFTER the transport above is
     // already established, and is deliberately not awaited: a slow or
@@ -234,4 +233,5 @@ try {
 } catch (startError) {
     logger.error('FATAL: Server failed to start:', startError.message || startError);
     process.exit(1);
+}
 }
