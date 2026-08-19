@@ -2,12 +2,12 @@ import { publicError, isPublicError, wrapOperationError } from '../../../errors.
 import { getDocsClient } from '../../../clients.js';
 import { ApplyParagraphStyleToolParameters, NotImplementedError, } from '../../../types.js';
 import * as GDocsHelpers from '../../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, trackMutation } from '../../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'applyParagraphStyle',
         description: 'Applies paragraph-level formatting (alignment, spacing, heading styles) to paragraphs identified by a character range or by searching for text. Use namedStyleType to set heading levels (HEADING_1 through HEADING_6).',
-        parameters: ApplyParagraphStyleToolParameters,
+        parameters: ApplyParagraphStyleToolParameters.extend({ readHandle: ReadHandleParameter }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
             let startIndex;
@@ -65,9 +65,14 @@ export function register(server) {
                     return 'No valid paragraph styling options were provided.';
                 }
                 log.info(`Applying styles: ${requestInfo.fields.join(', ')}`);
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: args.tabId ?? null,
+                    readHandle: args.readHandle,
+                });
+                await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request], writeControl),
+                    (response) => response?.writeControl?.requiredRevisionId,
+                );
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully applied paragraph styles (${requestInfo.fields.join(', ')}) to the paragraph${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }

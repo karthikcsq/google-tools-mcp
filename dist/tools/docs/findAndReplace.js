@@ -4,7 +4,8 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { guardMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 const FindAndReplaceParameters = DocumentIdParameter.extend({
     findText: z.string().min(1).describe('The text to search for in the document.'),
     replaceText: z
@@ -18,6 +19,7 @@ const FindAndReplaceParameters = DocumentIdParameter.extend({
         .string()
         .optional()
         .describe('Scope replacement to a specific tab. If omitted, replaces across all tabs.'),
+    readHandle: ReadHandleParameter,
 });
 export function register(server) {
     server.addTool({
@@ -27,15 +29,19 @@ export function register(server) {
         parameters: FindAndReplaceParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
-            await guardMutation(args.documentId, {
-                contentFetcher: async () => {
-                    const current = await docs.documents.get({ documentId: args.documentId });
-                    // Return the revision this content came from alongside the
-                    // content itself so guardMutation can refresh both together
-                    // instead of leaving revisionId stale after a diff (see
-                    // readTracker.js guardMutation for why that matters).
-                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
-                },
+            const lease = await beginDocsMutation(args.documentId, {
+                tabId: args.tabId ?? null,
+                readHandle: args.readHandle,
+                legacyGuard: () => guardMutation(args.documentId, {
+                    contentFetcher: async () => {
+                        const current = await docs.documents.get({ documentId: args.documentId });
+                        // Return the revision this content came from alongside the
+                        // content itself so guardMutation can refresh both together
+                        // instead of leaving revisionId stale after a diff (see
+                        // readTracker.js guardMutation for why that matters).
+                        return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
+                    },
+                }),
             });
             log.info(`findAndReplace in doc ${args.documentId}: "${args.findText}" → "${args.replaceText}"` +
                 `${args.matchCase ? ' (case-sensitive)' : ''}` +
@@ -51,9 +57,10 @@ export function register(server) {
                         ...(args.tabId && { tabsCriteria: { tabIds: [args.tabId] } }),
                     },
                 };
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, response?.writeControl?.requiredRevisionId);
+                const response = await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], writeControl),
+                    (result) => result?.writeControl?.requiredRevisionId,
+                );
                 const changed = response.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nReplaced ${changed} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;

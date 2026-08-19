@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 // --- Table Index Math ---
 // Google Docs API table index layout for an R×C table inserted at T:
 //   cellContentIndex(T, r, c, C) = T + 4 + r * (1 + 2*C) + 2*c
@@ -96,6 +96,7 @@ export function register(server) {
                 .optional()
                 .describe('The ID of the specific tab to insert into. Use listDocumentTabs to get tab IDs. ' +
                 'If not specified, inserts into the first tab.'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -119,9 +120,14 @@ export function register(server) {
                     }
                 }
                 const requests = buildInsertTableWithDataRequests(args.data, args.index, args.hasHeaderRow ?? false, args.tabId);
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const metadata = await GDocsHelpers.executeBatchUpdateWithSplitting(docs, args.documentId, requests, log, revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, metadata?.finalWriteControl?.requiredRevisionId);
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: args.tabId ?? null,
+                    readHandle: args.readHandle,
+                });
+                const metadata = await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdateWithSplitting(docs, args.documentId, requests, log, writeControl),
+                    (metadata) => metadata?.finalWriteControl?.requiredRevisionId,
+                );
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return (`${docUrl}\nSuccessfully inserted a ${numRows}x${numCols} table with data at index ${args.index}` +
                     `${args.tabId ? ` in tab ${args.tabId}` : ''}. ` +

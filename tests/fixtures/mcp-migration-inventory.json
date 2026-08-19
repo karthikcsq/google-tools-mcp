@@ -726,7 +726,7 @@
       },
       {
         "file": "dist/tools/docs/appendToGoogleDoc.js",
-        "line": 10,
+        "line": 11,
         "match": ".addTool({"
       },
       {
@@ -761,12 +761,12 @@
       },
       {
         "file": "dist/tools/docs/deleteRange.js",
-        "line": 9,
+        "line": 10,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/findAndReplace.js",
-        "line": 23,
+        "line": 25,
         "match": ".addTool({"
       },
       {
@@ -806,12 +806,12 @@
       },
       {
         "file": "dist/tools/docs/modifyText.js",
-        "line": 96,
+        "line": 98,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/readGoogleDoc.js",
-        "line": 26,
+        "line": 27,
         "match": ".addTool({"
       },
       {
@@ -1806,12 +1806,12 @@
       },
       {
         "file": "dist/tools/utils/appendMarkdownToGoogleDoc.js",
-        "line": 10,
+        "line": 11,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/utils/replaceDocumentWithMarkdown.js",
-        "line": 11,
+        "line": 12,
         "match": ".addTool({"
       }
     ],

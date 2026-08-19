@@ -5,7 +5,8 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { guardMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'appendMarkdown',
@@ -31,18 +32,23 @@ export function register(server) {
                 .optional()
                 .default(false)
                 .describe('If true, the first H1 heading (# ...) in the markdown is styled as a Google Docs TITLE instead of Heading 1. Useful when the markdown represents a full document whose first line is the document title.'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
-            await guardMutation(args.documentId, {
-                contentFetcher: async () => {
-                    const current = await docs.documents.get({ documentId: args.documentId });
-                    // Return the revision this content came from alongside the
-                    // content itself so guardMutation can refresh both together
-                    // instead of leaving revisionId stale after a diff (see
-                    // readTracker.js guardMutation for why that matters).
-                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
-                },
+            const lease = await beginDocsMutation(args.documentId, {
+                tabId: args.tabId ?? null,
+                readHandle: args.readHandle,
+                legacyGuard: () => guardMutation(args.documentId, {
+                    contentFetcher: async () => {
+                        const current = await docs.documents.get({ documentId: args.documentId });
+                        // Return the revision this content came from alongside the
+                        // content itself so guardMutation can refresh both together
+                        // instead of leaving revisionId stale after a diff (see
+                        // readTracker.js guardMutation for why that matters).
+                        return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
+                    },
+                }),
             });
             // Resolve markdown content from filePath or inline parameter
             let markdown = args.markdown;
@@ -59,7 +65,9 @@ export function register(server) {
             }
             log.info(`Appending markdown to doc ${args.documentId} (${markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
             try {
-                const revisionId = getLastReadRevisionId(args.documentId);
+                // The guard's authorized revision: the validated read handle's on
+                // the v2 runtime, the tracked read's on the legacy one.
+                const revisionId = lease.revisionId;
                 // Optimistic-concurrency guard. The first write carries the revision
                 // from our last read; each subsequent write advances to the revision the
                 // previous write produced (returned by batchUpdate). This keeps every
@@ -126,13 +134,16 @@ export function register(server) {
                 // that into our chain so trackMutation re-arms the guard against the
                 // TRUE post-write revision instead of the pre-insert (spacing-only) one.
                 writeControlChain.advance({ writeControl: result.batchUpdate?.finalWriteControl });
-                trackMutation(args.documentId, writeControlChain.current?.requiredRevisionId);
+                await lease.complete(writeControlChain.current?.requiredRevisionId);
                 const warningNote = result.warnings?.length
                     ? ` with ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (content dropped — see below)`
                     : '';
                 return `${docUrl}\nSuccessfully appended ${markdown.length} characters of markdown${warningNote}.\n\n${debugSummary}`;
             }
             catch (error) {
+                // Settle the lease as a failed write so a dirty per-handle workspace
+                // is retained for recovery rather than silently reclaimed.
+                await lease.fail();
                 log.error(`Error appending markdown: ${error.message}`);
                 if (error instanceof UserError || error instanceof MarkdownConversionError) {
                     throw error;

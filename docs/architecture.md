@@ -51,11 +51,24 @@ Each category maps to a directory under `dist/tools/`. The loaders are `await im
 
 **Every tool is wrapped before registration.** `registerAllTools` monkey-patches the server's `addTool` (`dist/tools/index.js:100-118`) so each tool's `execute` gets three behaviors for free:
 
-1. **Session binding** — `runWithSession(args[1]?.sessionId ?? null, ...)` so per-session state, like the read-before-edit tracker in `dist/readTracker.js`, stays isolated across concurrent HTTP clients. Under stdio there is one client and `sessionId` is undefined, which maps to the default namespace.
+1. **Session binding** — `runWithSession(args[1]?.sessionId ?? null, ...)` so per-session state, like the read-before-edit tracker in `dist/readTracker.js`, stays isolated across concurrent HTTP clients. Under stdio there is one client and `sessionId` is undefined, which maps to the default namespace. This applies to the FastMCP runtime only; see "Read-before-edit guards" below for what the SDK v2 runtime does instead.
 2. **Auth retry** — `withAuthRetry` transparently refreshes and retries once on an auth failure, so an expired access token does not surface as a tool error.
 3. **Error hints** — `appendHintToError(err, toolName)` attaches actionable guidance to the thrown error.
 
 If you are adding a tool, you get all three by registering through the normal path. Do not call the underlying `addTool` directly.
+
+## Read-before-edit guards
+
+Two runtimes, two guard models. `GOOGLE_MCP_USE_SDK_V2` selects between them (`selectRuntimeKind` in `dist/mcpServer.js`); FastMCP is still the default.
+
+**FastMCP (default).** `dist/readTracker.js` holds a per-MCP-session map of `fileId -> { readAt, modifiedTime, content, revisionId }`. `trackRead` fills it, `guardMutation` refuses a write to a file the session never read, and the tracked `revisionId` becomes `WriteControl.requiredRevisionId` on the batchUpdate.
+
+**SDK v2 (`GOOGLE_MCP_USE_SDK_V2=1`).** There are no MCP sessions, so cross-call state is an explicit capability instead:
+
+- A successful `readDocument` mints an opaque `readHandle` (`dist/docsHandles.js` -> `dist/readHandles.js`) bound to the credential fingerprint, configured profile, invalidation epoch, file, tab, revision, and a structural fingerprint of the document. The facade returns it as a top-level `readHandle` field on the result, for every `format`.
+- Every guarded Docs mutation takes a `readHandle` parameter. Over HTTP it is required: the store validates every binding, and the record's revision — never caller input — becomes `WriteControl.requiredRevisionId`. A stdio connection may omit it and resolve its own connection-pinned last read.
+- `dist/readTracker.js` gives each request context its own namespace on this runtime, so one HTTP request's read can never authorize another's write. Guarded Sheets and Drive tools have no handle wiring yet and therefore fail closed over v2 HTTP.
+- Each handle owns a private editable working copy under `<workspace>/v2-handles/handles/<workspaceId>/`, initialized from a content-addressed immutable baseline under `<workspace>/v2-handles/baselines/` that identical reads share. Cleanup uses the exact paths in each ownership manifest and never deletes a working copy whose contents diverged from its baseline.
 
 ## Adding a tool
 

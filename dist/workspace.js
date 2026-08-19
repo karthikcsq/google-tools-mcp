@@ -64,11 +64,12 @@ export function getWorkspacePath(documentId, tabId = null) {
     return path.join(getWorkspaceDir(), name);
 }
 
-// Create the base dir with private perms and verify it is a real directory we
-// own — not a symlink an attacker planted to redirect our writes. Throws if the
-// directory exists but is unsafe.
-async function ensureSafeBaseDir() {
-    const dir = getWorkspaceDir();
+// Create `dir` (recursively) with private perms and verify it is a real
+// directory we own — not a symlink an attacker planted to redirect our writes.
+// Throws if the directory exists but is unsafe. Exported so the per-handle v2
+// workspace layer (dist/handleRuntime.js) reuses exactly these hardening rules
+// for its own subdirectories instead of re-deriving them.
+export async function ensureSafeDirectory(dir) {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     // mkdir(recursive) does not reset mode/ownership on a pre-existing entry, so
     // inspect it directly. lstat (not stat) so a symlinked directory is reported
@@ -92,12 +93,19 @@ async function ensureSafeBaseDir() {
     return dir;
 }
 
-// Write content to the workspace file for documentId/tabId without following a
-// symlink at the final path component and with 0600 perms. Returns the absolute
-// path written. Throws on any failure (callers decide whether that is fatal).
-export async function writeWorkspaceFile(documentId, content, tabId = null) {
-    await ensureSafeBaseDir();
-    const filePath = getWorkspacePath(documentId, tabId);
+// The shared base dir every workspace file (legacy shared copies and v2
+// per-handle copies alike) lives under.
+async function ensureSafeBaseDir() {
+    return ensureSafeDirectory(getWorkspaceDir());
+}
+
+/**
+ * Write `content` to an absolute path without following a symlink at the final
+ * component and with 0600 perms. The caller owns creating/validating the parent
+ * directory (see ensureSafeDirectory). Exported for the v2 per-handle workspace
+ * layer; `writeWorkspaceFile` below is the legacy shared-copy wrapper.
+ */
+export async function writeFileSecurely(filePath, content) {
     // O_NOFOLLOW is a no-op / undefined on some platforms (notably Windows);
     // fall back to 0 there. O_CREAT|O_TRUNC gives create-or-overwrite semantics.
     const noFollow = fsConstants.O_NOFOLLOW ?? 0;
@@ -119,4 +127,13 @@ export async function writeWorkspaceFile(documentId, content, tabId = null) {
         }
     }
     return filePath;
+}
+
+// Write content to the shared workspace file for documentId/tabId. Returns the
+// absolute path written. Throws on any failure (callers decide whether that is
+// fatal). This is the legacy (session-era) shared copy; the SDK v2 runtime uses
+// a per-handle editable copy instead — see dist/handleRuntime.js.
+export async function writeWorkspaceFile(documentId, content, tabId = null) {
+    await ensureSafeBaseDir();
+    return writeFileSecurely(getWorkspacePath(documentId, tabId), content);
 }

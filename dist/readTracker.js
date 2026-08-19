@@ -8,6 +8,7 @@ import { createPatch } from 'diff';
 import { getDriveClient } from './clients.js';
 import { logger } from './logger.js';
 import { currentSessionKey } from './sessionContext.js';
+import { getRequestContext } from './requestContext.js';
 
 // Per-session read logs.
 //
@@ -20,13 +21,49 @@ import { currentSessionKey } from './sessionContext.js';
 // content, modifiedTime, and revision guard (PR #36 review). In stdio mode the
 // ambient session key is null, so there is a single namespace and behavior is
 // identical to the original single-Map implementation.
-const sessions = new Map(); // sessionKey (string|null) → Map<fileId, entry>
+const sessions = new Map(); // sessionKey (string|null) → Map<fileId, entry>
+
+// Read logs for the SDK v2 runtime, keyed by the request context object itself.
+//
+// The v2 runtime has no MCP sessions, so currentSessionKey() is always null
+// there. Falling through to DEFAULT_SESSION would put every stateless HTTP
+// request into ONE shared namespace: request A's read of document X would sit
+// in the same map guardMutation consults for request B, and B could mutate X
+// off A's snapshot and revision without ever having read it. That is precisely
+// the cross-client isolation failure the per-session namespace exists to stop.
+//
+// Minting a synthetic per-request session key is not a fix either: 2026-07-28
+// HTTP is stateless, so a later mutation request could never find its own
+// earlier read anyway. The correct model is that a v2 HTTP request's tracker
+// state is scoped to that one request and dies with it, and cross-request
+// authorization comes exclusively from an explicit, validated readHandle
+// (dist/docsHandles.js). Guarded surfaces with no handle wiring therefore fail
+// closed on v2 HTTP rather than silently borrowing another request's read.
+//
+// A v2 stdio context is per-connection rather than per-request, so a read and a
+// later mutation on the same pinned connection still see each other, matching
+// the connection-pinned implicit handle state.
+//
+// WeakMap: an HTTP context is unreachable once its request finishes, so its log
+// is collected with it and nothing accumulates.
+const requestContextLogs = new WeakMap();
 
 // Sentinel for the stdio / no-request namespace (Map keys can't be null-safe
 // across distinct absent values, so normalize null → this string).
 const DEFAULT_SESSION = '\0default';
 
 function logForCurrentSession() {
+    // The v2 runtime always takes this branch; the legacy FastMCP runtime never
+    // does, so its runWithSession behavior below is untouched.
+    const context = getRequestContext();
+    if (context) {
+        let contextLog = requestContextLogs.get(context);
+        if (!contextLog) {
+            contextLog = new Map();
+            requestContextLogs.set(context, contextLog);
+        }
+        return contextLog;
+    }
     const key = currentSessionKey() ?? DEFAULT_SESSION;
     let log = sessions.get(key);
     if (!log) {
@@ -82,6 +119,19 @@ export async function guardMutation(fileId, opts) {
     const readLog = logForCurrentSession();
     const entry = readLog.get(fileId);
     if (!entry) {
+        if (getRequestContext()?.transport === 'http') {
+            // Fail closed. There is deliberately no fallback to a shared
+            // namespace here: on the stateless 2026-07-28 HTTP runtime read
+            // state is never carried between requests, so authorization must
+            // come from an explicit readHandle instead.
+            throw new UserError(
+                `This file (${fileId}) has not been read in this request. On the 2026-07-28 HTTP ` +
+                "runtime read state is never shared between requests, so an earlier request's read " +
+                'cannot authorize this write. Google Docs edits take an explicit readHandle returned ' +
+                'by readDocument; guarded Sheets and Drive edits have no handle wiring yet and are ' +
+                'unavailable over HTTP on this runtime - use the stdio transport for them.'
+            );
+        }
         throw new UserError(
             `This file (${fileId}) has not been read in this session. ` +
             'Read it first before making changes to ensure you have current content. ' +

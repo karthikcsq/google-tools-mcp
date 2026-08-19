@@ -713,6 +713,30 @@ export function createReadHandleStore({
         return validate(capability, { context, expected: options.expected });
     }
 
+    // Same checks as resolveImplicit, but also returns the capability string so
+    // an integration layer can pass it to beginMutation. Kept separate from
+    // resolveImplicit so the plain resolver never hands a capability back to a
+    // caller that only asked whether one exists.
+    function resolveImplicitCapability(options = {}) {
+        requireOpenStore();
+        const context = contextFor(options);
+        if (context.transport !== 'stdio') fail('READ_HANDLE_IMPLICIT_NOT_ALLOWED');
+        const key = normalizeImplicitKey(options.key);
+        let capability;
+        try {
+            capability = getStdioImplicitHandle(context, key);
+        }
+        catch (error) {
+            if (error instanceof RequestContextError) fail('REQUEST_CONTEXT_CLOSED');
+            throw error;
+        }
+        if (!capability) fail('READ_HANDLE_REQUIRED');
+        return Object.freeze({
+            readHandle: capability,
+            record: validate(capability, { context, expected: options.expected }),
+        });
+    }
+
     function setImplicit(capability, options = {}) {
         requireOpenStore();
         const context = contextFor(options);
@@ -969,6 +993,7 @@ export function createReadHandleStore({
         validate,
         getInternalWorkspace,
         resolveImplicit,
+        resolveImplicitCapability,
         setImplicit,
         clearImplicit,
         closeConnection,

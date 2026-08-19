@@ -5,7 +5,8 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { guardMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'appendText',
@@ -23,18 +24,23 @@ export function register(server) {
                 .string()
                 .optional()
                 .describe('The ID of the specific tab to append to. If not specified, appends to the first tab (or legacy document.body for documents without tabs).'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
-            await guardMutation(args.documentId, {
-                contentFetcher: async () => {
-                    const current = await docs.documents.get({ documentId: args.documentId });
-                    // Return the revision this content came from alongside the
-                    // content itself so guardMutation can refresh both together
-                    // instead of leaving revisionId stale after a diff (see
-                    // readTracker.js guardMutation for why that matters).
-                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
-                },
+            const lease = await beginDocsMutation(args.documentId, {
+                tabId: args.tabId ?? null,
+                readHandle: args.readHandle,
+                legacyGuard: () => guardMutation(args.documentId, {
+                    contentFetcher: async () => {
+                        const current = await docs.documents.get({ documentId: args.documentId });
+                        // Return the revision this content came from alongside the
+                        // content itself so guardMutation can refresh both together
+                        // instead of leaving revisionId stale after a diff (see
+                        // readTracker.js guardMutation for why that matters).
+                        return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
+                    },
+                }),
             });
             // Resolve text content from filePath or inline parameter
             let text = args.text;
@@ -92,9 +98,10 @@ throw wrapOperationError('read local text file', err, { code: err?.code });
                 const request = {
                     insertText: { location, text: textToInsert },
                 };
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
+                await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], writeControl),
+                    (response) => response?.writeControl?.requiredRevisionId,
+                );
                 log.info(`Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully appended text to ${args.tabId ? `tab ${args.tabId} in ` : ''}document ${args.documentId}.`;

@@ -4,7 +4,8 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, TextFindParameter, TextStyleParameters, ParagraphStyleParameters } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { guardMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 const RangeTarget = z
     .object({
     startIndex: z.number().int().min(1).describe('Start of range (inclusive, 1-based).'),
@@ -28,6 +29,7 @@ const ModifyTextParameters = DocumentIdParameter.extend({
         .string()
         .optional()
         .describe('The ID of the specific tab to operate on. If not specified, operates on the first tab.'),
+    readHandle: ReadHandleParameter,
 })
     .refine((args) => args.text !== undefined || args.style !== undefined || args.paragraphStyle !== undefined, {
     message: 'At least one of text, style, or paragraphStyle must be provided.',
@@ -107,15 +109,19 @@ export function register(server) {
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
-            await guardMutation(args.documentId, {
-                contentFetcher: async () => {
-                    const current = await docs.documents.get({ documentId: args.documentId });
-                    // Return the revision this content came from alongside the
-                    // content itself so guardMutation can refresh both together
-                    // instead of leaving revisionId stale after a diff (see
-                    // readTracker.js guardMutation for why that matters).
-                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
-                },
+            const lease = await beginDocsMutation(args.documentId, {
+                tabId: args.tabId ?? null,
+                readHandle: args.readHandle,
+                legacyGuard: () => guardMutation(args.documentId, {
+                    contentFetcher: async () => {
+                        const current = await docs.documents.get({ documentId: args.documentId });
+                        // Return the revision this content came from alongside the
+                        // content itself so guardMutation can refresh both together
+                        // instead of leaving revisionId stale after a diff (see
+                        // readTracker.js guardMutation for why that matters).
+                        return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
+                    },
+                }),
             });
             log.info(`modifyText on doc ${args.documentId}: target=${JSON.stringify(args.target)}` +
                 `${args.text !== undefined ? `, text="${args.text.substring(0, 50)}"` : ''}` +
@@ -177,14 +183,15 @@ export function register(server) {
                 if (requests.length === 0) {
                     return 'No operations to perform.';
                 }
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const writeResponse = await GDocsHelpers.executeBatchUpdate(
-                    docs,
-                    args.documentId,
-                    requests,
-                    revisionId ? { requiredRevisionId: revisionId } : undefined
+                await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(
+                        docs,
+                        args.documentId,
+                        requests,
+                        writeControl
+                    ),
+                    (response) => response?.writeControl?.requiredRevisionId,
                 );
-                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
                 // Build descriptive result
                 const actions = [];
                 if (endIndex !== undefined && normalizedText === '')

@@ -7,6 +7,7 @@ import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown, checkMarkdownFidelity } from '../../markdown-transformer/index.js';
 import { trackRead, getLastReadContent } from '../../readTracker.js';
 import { writeWorkspaceFile } from '../../workspace.js';
+import { mintDocsReadHandle } from '../../docsHandles.js';
 
 async function fetchModifiedTime(documentId) {
     try {
@@ -87,12 +88,38 @@ export function register(server) {
                     // Use the document body (backward compatible)
                     contentSource = res.data;
                 }
+                // On the SDK v2 runtime every successful read mints an explicit
+                // capability bound to this principal/profile/epoch, this file
+                // and tab, this revision, and this structural fingerprint. The
+                // facade surfaces it as a top-level `readHandle` field on the
+                // result for every format (plan §2), so nothing about the
+                // returned text below changes. Off that runtime this is a no-op
+                // and the legacy readTracker guard stays in force.
+                const mintHandle = async (content) => {
+                    try {
+                        return await mintDocsReadHandle({
+                            documentId: args.documentId,
+                            tabId: args.tabId ?? null,
+                            revisionId: res.data.revisionId ?? null,
+                            contentSource,
+                            content,
+                        });
+                    }
+                    catch (handleError) {
+                        // A read that cannot mint a capability still returns its
+                        // content; the follow-up mutation then fails closed with
+                        // "a read handle is required" rather than writing blind.
+                        log.error(`Could not mint a read handle for ${args.documentId}: ${handleError.message}`);
+                        return null;
+                    }
+                };
                 if (args.format === 'json') {
                     if (args.diffFromLastRead) {
                         log.info('diffFromLastRead ignored: only supported for format=markdown');
                     }
                     trackRead(args.documentId, modifiedTime, undefined, res.data.revisionId);
                     const jsonContent = JSON.stringify(contentSource, null, 2);
+                    await mintHandle(jsonContent);
                     // Apply length limit to JSON if specified
                     if (args.maxLength && jsonContent.length > args.maxLength) {
                         return (jsonContent.substring(0, args.maxLength) +
@@ -130,10 +157,16 @@ export function register(server) {
                             trackRead(args.documentId, modifiedTime, markdownContent, res.data.revisionId);
                             // Keep the on-disk working copy in sync even on diff reads, so a
                             // subsequent edit-and-push starts from the current document state.
-                            try {
-                                await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
-                            } catch (e) {
-                                log.info(`Could not update workspace on diff read: ${e.message}`);
+                            // On the v2 runtime that copy is this handle's own editable file
+                            // (already written when the handle was minted); off it, the legacy
+                            // shared per-(documentId, tabId) copy.
+                            const diffHandle = await mintHandle(markdownContent);
+                            if (!diffHandle) {
+                                try {
+                                    await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
+                                } catch (e) {
+                                    log.info(`Could not update workspace on diff read: ${e.message}`);
+                                }
                             }
                             // The diff can be silent about content the converter has no
                             // representation for: an image or footnote another editor added
@@ -149,14 +182,21 @@ export function register(server) {
                     trackRead(args.documentId, modifiedTime, markdownContent, res.data.revisionId);
                     // Save to local workspace file so the AI can edit it and push with filePath.
                     // Scoped by tabId so two tabs of the same document keep separate copies.
-                    let localPath = null;
-                    try {
-                        localPath = await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
-                        log.info(`Saved to ${localPath}`);
-                    } catch (e) {
-                        log.info(`Could not save to workspace: ${e.message}`);
-                        localPath = null;
+                    // On the v2 runtime this is a workspace unique to the handle
+                    // just minted, initialized from a shared immutable baseline;
+                    // two concurrent reads of identical content get two separate
+                    // editable files. Off it, the legacy shared copy.
+                    const readHandleResult = await mintHandle(markdownContent);
+                    let localPath = readHandleResult?.editablePath ?? null;
+                    if (!localPath) {
+                        try {
+                            localPath = await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
+                        } catch (e) {
+                            log.info(`Could not save to workspace: ${e.message}`);
+                            localPath = null;
+                        }
                     }
+                    if (localPath) log.info(`Saved to ${localPath}`);
                     // Apply length limit to markdown if specified
                     let output;
                     if (args.maxLength && totalLength > args.maxLength) {
@@ -212,6 +252,7 @@ export function register(server) {
                     }
                 });
                 trackRead(args.documentId, modifiedTime, undefined, res.data.revisionId);
+                await mintHandle(textContent);
                 if (!textContent.trim())
                     return 'Document found, but appears empty.';
                 const totalLength = textContent.length;

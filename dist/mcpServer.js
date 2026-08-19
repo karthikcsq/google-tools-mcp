@@ -10,6 +10,8 @@ import { logger as defaultLogger } from './logger.js';
 import { checkHttpAuth, extractBearerToken, isOriginAllowed } from './httpAuth.js';
 import { getPublicErrorMessage, registerSecret, redactDiagnostic } from './errors.js';
 import { createHttpRequestContext, createStdioConnectionContext, fingerprintCredential, runWithRequestContext, closeStdioConnection } from './requestContext.js';
+import { applyResultAnnotations, runWithResultAnnotations, shutdownReadHandleRuntime } from './handleRuntime.js';
+import { randomBytes } from 'node:crypto';
 
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
 export const MCP_INSTRUCTIONS = 'Google Workspace tools for Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, Tasks, and Maps.';
@@ -17,6 +19,22 @@ const require = createRequire(import.meta.url);
 const DEFAULT_SERVER_INFO = Object.freeze({ name: 'google-tools-mcp', version: require('../package.json').version });
 const CACHE_HINT = Object.freeze({ ttlMs: 60_000, cacheScope: 'private' });
 const GENERIC_TOOL_FAILURE = 'The tool could not complete safely. Call troubleshoot for diagnostics.';
+
+let runtimeEpochCounter = 0;
+/**
+ * Mint a fresh read-handle invalidation epoch for each runtime start.
+ *
+ * This release has no runtime credential/profile rotation path: the bearer token
+ * and `GOOGLE_MCP_PROFILE` are resolved once in dist/index.js and never reloaded,
+ * so rotation means restarting the process. A per-start epoch makes that
+ * restart an actual invalidation rather than an assumption — including a
+ * start/close/restart inside one process, where the previous run's handles must
+ * not survive into the next.
+ */
+function nextRuntimeEpoch() {
+    runtimeEpochCounter += 1;
+    return `epoch-${process.pid}-${runtimeEpochCounter}-${randomBytes(8).toString('base64url')}`;
+}
 
 function normalizeResult(result) {
     if (typeof result === 'string') return { content: [{ type: 'text', text: result }] };
@@ -43,8 +61,18 @@ function makeServer(definitions, { logger = defaultLogger, serverInfo = DEFAULT_
     for (const definition of definitions) {
         server.registerTool(definition.name, { description: definition.description, inputSchema: definition.parameters }, async (args) => {
             try {
-                const execute = () => definition.execute(args, { log: logger });
-                return normalizeResult(await (requestContext ? runWithRequestContext(requestContext, execute) : execute()));
+                // Tools reach the request context ambiently through
+                // dist/requestContext.js rather than through a changed
+                // execute() signature: 156 tools keep their exact
+                // execute(args, { log }) contract, and a tool that never asks
+                // for identity cannot accidentally be handed it.
+                // runWithResultAnnotations gives each execution a private slot
+                // a tool can drop a minted readHandle into, which is merged
+                // back as a top-level result field below.
+                const execute = () => runWithResultAnnotations(async () => (
+                    applyResultAnnotations(normalizeResult(await definition.execute(args, { log: logger })))
+                ));
+                return await (requestContext ? runWithRequestContext(requestContext, execute) : execute());
             } catch (error) {
                 return toolFailure(error, definition.name, logger);
             }
@@ -127,7 +155,7 @@ async function closeListenResponse(response) {
 
 /** Build an authenticated stateless HTTP Fetch handler. It intentionally does not expose /sse. */
 export function createV2HttpHandler(factory, {
-    auth, profile = 'default', epoch = 0, endpoint = '/mcp', logger = defaultLogger,
+    auth, profile = 'default', epoch = nextRuntimeEpoch(), endpoint = '/mcp', logger = defaultLogger,
 } = {}) {
     const handler = createMcpHandler(factory);
     const unregisterSecret = auth?.token ? registerSecret(auth.token) : () => {};
@@ -153,7 +181,14 @@ export function createV2HttpHandler(factory, {
         if (modern && request.headers.get('mcp-method') === 'subscriptions/listen') return closeListenResponse(response);
         return response;
     }
-    return Object.freeze({ fetch, async close() { closed = true; unregisterSecret(); await handler.close(); } });
+    return Object.freeze({ fetch, async close() {
+        closed = true;
+        unregisterSecret();
+        await handler.close();
+        // Reclaim clean per-handle workspaces and report any dirty file that
+        // must survive shutdown (plan §3).
+        await shutdownReadHandleRuntime({ logger });
+    } });
 }
 
 export async function startV2HttpServer(factory, options = {}) {
@@ -178,7 +213,7 @@ export async function startV2HttpServer(factory, options = {}) {
 }
 
 /** Start a connection-pinned stdio server and retain EOF cleanup missing from SDK 2.0.0. */
-export function startV2Stdio(factory, { profile = 'default', epoch = 0, logger = defaultLogger, input = process.stdin, output = process.stdout } = {}) {
+export function startV2Stdio(factory, { profile = 'default', epoch = nextRuntimeEpoch(), logger = defaultLogger, input = process.stdin, output = process.stdout } = {}) {
     const context = createStdioConnectionContext({ principalFingerprint: fingerprintCredential('stdio'), profile, epoch });
     const connectionFactory = typeof factory.withRequestContext === 'function'
         ? factory.withRequestContext(context)
@@ -195,6 +230,7 @@ export function startV2Stdio(factory, { profile = 'default', epoch = 0, logger =
             input.removeListener('close', onClose);
             closeStdioConnection(context);
             await handle.close();
+            await shutdownReadHandleRuntime({ logger });
         })();
         return closePromise;
     };
