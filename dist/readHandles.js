@@ -176,10 +176,10 @@ function normalizeRandomBytes(value) {
         throw new TypeError('randomBytes must return a Buffer or Uint8Array.');
     }
     const bytes = Buffer.from(value);
-    if (bytes.length !== MIN_CAPABILITY_BYTES) {
-        throw new TypeError(`randomBytes must return exactly ${MIN_CAPABILITY_BYTES} bytes.`);
+    if (bytes.length < MIN_CAPABILITY_BYTES) {
+        throw new TypeError(`randomBytes must return at least ${MIN_CAPABILITY_BYTES} bytes.`);
     }
-    return bytes;
+    return bytes.length === MIN_CAPABILITY_BYTES ? bytes : bytes.subarray(0, MIN_CAPABILITY_BYTES);
 }
 
 function isCapabilitySyntax(value) {

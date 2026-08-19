@@ -1,4 +1,4 @@
-import { publicError, isPublicError, wrapOperationError } from './errors.js';
+import { publicError, isPublicError } from './errors.js';
 import { hexToRgbColor, NotImplementedError } from './types.js';
 import { logger } from './logger.js';
 // --- Constants ---
@@ -43,7 +43,7 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
             if (details && Array.isArray(details)) {
                 detailMsg = details.map((d) => d.description || JSON.stringify(d)).join('; ');
             }
-throw wrapOperationError('send Google Docs API request', error, { status: error?.code });
+            throw publicError(`Invalid request sent to Google Docs API. Details: ${detailMsg || error.message}`);
         }
         if (error.code === 404)
             throw publicError(`Document not found (ID: ${documentId}). Check the ID.`);

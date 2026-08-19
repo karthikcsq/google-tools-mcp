@@ -1,5 +1,5 @@
 import * as fs from 'fs/promises';
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';

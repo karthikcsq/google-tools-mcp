@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient, getDocsClient, getSheetsClient } from '../../clients.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';

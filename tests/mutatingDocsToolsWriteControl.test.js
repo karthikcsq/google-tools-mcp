@@ -9,7 +9,7 @@
 // is the only external dependency; readTracker and googleDocsApiHelpers run for real),
 // mirroring tests/docsWriteControl.test.js and tests/replaceMarkdownWriteControl.test.js.
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
-import { UserError } from 'fastmcp';
+import { UserError } from '../dist/errors.js';
 
 let fakeDocs;
 let fakeDrive;

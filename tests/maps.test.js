@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
-import { UserError } from 'fastmcp';
+import { UserError } from '../dist/errors.js';
 
 function createMockServer() {
     const tools = new Map();

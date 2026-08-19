@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from '@jest/globals';
-import { UserError } from 'fastmcp';
+import { UserError } from '../dist/errors.js';
 import { executeBatchUpdate, executeBatchUpdateWithSplitting } from '../dist/googleDocsApiHelpers.js';
 import { getLastReadRevisionId, trackRead } from '../dist/readTracker.js';
 

@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 import { trackRead } from '../../readTracker.js';

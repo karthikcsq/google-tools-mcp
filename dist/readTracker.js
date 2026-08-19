@@ -3,7 +3,7 @@
 // Tracks which files have been read in this session, when, and optionally the
 // content snapshot at the time of the last read so blocked mutations can return
 // a unified diff instead of a bare "modified externally" error.
-import { UserError } from 'fastmcp';
+import { UserError } from './errors.js';
 import { createPatch } from 'diff';
 import { getDriveClient } from './clients.js';
 import { logger } from './logger.js';

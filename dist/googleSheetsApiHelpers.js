@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError } from './errors.js';
 // --- Core Helper Functions ---
 /**
  * Converts A1 notation to row/column indices (0-based)

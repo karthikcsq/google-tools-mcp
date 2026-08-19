@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';

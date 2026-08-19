@@ -1,7 +1,7 @@
 // Gmail Label tools — consolidated dispatch tool (issue #31/#32/#33).
 // manageLabel replaces create/patch/delete/get/list_label(s).
 import { z } from 'zod';
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { getGmailClient } from '../../clients.js';
 
 export function register(server) {
