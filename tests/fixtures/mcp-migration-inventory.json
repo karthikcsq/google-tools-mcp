@@ -894,7 +894,7 @@
       },
       {
         "file": "dist/tools/docs/replaceRangeWithMarkdown.js",
-        "line": 386,
+        "line": 391,
         "match": ".addTool({"
       },
       {

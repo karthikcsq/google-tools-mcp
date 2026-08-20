@@ -5,7 +5,7 @@ import { DocumentIdParameter, TextFindParameter, TextStyleParameters, ParagraphS
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation } from '../../readTracker.js';
-import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
+import { ReadHandleParameter, beginDocsMutation, docsSnapshotFetchers } from '../../docsHandles.js';
 const RangeTarget = z
     .object({
     startIndex: z.number().int().min(1).describe('Start of range (inclusive, 1-based).'),
@@ -123,7 +123,8 @@ export function register(server) {
             'This tool is TEXT-ONLY: a multi-line replacement is inserted as one blob with a single paragraph style, so markdown syntax stays literal and list nesting is flattened. ' +
             'For multi-line, list, or section-level content at a range, use replaceRangeWithMarkdown; to rewrite a whole document, use replaceDocumentWithMarkdown. ' +
             'To add content to the end of a doc, use appendMarkdown or appendText. ' +
-            "Newly inserted text carries the document's default text color explicitly, when the document defines one.",
+            "Newly inserted text carries the document's default text color explicitly, when the document defines one. " +
+            'If the document changed after you read it, a textToFind target is re-resolved against the current document and proceeds when the change did not touch it; an explicit startIndex/endIndex or insertionIndex is refused unless the change landed strictly after the range, because explicit indices have no anchor to re-resolve and an edit before them moves the content they addressed. Prefer textToFind when a document has other editors.',
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -189,6 +190,41 @@ export function register(server) {
                 // Clamp to minimum 1 (index 0 is the document section break)
                 if (startIndex < 1)
                     startIndex = 1;
+                // --- range-precise conflict check (#108) ---------------------
+                // Everything above resolved the target against the document as
+                // it was a moment ago. If a collaborator moved the document
+                // between the caller's read and now, the guard decides whether
+                // that change could have touched THIS range: a textToFind
+                // target is re-resolved against the guard's own snapshot (so a
+                // change before it shifts the indices harmlessly), while an
+                // explicit index is only permitted when every change landed
+                // strictly after the end of the range. A permitted write is
+                // re-armed onto that snapshot's revision in the same step.
+                const isSemantic = 'textToFind' in args.target;
+                const guardFetchers = docsSnapshotFetchers(docs, args.documentId, args.tabId ?? null);
+                const guarded = await lease.guardTargets({
+                    targets: [{
+                        kind: isSemantic ? 'semantic' : 'explicit',
+                        startIndex,
+                        endIndex,
+                        describe: isSemantic
+                            ? `textToFind "${args.target.textToFind}" (resolved to ${startIndex}-${endIndex})`
+                            : (endIndex === undefined ? `index ${startIndex}` : `range ${startIndex}-${endIndex}`),
+                    }],
+                    ...guardFetchers,
+                    reresolve: async ({ document }) => {
+                        const found = GDocsHelpers.findTextRangeInDoc(document, args.target.textToFind, args.target.matchInstance, args.tabId);
+                        if (!found || found.found === false || found.startIndex === -1) return null;
+                        return { startIndex: found.startIndex, endIndex: found.endIndex };
+                    },
+                });
+                if (guarded.changed && guarded.classified) {
+                    startIndex = guarded.targets[0].startIndex;
+                    endIndex = guarded.targets[0].endIndex;
+                    if (startIndex < 1) startIndex = 1;
+                    log.info(`modifyText: document changed since the read; target re-resolved to ` +
+                        `${startIndex}-${endIndex ?? startIndex} against revision ${guarded.revisionId}`);
+                }
                 // Normalize escape sequences so literal \n / \t in the input
                 // are converted to real newline / tab characters (issue #9).
                 const normalizedText = args.text
@@ -243,6 +279,12 @@ export function register(server) {
                 return `${docUrl}\nSuccessfully ${actions.join(' and ')} at range ${startIndex}-${endIndex ?? startIndex + (args.text?.length ?? 0)}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
+                // A failure before the write (tab not found, text not found, a
+                // #108 range rejection) must leave the read handle usable for
+                // the corrected retry. After a failed write `lease.write` has
+                // already settled the lease with `fail()`, so this is a no-op
+                // there and never downgrades a failed write to an abort.
+                await lease.abort();
                 log.error(`Error in modifyText for doc ${args.documentId}: ${error.message || error}`);
                 if (isPublicError(error))
                     throw error;

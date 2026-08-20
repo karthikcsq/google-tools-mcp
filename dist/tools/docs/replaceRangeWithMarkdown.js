@@ -37,11 +37,15 @@
 // document with BOTH copies (recoverable, reported with the exact range to
 // delete) instead of a hole.
 //
-// Revision safety is unchanged: one `beginDocsMutation` lease authorizes the
-// operation and a `createWriteControlChain` carries requiredRevisionId across
-// every batch, exactly as replaceDocumentWithMarkdown does. #108 has not landed,
-// so there is no range re-resolution: a concurrent edit between the read and
-// this write is rejected as a revision conflict, not silently re-targeted.
+// Revision safety: one `beginDocsMutation` lease authorizes the operation and a
+// `createWriteControlChain` carries requiredRevisionId across every batch,
+// exactly as replaceDocumentWithMarkdown does. Since #108 the lease is also
+// range-scoped: `lease.guardTargets` classifies whether a concurrent edit could
+// have touched the resolved range, re-resolves `heading`/`textToFind` targets
+// against the same snapshot it classified, and re-arms the lease onto that
+// snapshot's revision — so the chain below starts from the revision the guard
+// authorized, never a stale one. Explicit start/end indices keep the strict
+// behavior: a change anywhere before the end of the range is a conflict.
 import * as fs from 'fs/promises';
 import { z } from 'zod';
 import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
@@ -56,6 +60,7 @@ import {
 } from '../../markdown-transformer/index.js';
 import { guardMutation } from '../../readTracker.js';
 import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
+import { walkTabFilter } from '../../docsChangePrecision.js';
 import { NODE_KINDS, walkDocument } from '../../docsStructure.js';
 
 const INDEX_HINT = "Call readDocument with format='index' to get current element indices.";
@@ -393,7 +398,7 @@ export function register(server) {
             'Use replaceDocumentWithMarkdown when you are rewriting the whole body, and appendMarkdown to add to the end. ' +
             'Content outside the range is left untouched, including images, horizontal rules, and other sections; only content inside the range is checked for markdown fidelity, and by default a range holding an image or footnote is refused rather than silently flattened (onFidelityLoss). ' +
             'Pass dryRun to see the resolved range and what would be lost without writing. ' +
-            'The write is guarded by the revision the read saw, so if the document changed since you read it the call fails with a conflict instead of writing to shifted indices — re-read and retry.',
+            'The write is guarded by the revision the read saw. If the document changed since you read it, an afterHeading/headingId or textToFind target is re-resolved against the current document and proceeds when the change did not touch the section; an explicit startIndex/endIndex is refused unless the change landed strictly after the range, since explicit indices have no anchor to re-resolve. Refusals name what changed and where.',
         parameters: ReplaceRangeParameters,
         execute: async (args, { log }) => {
             const tabId = args.tabId ?? null;
@@ -445,7 +450,7 @@ export function register(server) {
             // in the catch means the failure left both copies behind.
             let pendingOldRange = null;
             try {
-                const { contentSource, content } = await fetchBody(
+                const { contentSource, content, revisionId: snapshotRevisionId } = await fetchBody(
                     docs,
                     args.documentId,
                     tabId,
@@ -468,7 +473,60 @@ export function register(server) {
                     elements,
                     maxIndex,
                 });
-                const { start, end, mode } = resolved;
+                const { mode } = resolved;
+
+                // --- range-precise conflict check (#108) --------------------
+                // This runs BEFORE validateRange and everything derived from
+                // the range, because a permitted-despite-change write must use
+                // re-resolved indices and every downstream check (alignment,
+                // fidelity, covered elements) has to be computed from THOSE.
+                // The snapshot handed to the guard is the body already fetched
+                // above, so classification, re-resolution and the write all
+                // describe one document state. `heading` and `textToFind` are
+                // semantic anchors and can be resolved again; explicit
+                // start/end indices cannot, so a change before them blocks.
+                const guarded = await lease.guardTargets({
+                    snapshot: { document: contentSource, revisionId: snapshotRevisionId ?? null },
+                    targets: [{
+                        kind: mode === 'indices' ? 'explicit' : 'semantic',
+                        startIndex: resolved.start,
+                        endIndex: resolved.end,
+                        describe: `${mode} target, resolved to range ${resolved.start}-${resolved.end}`,
+                    }],
+                    reresolve: async ({ document }) => {
+                        try {
+                            if (mode === 'textToFind') {
+                                const found = GDocsHelpers.findTextRangeInDoc(
+                                    document, args.target.textToFind, args.target.matchInstance,
+                                    walkTabFilter(document, tabId),
+                                );
+                                if (!found || found.found === false || found.startIndex === -1) return null;
+                                return { startIndex: found.startIndex, endIndex: found.endIndex };
+                            }
+                            const again = await resolveTargetRange({
+                                docs,
+                                documentId: args.documentId,
+                                tabId,
+                                target: args.target,
+                                preserveHeading,
+                                elements: collectRangeElements(document),
+                                maxIndex,
+                            });
+                            return { startIndex: again.start, endIndex: again.end };
+                        } catch {
+                            // A heading that no longer resolves (gone, or now
+                            // ambiguous) is exactly the "no unique anchor" case
+                            // the guard rejects with its own explanation.
+                            return null;
+                        }
+                    },
+                });
+                const start = guarded.targets[0].startIndex;
+                const end = guarded.targets[0].endIndex;
+                if (guarded.changed && guarded.classified) {
+                    log.info(`replaceRangeWithMarkdown: document changed since the read; ${mode} target re-resolved ` +
+                        `to ${start}-${end} against revision ${guarded.revisionId}`);
+                }
                 const { startAligned } = validateRange({ start, end, mode, elements, maxIndex, tabId });
 
                 const fidelityWarnings = scanRangeFidelity(elements, start, end);

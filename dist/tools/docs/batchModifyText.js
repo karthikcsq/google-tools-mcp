@@ -314,6 +314,7 @@ export function register(server) {
             `Applies up to ${MAX_OPERATIONS} operations (replace a range or found text, insert at an index, delete, apply text or paragraph styling) in ONE atomic batchUpdate. ` +
             'Every target is resolved against one document snapshot and applied highest-index-first, so the indices you read stay valid for all of them and you do not have to recompute offsets between edits. ' +
             'All-or-nothing: if one operation is invalid, none are applied, and the whole batch is guarded by a single revision check, so a concurrent edit is reported as a conflict rather than written against shifted indices. ' +
+            'If the document changed after you read it, every operation is classified against that change: textToFind operations are re-resolved against the current document and proceed when the change did not touch them, while explicit index operations are refused unless the change landed strictly after their range. Any operation that is refused refuses the whole batch, naming what changed and where. ' +
             'Operations whose resolved ranges overlap are rejected up front, naming both. ' +
             'Pass dryRun to get the proposed-vs-current unified diff, an explicit deletion summary, and a per-operation breakdown without writing; a real call returns the same diff for what it applied. ' +
             'This tool is TEXT-ONLY, like modifyText: a multi-line replacement is inserted as one blob with a single paragraph style, so markdown syntax stays literal and list nesting is flattened. ' +
@@ -390,6 +391,32 @@ export function register(server) {
                         style: source.style,
                         paragraphStyle: source.paragraphStyle,
                     });
+                }
+
+                // --- range-precise conflict check (#108) --------------------
+                // The snapshot above is BOTH the resolution source and the
+                // guard's classification source, which is the whole reason this
+                // tool is the natural home for the interface: every target is
+                // already resolved against the exact document state the guard
+                // classifies, so `reresolve` hands the same ranges straight
+                // back rather than recomputing them against a second fetch.
+                // A permitted changed-document batch re-arms the lease onto
+                // this snapshot's revision, so the single WriteControl below
+                // carries it instead of the stale handle revision.
+                const guarded = await lease.guardTargets({
+                    snapshot: { document: snapshot.data, revisionId: snapshot.data?.revisionId ?? null },
+                    targets: resolved.map((op) => ({
+                        kind: 'textToFind' in op.source.target ? 'semantic' : 'explicit',
+                        startIndex: op.startIndex,
+                        endIndex: op.endIndex,
+                        describe: `${opName(op)} — ${describeTarget(op)}, resolved to ` +
+                            `${op.endIndex === undefined ? `index ${op.startIndex}` : `${op.startIndex}-${op.endIndex}`}`,
+                    })),
+                    reresolve: () => resolved.map((op) => ({ startIndex: op.startIndex, endIndex: op.endIndex })),
+                });
+                if (guarded.changed && guarded.classified) {
+                    log.info(`batchModifyText: document changed since the read; ${resolved.length} target(s) ` +
+                        `re-resolved against revision ${guarded.revisionId}`);
                 }
 
                 // --- overlap rejection, before anything is built ------------

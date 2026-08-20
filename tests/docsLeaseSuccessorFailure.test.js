@@ -28,10 +28,17 @@ const settled = { completeCalls: 0, failCalls: 0, abortCalls: 0 };
 jest.unstable_mockModule('../dist/docsHandles.js', () => ({
     ReadHandleParameter: z.string().optional(),
     mintDocsReadHandle: async () => null,
+    docsSnapshotFetchers: () => ({ fetchRevisionId: async () => null, fetchSnapshot: async () => null }),
     beginDocsMutation: async () => ({
         active: true,
         revisionId: 'rev-read',
         writeControlFor: () => ({ requiredRevisionId: 'rev-read' }),
+        // #108's range check. This suite is about what happens AFTER a
+        // successful write, so the guard is stubbed to the "nothing changed"
+        // verdict and hands every target straight back.
+        async guardTargets({ targets = [] } = {}) {
+            return { changed: false, classified: false, revisionId: 'rev-read', snapshot: null, targets };
+        },
         async complete() {
             settled.completeCalls += 1;
             throw new Error('successor workspace could not be created');

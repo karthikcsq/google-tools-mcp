@@ -5,11 +5,12 @@ import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation } from '../../readTracker.js';
-import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
+import { ReadHandleParameter, beginDocsMutation, docsSnapshotFetchers } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'deleteRange',
-        description: "Deletes content within a character range [startIndex, endIndex) from a document. Use readDocument with format='index' to determine index positions — it returns a compact structural map with the exact start/end of every element.",
+        description: "Deletes content within a character range [startIndex, endIndex) from a document. Use readDocument with format='index' to determine index positions — it returns a compact structural map with the exact start/end of every element. " +
+            'If the document changed after you read it, this call is refused unless the change landed strictly after the end of the range: explicit indices carry no anchor to re-resolve, so an edit before them silently moves the content they addressed. The refusal names what changed and where.',
         parameters: DocumentIdParameter.extend({
             startIndex: z
                 .number()
@@ -32,9 +33,25 @@ export function register(server) {
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
+            // deleteRange is the one guarded writer whose target is fully known
+            // before it fetches anything, so it uses beginDocsMutation's
+            // built-in range check rather than calling lease.guardTargets by
+            // hand. The target is ALWAYS explicit: a deletion addressed by
+            // character indices has no semantic anchor to re-resolve, so the
+            // only change that can be permitted is one landing strictly after
+            // the end of the range (#108).
+            const { fetchRevisionId, fetchSnapshot } = docsSnapshotFetchers(docs, args.documentId, args.tabId ?? null);
             const lease = await beginDocsMutation(args.documentId, {
                 tabId: args.tabId ?? null,
                 readHandle: args.readHandle,
+                targetRange: {
+                    kind: 'explicit',
+                    startIndex: args.startIndex,
+                    endIndex: args.endIndex,
+                    describe: `range ${args.startIndex}-${args.endIndex} (deleteRange)`,
+                },
+                fetchRevisionId,
+                fetchSnapshot,
                 legacyGuard: () => guardMutation(args.documentId, {
                     contentFetcher: async () => {
                         const current = await docs.documents.get({ documentId: args.documentId });
