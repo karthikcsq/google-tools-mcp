@@ -361,7 +361,7 @@ Google Drive file management and content reading.
 ### `documents` (22 tools)
 Google Docs read/write/format with markdown support.
 
-`readDocument`, `appendText`, `deleteRange`, `modifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`
+`readDocument`, `appendText`, `deleteRange`, `modifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`, `replaceRangeWithMarkdown`
 
 ### `spreadsheets` (30 tools)
 Google Sheets operations.
@@ -421,7 +421,7 @@ The categories above contain 152 service-specific tools. Four general utilities 
 
 ## Finding Character Indices in a Doc
 
-Every index-addressed Docs tool (`modifyText`, `deleteRange`, `insertTable`, `insertTableWithData`, `insertPageBreak`) needs `startIndex`/`endIndex` values. Get them with `readDocument` and `format='index'`:
+Every index-addressed Docs tool (`modifyText`, `replaceRangeWithMarkdown`, `deleteRange`, `insertTable`, `insertTableWithData`, `insertPageBreak`) needs `startIndex`/`endIndex` values. Get them with `readDocument` and `format='index'`:
 
 ```json
 {"format":"index","documentId":"…","revisionId":"…","tabId":null,"documentEnd":151,
@@ -444,7 +444,7 @@ Large documents paginate at element boundaries: set `maxResponseChars` (default 
 
 `readDocument` (markdown format) saves what it reads to a local working-copy file, keyed by document ID and tab, so you can edit that file directly and push it back with `replaceDocumentWithMarkdown` using `filePath` instead of pasting content inline. `replaceDocumentWithMarkdown` also mirrors any inline `markdown=` push into that same file, so it always reflects what's actually on the document.
 
-If the document contains content markdown can't represent (images, footnotes, a generated table of contents, or other Docs elements with no markdown equivalent), `readDocument` appends a warning after the markdown listing exactly what a full `replaceDocumentWithMarkdown` push would permanently remove. Use `modifyText` or `appendMarkdown` instead for those documents.
+If the document contains content markdown can't represent (images, footnotes, a generated table of contents, or other Docs elements with no markdown equivalent), `readDocument` appends a warning after the markdown listing exactly what a full `replaceDocumentWithMarkdown` push would permanently remove. That warning is about a whole-body push: to rewrite one section of such a document, use `replaceRangeWithMarkdown`, which builds the same markdown structure inside a chosen range and checks fidelity only inside it, leaving the images and rules elsewhere alone.
 
 These files live in a per-user directory under the OS temp dir (`google-tools-mcp-<user>`), created with restrictive permissions and checked on every write so a planted symlink is refused rather than followed. Set `GOOGLE_MCP_WORKSPACE_DIR` to use a different directory instead.
 

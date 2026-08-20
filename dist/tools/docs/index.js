@@ -7,6 +7,7 @@ import { register as appendToGoogleDoc } from './appendToGoogleDoc.js';
 import { register as deleteRange } from './deleteRange.js';
 import { register as modifyText } from './modifyText.js';
 import { register as findAndReplace } from './findAndReplace.js';
+import { register as replaceRangeWithMarkdown } from './replaceRangeWithMarkdown.js';
 // Structure
 import { register as insertTable } from './insertTable.js';
 import { register as insertTableWithData } from './insertTableWithData.js';
@@ -25,6 +26,7 @@ export function registerDocsTools(server) {
     deleteRange(server);
     modifyText(server);
     findAndReplace(server);
+    replaceRangeWithMarkdown(server);
     // Structure
     insertTable(server);
     insertTableWithData(server);

@@ -119,7 +119,8 @@ export function register(server) {
             'Supports \\n for line breaks and \\t for tabs in replacement text. ' +
             'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance. ' +
             "textToFind tolerates markdown list markers copied from readDocument(format='markdown'), because Google Docs stores bullets outside text runs. " +
-            'For multi-line or section-level rewrites, use replaceDocumentWithMarkdown instead. ' +
+            'This tool is TEXT-ONLY: a multi-line replacement is inserted as one blob with a single paragraph style, so markdown syntax stays literal and list nesting is flattened. ' +
+            'For multi-line, list, or section-level content at a range, use replaceRangeWithMarkdown; to rewrite a whole document, use replaceDocumentWithMarkdown. ' +
             'To add content to the end of a doc, use appendMarkdown or appendText. ' +
             "Newly inserted text carries the document's default text color explicitly, when the document defines one.",
         parameters: ModifyTextParameters,

@@ -16,6 +16,7 @@ export function register(server) {
             "Does not support markdown images or raw HTML outside those listed extensions; unsupported content is omitted and reported as warnings in the result. Use insertImage for images. " +
             "Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes. " +
             "PREFERRED WORKFLOW for large edits: readDocument saves the content to a local working-copy file and returns its path — edit that file, then pass it here as filePath instead of inline markdown, to avoid truncation and get a reviewable diff before pushing. " +
+            "To rewrite ONE section instead of the whole body — keeping images, rules, and every other section untouched — use replaceRangeWithMarkdown, which builds the same structure inside a caller-chosen range. " +
             "For small single-location edits (one line or paragraph), use modifyText instead. " +
             "To add content without rewriting, use appendMarkdown. " +
             "Inserted text carries the document's default text color explicitly, when the document defines one.",

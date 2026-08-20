@@ -165,6 +165,7 @@ function legacyLease(documentId) {
         },
         async complete(newRevisionId) { trackMutation(documentId, newRevisionId); },
         async fail() {},
+        async abort() {},
         async requireReread(reason) { requireRereadBeforeMutation(documentId, reason); },
     });
 }
@@ -285,6 +286,18 @@ export async function beginDocsMutation(documentId, {
             settled = true;
             try { store.completeAfterWriteFailure(lease.operationId); }
             catch { /* the caller is already throwing the real failure */ }
+        },
+        // Release the reservation WITHOUT consuming the handle, for a tool that
+        // decides not to write after taking the lease: a dryRun, or a range that
+        // fails validation before any request reaches Google. Without this the
+        // record would stay `reserved` and the caller's next attempt — the
+        // corrected one — would be rejected as an in-flight mutation even though
+        // the document was never touched.
+        async abort() {
+            if (settled) return;
+            settled = true;
+            try { store.abortBeforeWrite(lease.operationId); }
+            catch { /* the caller is already returning or throwing */ }
         },
         // A write whose resulting revision we cannot observe (the Apps Script
         // image path) leaves this handle unable to guard anything: terminalize

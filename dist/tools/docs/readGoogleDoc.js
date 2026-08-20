@@ -250,7 +250,9 @@ export function register(server) {
                     const fidelityNotice = fidelityWarnings.length > 0
                         ? '\n\n---\n⚠️ FORMATTING LOSS WARNING: This document contains content that cannot be represented in markdown. Calling replaceDocumentWithMarkdown will permanently lose:\n' +
                             fidelityWarnings.map(w => `  • ${w}`).join('\n') +
-                            '\nConsider using modifyText or appendMarkdown for targeted edits instead.\n---'
+                            '\nThis warning is about a WHOLE-BODY replacement. To rewrite one section while leaving that content ' +
+                            'in place, use replaceRangeWithMarkdown: it builds the same markdown structure inside a chosen range ' +
+                            'and checks fidelity only inside that range. For one line or paragraph of plain text, use modifyText.\n---'
                         : '';
                     if (args.diffFromLastRead) {
                         const previous = getLastReadContent(args.documentId);
