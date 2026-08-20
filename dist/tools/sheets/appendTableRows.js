@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -44,7 +44,7 @@ export function register(server) {
                 log.error(`Error appending table rows: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to append table rows: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('append table rows', error, { status: error?.code });
             }
         },
     });

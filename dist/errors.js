@@ -98,6 +98,36 @@ export function wrapOperationError(operation, cause, metadata = {}) {
     });
 }
 
+/**
+ * Extract the Google API's own account of a failure from the structured error
+ * payload every googleapis client attaches to a rejected request
+ * (`error.response.data.error`). That `message` is validated upstream detail —
+ * the API describing what was wrong with the request — and is the only part of
+ * a caught API error that may cross the public boundary.
+ *
+ * The thrown object's own `error.message` is deliberately NOT consulted: it is
+ * arbitrary internal text (filesystem paths, resolved hosts, request
+ * internals) that the redactor cannot recognise as sensitive. A call site that
+ * gets `null` back has no validated detail to show and must fall through to
+ * `wrapOperationError` rather than reaching for `error.message`.
+ *
+ * @returns {{ description: string, code: number | undefined } | null}
+ */
+export function getApiErrorDetail(error) {
+    let description;
+    let rawCode;
+    try {
+        const payload = error?.response?.data?.error;
+        description = payload?.message;
+        rawCode = payload?.code;
+    } catch {
+        // A hostile or exotic error object must not break the error path.
+        return null;
+    }
+    if (typeof description !== 'string' || description.length === 0) return null;
+    return { description, code: Number.isInteger(rawCode) ? rawCode : undefined };
+}
+
 /** Register a runtime credential that must be removed from all diagnostics. */
 export function registerSecret(secret) {
     if (typeof secret !== 'string' || secret.length === 0) return () => {};

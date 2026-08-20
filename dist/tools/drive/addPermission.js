@@ -1,4 +1,4 @@
-import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
+import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -81,8 +81,13 @@ export function register(server) {
                     throw publicError(`File not found (ID: ${args.fileId}).`);
                 if (error.code === 403)
                     throw publicError('Permission denied. You need writer+ access (or be the owner) to share this file.');
-                const apiMsg = error.response?.data?.error?.message || error.message || 'Unknown error';
-throw wrapOperationError('add Drive permission', error, { status: error?.code });
+                // Drive's structured message explains sharing rejections the
+                // status code alone cannot (domain policy, ownership transfer
+                // rules, invalid target). It is validated upstream detail and
+                // stays caller-visible; without it there is nothing safe to say.
+                const detail = getApiErrorDetail(error);
+                if (!detail) throw wrapOperationError('add Drive permission', error, { status: error?.code });
+                throw publicError(`Failed to add permission: ${detail.description}`);
             }
         },
     });

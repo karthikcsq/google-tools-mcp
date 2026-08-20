@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -64,7 +64,7 @@ export function register(server) {
                 log.error(`Error removing row groups: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to remove row groups: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('remove row groups', error, { status: error?.code });
             }
         },
     });

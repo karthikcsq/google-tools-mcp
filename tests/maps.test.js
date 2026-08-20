@@ -244,6 +244,9 @@ describe('Maps tools', () => {
         // string. If the underlying fetch fails in a way whose error message echoes back
         // the URL it was given (e.g. an invalid-URL TypeError), the raw error message would
         // otherwise carry `?key=test-key` straight into a caller-visible UserError.
+        // The transport-failure path no longer emits any caught text at all — it
+        // returns the generic operation template — so the key cannot appear
+        // redacted or otherwise.
         process.env.GOOGLE_MAPS_API_KEY = 'test-key';
         global.fetch = jest.fn().mockImplementation((url) => {
             throw new TypeError(`Failed to parse URL from ${url}`);
@@ -257,7 +260,8 @@ describe('Maps tools', () => {
         expect(thrown).toBeDefined();
         expect(thrown.message).not.toContain('test-key');
         expect(thrown.message).not.toContain('key=test-key');
-        expect(thrown.message).toContain('[REDACTED]');
+        expect(thrown.message).not.toContain('maps.googleapis.com');
+        expect(thrown.message).toBe('The Google Maps request operation failed.');
     });
 
     it('regression: does not leak the API key when the Google Maps API returns an error alongside the request status', async () => {

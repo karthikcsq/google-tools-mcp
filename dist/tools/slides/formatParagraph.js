@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -65,7 +65,7 @@ export function register(server) {
                 return JSON.stringify({ success: true, message: `Applied paragraph formatting to ${args.objectId}` });
             } catch (error) {
                 log.error(`Error formatting paragraph: ${error.message || error}`);
-                throw new UserError(`Failed to format paragraph: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('format paragraph', error, { status: error?.code });
             }
         },
     });

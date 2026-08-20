@@ -1,4 +1,4 @@
-import { publicError, isPublicError } from './errors.js';
+import { publicError, isPublicError, wrapOperationError } from './errors.js';
 import { hexToRgbColor, NotImplementedError } from './types.js';
 import { logger } from './logger.js';
 // --- Constants ---
@@ -41,9 +41,21 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
             const details = error.response?.data?.error?.details;
             let detailMsg = '';
             if (details && Array.isArray(details)) {
-                detailMsg = details.map((d) => d.description || JSON.stringify(d)).join('; ');
+                // Only the API's own structured `description` strings are
+                // caller-safe. A detail entry without one is an unknown shape,
+                // so it is dropped rather than JSON.stringify'd into the public
+                // message — the whole error still reaches the server log below.
+                detailMsg = details
+                    .map((d) => (typeof d?.description === 'string' ? d.description : ''))
+                    .filter(Boolean)
+                    .join('; ');
             }
-            throw publicError(`Invalid request sent to Google Docs API. Details: ${detailMsg || error.message}`);
+            // The raw `error.message` fallback is arbitrary internal text, so it
+            // stays an internal cause instead of being promoted to a public message.
+            if (!detailMsg) {
+                throw wrapOperationError('Google Docs batch update', error, { status: error.code });
+            }
+            throw publicError(`Invalid request sent to Google Docs API. Details: ${detailMsg}`);
         }
         if (error.code === 404)
             throw publicError(`Document not found (ID: ${documentId}). Check the ID.`);

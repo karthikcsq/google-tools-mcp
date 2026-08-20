@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -137,7 +137,7 @@ export function register(server) {
                 log.error(`Error adding conditional format rule: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to add conditional formatting: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('add conditional formatting', error, { status: error?.code });
             }
         },
     });

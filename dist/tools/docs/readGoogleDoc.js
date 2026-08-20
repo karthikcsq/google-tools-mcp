@@ -1,4 +1,4 @@
-import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
+import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } from '../../errors.js';
 import { z } from 'zod';
 import { createPatch } from 'diff';
 import { getDocsClient, getDriveClient } from '../../clients.js';
@@ -304,10 +304,14 @@ export function register(server) {
                     }
                     throw publicError(`Permission denied for doc (ID: ${args.documentId}). The Google Docs API may be restricted by your Workspace admin.`);
                 }
-                // Extract detailed error information from Google API response
-                const errorDetails = error.response?.data?.error?.message || error.message || 'Unknown error';
-                const errorCode = error.response?.data?.error?.code || error.code;
-throw wrapOperationError('read Google document', error, { status: error?.code });
+                // The Docs API's own description of the failure, plus its
+                // structured numeric code. Both are validated upstream fields;
+                // the thrown object's own message is never used.
+                const detail = getApiErrorDetail(error);
+                if (!detail) throw wrapOperationError('read Google document', error, { status: error?.code });
+                throw publicError(
+                    `Failed to read doc: ${detail.description}${detail.code ? ` (Code: ${detail.code})` : ''}`
+                );
             }
         },
     });

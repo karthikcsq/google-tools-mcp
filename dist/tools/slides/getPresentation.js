@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -80,7 +80,7 @@ export function register(server) {
             } catch (error) {
                 if (error instanceof UserError) throw error;
                 log.error(`Error reading presentation: ${error.message || error}`);
-                throw new UserError(`Failed to read presentation: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('read presentation', error, { status: error?.code });
             }
         },
     });

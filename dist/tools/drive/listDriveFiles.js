@@ -104,9 +104,7 @@ export function register(server) {
                     throw publicError(
                         'Permission denied. Make sure you have granted Google Drive access to the application.'
                     );
-                throw publicError(
-                    `Failed to list files: ${error.message || 'Unknown error'}`
-                );
+                throw wrapOperationError('list Drive files', error, { status: error?.code });
             }
         },
     });

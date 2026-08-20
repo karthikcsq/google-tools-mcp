@@ -17,6 +17,58 @@ let formsClient = null;
 let slidesClient = null;
 let tasksClient = null;
 
+// Auth is the one failure mode where a generic "the operation failed" costs the
+// caller a fix they could otherwise apply themselves, so the caught error is
+// classified into a small closed set of known causes and only the matching
+// CONSTANT is emitted. Nothing derived from the caught text crosses the
+// boundary: an unclassified failure carries no detail at all, and the full
+// error is always logged server-side by the caller of this table.
+const AUTH_FAILURE_GUIDANCE = {
+    invalid_grant:
+        'Cause: the saved Google refresh token has expired or been revoked. '
+        + 'Re-running auth issues a new one.',
+    access_denied:
+        'Cause: the Google consent screen was closed or access was declined. '
+        + 'Re-run auth and approve the requested scopes.',
+    invalid_client:
+        'Cause: the configured Google OAuth client is not accepted by Google. '
+        + 'Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then re-run auth.',
+    missing_credentials:
+        'Cause: no OAuth client credentials were found. Set GOOGLE_CLIENT_ID and '
+        + 'GOOGLE_CLIENT_SECRET (or place a credentials.json from the Google Cloud '
+        + 'Console in the config directory), then re-run auth. Running the auth '
+        + 'command prints the exact locations it searched.',
+    port_in_use:
+        'Cause: the OAuth callback port is already in use. Free it (or set '
+        + 'GOOGLE_MCP_OAUTH_PORT to a free port), then re-run auth.',
+    timed_out:
+        'Cause: the browser authorization flow was not completed in time. Re-run auth '
+        + 'and finish the Google sign-in in the browser tab it opens.',
+    unreachable:
+        'Cause: Google could not be reached to complete authentication. Check network '
+        + 'connectivity, then re-run auth.',
+};
+
+// Match only on shapes we control or that OAuth defines: our own thrown
+// messages from dist/auth.js, Node's `code` for socket-level failures, and the
+// RFC 6749 error identifiers Google returns. Anything else returns undefined.
+function classifyAuthFailure(error) {
+    const message = typeof error?.message === 'string' ? error.message : '';
+    const oauthCode = error?.response?.data?.error;
+    const nodeCode = error?.code;
+
+    if (oauthCode === 'invalid_grant' || message.includes('invalid_grant')) return 'invalid_grant';
+    if (oauthCode === 'access_denied' || /Authorization error: access_denied/.test(message)) return 'access_denied';
+    if (oauthCode === 'invalid_client' || message.includes('invalid_client')) return 'invalid_client';
+    if (message.startsWith('No OAuth credentials found')
+        || message.startsWith('Service account key file not found')) return 'missing_credentials';
+    if (nodeCode === 'EADDRINUSE') return 'port_in_use';
+    if (message.startsWith('OAuth flow timed out')) return 'timed_out';
+    if (nodeCode === 'ENOTFOUND' || nodeCode === 'ECONNREFUSED' || nodeCode === 'EAI_AGAIN'
+        || nodeCode === 'ETIMEDOUT') return 'unreachable';
+    return undefined;
+}
+
 async function ensureAuth() {
     if (authClient) return;
     try {
@@ -27,10 +79,11 @@ async function ensureAuth() {
         if (isPublicError(error)) throw error;
         logger.error('Failed to initialize Google API client:', error);
         authClient = null;
+        const guidance = AUTH_FAILURE_GUIDANCE[classifyAuthFailure(error)];
         throw publicError(
-            'Google authentication required. A browser window should have opened automatically. ' +
-            'If not, run: npx google-tools-mcp auth\n\n' +
-            'Details: ' + (error.message || error)
+            'Google authentication required. A browser window should have opened automatically. '
+            + 'If not, run: npx google-tools-mcp auth'
+            + (guidance ? `\n\n${guidance}` : '')
         );
     }
 }

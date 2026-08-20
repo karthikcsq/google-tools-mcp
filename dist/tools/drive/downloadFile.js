@@ -259,9 +259,7 @@ export function register(server) {
                     throw publicError(
                         'Permission denied. Make sure you have access to this file.'
                     );
-                throw publicError(
-                    `Failed to download file: ${error.message || 'Unknown error'}`
-                );
+                throw wrapOperationError('download Drive file', error, { status: error?.code });
             }
         },
     });

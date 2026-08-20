@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -75,7 +75,7 @@ export function register(server) {
                 return JSON.stringify({ success: true, objectId: elementId, message: `Created text box: ${elementId}` });
             } catch (error) {
                 log.error(`Error creating text box: ${error.message || error}`);
-                throw new UserError(`Failed to create text box: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('create text box', error, { status: error?.code });
             }
         },
     });

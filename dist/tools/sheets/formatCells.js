@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -100,7 +100,7 @@ export function register(server) {
                 log.error(`Error formatting cells: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to format cells: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('format cells', error, { status: error?.code });
             }
         },
     });

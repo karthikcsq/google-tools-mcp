@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -85,7 +85,7 @@ export function register(server) {
                 return JSON.stringify({ success: true, objectId: elementId, message: `Created ${args.shapeType} shape: ${elementId}` });
             } catch (error) {
                 log.error(`Error creating shape: ${error.message || error}`);
-                throw new UserError(`Failed to create shape: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('create shape', error, { status: error?.code });
             }
         },
     });

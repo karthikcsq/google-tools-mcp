@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -35,7 +35,7 @@ export function register(server) {
             } catch (error) {
                 if (error instanceof UserError) throw error;
                 log.error(`Error exporting thumbnail: ${error.message || error}`);
-                throw new UserError(`Failed to export thumbnail: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('export thumbnail', error, { status: error?.code });
             }
         },
     });

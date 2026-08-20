@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 export function register(server) {
@@ -35,7 +35,7 @@ export function register(server) {
                 log.error(`Error deleting chart: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to delete chart: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('delete chart', error, { status: error?.code });
             }
         },
     });

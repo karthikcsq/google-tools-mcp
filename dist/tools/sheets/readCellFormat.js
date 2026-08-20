@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import { rowColToA1 } from '../../googleSheetsApiHelpers.js';
@@ -136,7 +136,7 @@ export function register(server) {
                 log.error(`Error reading cell format for spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to read cell format: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('read cell format', error, { status: error?.code });
             }
         },
     });

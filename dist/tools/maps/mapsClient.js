@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 
 export function getMapsApiKey() {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -27,7 +27,11 @@ export function redactSecrets(text) {
 export async function mapsFetch(url, options = {}) {
     let response;
     try { response = await fetch(url, options); }
-    catch (error) { throw new UserError(redactSecrets(`Google Maps request failed: ${error.message || error}`)); }
+    // A transport-level failure message is arbitrary internal text (the request
+    // URL with its embedded key, resolved hosts, proxy state), so it stays an
+    // internal cause. The structured API errors below are the caller-actionable
+    // half and still cross the boundary, redacted.
+    catch (error) { throw wrapOperationError('Google Maps request', error, { code: error?.code }); }
     let data;
     try { data = await response.json(); } catch { data = null; }
     if (data === null && response.ok) {

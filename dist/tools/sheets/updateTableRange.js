@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -45,7 +45,7 @@ export function register(server) {
                 log.error(`Error updating table range: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to update table range: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('update table range', error, { status: error?.code });
             }
         },
     });

@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient, getDocsClient, getSheetsClient } from '../../clients.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
@@ -79,7 +79,7 @@ export function register(server) {
             } catch (error) {
                 if (error.code === 404) throw new UserError(`File not found: ${args.fileId}`);
                 if (error.code === 403) throw new UserError('Permission denied. Check that the file is shared with this account.');
-                throw new UserError(`Failed to get file info: ${error.message}`);
+                throw wrapOperationError('get file info', error, { status: error?.code });
             }
 
             log.info(`File "${fileMeta.name}" is ${fileMeta.mimeType}`);

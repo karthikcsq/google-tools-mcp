@@ -1,5 +1,5 @@
 import * as fs from 'fs/promises';
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
@@ -57,7 +57,9 @@ export function register(server) {
                     markdown = await fs.readFile(args.filePath, 'utf-8');
                     log.info(`Read ${markdown.length} chars from file: ${args.filePath}`);
                 } catch (err) {
-                    throw new UserError(`Failed to read file at "${args.filePath}": ${err.message}`);
+                    // A local fs error message carries server-side absolute paths,
+                    // so it stays an internal cause (matching appendToGoogleDoc).
+                    throw wrapOperationError('read local markdown file', err, { code: err?.code });
                 }
             }
             if (!markdown || markdown.length === 0) {
@@ -148,7 +150,7 @@ export function register(server) {
                 if (error instanceof UserError || error instanceof MarkdownConversionError) {
                     throw error;
                 }
-                throw new UserError(`Failed to append markdown: ${error.message}`);
+                throw wrapOperationError('append markdown', error, { status: error?.code });
             }
         },
     });

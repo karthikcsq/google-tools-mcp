@@ -75,9 +75,7 @@ export function register(server) {
                     throw publicError(
                         'The specified event_id does not appear to be a recurring event.'
                     );
-                throw publicError(
-                    `Failed to list recurring instances: ${error.message || 'Unknown error'}`
-                );
+                throw wrapOperationError('list recurring instances', error, { status: error?.code });
             }
         },
     });

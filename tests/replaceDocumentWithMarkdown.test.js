@@ -98,12 +98,21 @@ describe('replaceDocumentWithMarkdown workspace mirror ordering', () => {
         const server = createServer();
         register(server);
 
-        await expect(
-            server.getTool('replaceDocumentWithMarkdown').execute(
+        // The tool still rejects, but the arbitrary caught text is now an
+        // internal cause rather than a caller-visible message: the caller gets
+        // the generic operation template only.
+        let thrown;
+        try {
+            await server.getTool('replaceDocumentWithMarkdown').execute(
                 { documentId, markdown: 'NEW CONTENT THAT NEVER LANDS' },
                 { log }
-            )
-        ).rejects.toThrow(/simulated insert failure/);
+            );
+        } catch (error) {
+            thrown = error;
+        }
+        expect(thrown).toBeDefined();
+        expect(thrown.message).toBe('The apply markdown operation failed.');
+        expect(thrown.message).not.toContain('simulated insert failure');
 
         // The Docs mutation never succeeded, so the local mirror must still
         // hold exactly what was there before this call -- never the new

@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -52,7 +52,7 @@ export function register(server) {
                 log.error(`Error freezing rows/columns: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to freeze rows/columns: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('freeze rows/columns', error, { status: error?.code });
             }
         },
     });

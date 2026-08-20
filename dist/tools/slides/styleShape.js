@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -104,7 +104,7 @@ export function register(server) {
                 return JSON.stringify({ success: true, message: `Applied styling to shape ${args.objectId}` });
             } catch (error) {
                 log.error(`Error styling shape: ${error.message || error}`);
-                throw new UserError(`Failed to style shape: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('style shape', error, { status: error?.code });
             }
         },
     });

@@ -1,4 +1,4 @@
-import { UserError } from '../../errors.js';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -51,7 +51,7 @@ export function register(server) {
                 return JSON.stringify({ success: true, message: `Set background for ${args.pageObjectIds.length} slide(s)` });
             } catch (error) {
                 log.error(`Error setting background: ${error.message || error}`);
-                throw new UserError(`Failed to set background: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('set background', error, { status: error?.code });
             }
         },
     });

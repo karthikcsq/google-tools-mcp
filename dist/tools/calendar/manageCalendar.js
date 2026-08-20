@@ -112,9 +112,7 @@ export function register(server) {
                     throw publicError('Calendar not found. Check the calendar_id.');
                 if (error.code === 403)
                     throw publicError('Permission denied. You can only modify calendars you own.');
-                throw publicError(
-                    `Failed to ${args.action} calendar: ${error.message || 'Unknown error'}`
-                );
+                throw wrapOperationError('manage calendar', error, { status: error?.code });
             }
         },
     });

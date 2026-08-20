@@ -1,4 +1,4 @@
-import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
+import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -33,8 +33,11 @@ export function register(server) {
                     throw publicError(`Permission or file not found (fileId: ${args.fileId}, permissionId: ${args.permissionId}).`);
                 if (error.code === 403)
                     throw publicError('Permission denied. You need writer+ access (or be the owner) to modify sharing.');
-                const apiMsg = error.response?.data?.error?.message || error.message || 'Unknown error';
-throw wrapOperationError('remove Drive permission', error, { status: error?.code });
+                // Validated upstream detail (e.g. "cannot remove the last
+                // organizer") stays caller-visible; the raw thrown text does not.
+                const detail = getApiErrorDetail(error);
+                if (!detail) throw wrapOperationError('remove Drive permission', error, { status: error?.code });
+                throw publicError(`Failed to remove permission: ${detail.description}`);
             }
         },
     });
