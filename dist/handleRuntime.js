@@ -316,8 +316,24 @@ async function removeWorkspaceFiles(manifest) {
     await releaseBaselineReference(manifest.baselineId, manifest.workspaceId);
 }
 
+// Test seam: make the next discardHandleWorkspace(workspaceId) call for this
+// exact workspaceId reject once instead of performing real cleanup. Every fs
+// op inside removeWorkspaceFiles is already best-effort (individually caught)
+// by design, so there is no way to provoke a genuine OS-level rejection here
+// -- this exists to exercise the "post-commit cleanup failure must never
+// surface as a tool error" contract in dist/docsHandles.js `complete()`
+// without weakening that internal best-effort behavior.
+let forcedDiscardFailureWorkspaceId = null;
+export function forceDiscardFailureForTesting(workspaceId) {
+    forcedDiscardFailureWorkspaceId = workspaceId;
+}
+
 /** Drop a workspace whose handle was consumed by a successful write. */
 export async function discardHandleWorkspace(workspaceId) {
+    if (forcedDiscardFailureWorkspaceId !== null && forcedDiscardFailureWorkspaceId === workspaceId) {
+        forcedDiscardFailureWorkspaceId = null;
+        throw new Error('simulated handle workspace discard failure (test seam)');
+    }
     const manifest = ownedWorkspaces.get(workspaceId);
     if (!manifest) return false;
     await removeWorkspaceFiles(manifest);
@@ -451,6 +467,7 @@ export function resetHandleRuntimeState() {
     configuredBinding = null;
     ownedWorkspaces.clear();
     baselineReferences.clear();
+    forcedDiscardFailureWorkspaceId = null;
 }
 
 /** Diagnostics for tests and status output. */

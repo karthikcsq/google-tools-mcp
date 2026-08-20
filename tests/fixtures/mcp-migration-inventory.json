@@ -564,6 +564,9 @@
         "file": "tests/guardMutationRevisionRefresh.test.js"
       },
       {
+        "file": "tests/handleRuntimeStructuralFingerprint.test.js"
+      },
+      {
         "file": "tests/helpers.test.js"
       },
       {
