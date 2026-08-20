@@ -10,9 +10,6 @@
         "file": "dist/auth.js"
       },
       {
-        "file": "dist/cachedToolsList.js"
-      },
-      {
         "file": "dist/clients.js"
       },
       {
@@ -65,9 +62,6 @@
       },
       {
         "file": "dist/requestContext.js"
-      },
-      {
-        "file": "dist/sessionContext.js"
       },
       {
         "file": "dist/setup.js"
@@ -540,6 +534,9 @@
         "file": "tests/documentationConsistency.test.js"
       },
       {
+        "file": "tests/entrypointSmoke.test.js"
+      },
+      {
         "file": "tests/errorsAndLogger.test.js"
       },
       {
@@ -627,7 +624,7 @@
         "file": "tests/requestContextAndReadHandles.test.js"
       },
       {
-        "file": "tests/sessionIsolation.test.js"
+        "file": "tests/requestScopedTrackerIsolation.test.js"
       },
       {
         "file": "tests/setup.js"
@@ -668,25 +665,8 @@
     ]
   },
   "findings": {
-    "fastMcpImports": [
-      {
-        "file": "dist/index.js",
-        "line": 12,
-        "match": "import { FastMCP } from 'fastmcp'"
-      },
-      {
-        "file": "tests/mcpSdkV2Compatibility.test.js",
-        "line": 4,
-        "match": "import { FastMCP } from 'fastmcp'"
-      }
-    ],
-    "rawMcpSdkImports": [
-      {
-        "file": "dist/cachedToolsList.js",
-        "line": 3,
-        "match": "import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'"
-      }
-    ],
+    "fastMcpImports": [],
+    "rawMcpSdkImports": [],
     "addToolRegistrations": [
       {
         "file": "dist/tools/calendar/getBusy.js",
@@ -1170,22 +1150,22 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 250,
+        "line": 242,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 274,
+        "line": 266,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 295,
+        "line": 287,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 423,
+        "line": 415,
         "match": ".addTool({"
       },
       {

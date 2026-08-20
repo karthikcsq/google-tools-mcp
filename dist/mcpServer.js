@@ -384,10 +384,6 @@ export function startV2Stdio(factory, { profile = 'default', epoch = nextRuntime
     return Object.freeze({ close, context, output });
 }
 
-export function selectRuntimeKind(env = process.env) {
-    return /^(1|true|yes|on)$/i.test(env.GOOGLE_MCP_USE_SDK_V2 || '') ? 'sdk-v2' : 'fastmcp';
-}
-
 /** Install one lifecycle owner. Every exit path awaits runtime.close first. */
 export function installRuntimeLifecycle(runtime, {
     processRef = process, input = process.stdin, useStdio = true, logger = defaultLogger,

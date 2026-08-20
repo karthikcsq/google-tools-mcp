@@ -2,15 +2,15 @@
 //
 // This module is the single decision point for "which guard is in force":
 //
-//   * No ambient request context (the legacy FastMCP runtime, and every direct
-//     unit test that calls a tool's execute() itself) -> the historical
-//     readTracker guard runs exactly as before. Nothing in this module changes
-//     that path.
-//   * An ambient request context (the SDK v2 runtime, dist/mcpServer.js) -> the
-//     explicit `readHandle` capability is the guard. The legacy session-keyed
-//     readTracker is deliberately NOT consulted there: its namespace is shared
-//     across HTTP requests, which is precisely the cross-request state the
-//     2026-07-28 migration removes.
+//   * No ambient request context (every direct unit test that calls a tool's
+//     execute() itself, and internal callers outside a transport) -> the
+//     historical readTracker guard runs exactly as before. Nothing in this
+//     module changes that path.
+//   * An ambient request context (the runtime, dist/mcpServer.js) -> the
+//     explicit `readHandle` capability is the guard. readTracker's no-context
+//     namespace is deliberately NOT consulted there: it is shared by every
+//     caller that has no context, which is precisely the cross-request state
+//     the 2026-07-28 migration removes.
 //
 // See docs/plans/mcp-2026-07-28-migration.md §2 and §3.
 import { z } from 'zod';
@@ -38,10 +38,10 @@ const HANDLE_REQUIRED_MESSAGE =
 /**
  * The `readHandle` input every guarded Docs mutation declares.
  *
- * Optional at the schema level on purpose: the legacy FastMCP runtime and the
- * v2 stdio transport both have valid flows that never supply one, and making it
+ * Optional at the schema level on purpose: the stdio transport and direct
+ * internal callers both have valid flows that never supply one, and making it
  * schema-required would reject those requests at parse time. Requiredness is a
- * runtime property of the v2 HTTP path, enforced in `beginDocsMutation`.
+ * runtime property of the HTTP path, enforced in `beginDocsMutation`.
  */
 export const ReadHandleParameter = z
     .string()

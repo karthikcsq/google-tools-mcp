@@ -76,8 +76,14 @@ Elliot wants them delivered as one PR with commits grouped by stage).
 | `e3a420a` | — | recorded verified #2589 state in defect table |
 | `f22d245` | PR3 | **read handles wired**; cross-request isolation closed |
 | `de93015` | fix | redact diagnostics before truncating |
+| `a84a3f0` | fix | protocol error shape, graceful listen close, CORS on real responses |
+| (working tree) | PR4 | **cutover and removals**; fastmcp gone, SDK v2 is the only runtime |
 
-Full suite at HEAD: **43 suites, 677 passed, 2 skipped, 0 failed.**
+Full suite at HEAD: **44 suites, 672 passed, 2 skipped, 0 failed.**
+(Count moved from 678: the removed dual-runtime surface took ~9 tests with it -
+FastMCP's `createHttpAuthenticate` hook and the `createHttpRequestGuard`
+monkey-patch - and PR4 added `tests/entrypointSmoke.test.js`, 3 real spawns of
+`dist/index.js`.)
 
 ### Stage status
 
@@ -91,7 +97,20 @@ Full suite at HEAD: **43 suites, 677 passed, 2 skipped, 0 failed.**
   `subscriptions/listen` close, stdin-EOF shutdown, error sanitization), structural walker,
   header enforcement pinned, wire tests.
 - **PR3 — DONE** (`f22d245`). See below.
-- **PR4 — NOT STARTED** (task #5). Cutover and removals.
+- **PR4 — DONE.** Cutover and removals. `GOOGLE_MCP_USE_SDK_V2` and
+  `selectRuntimeKind` deleted; `dist/index.js` starts `startV2Stdio` /
+  `startV2HttpServer` directly, keeping env/config resolution, tool preloading,
+  startup diagnostics, the update nudge, and the stdin-EOF path. Deleted:
+  `fastmcp` from package.json (which took `mcp-proxy` and the transitive
+  `@modelcontextprotocol/sdk` v1 out of the lockfile), `dist/cachedToolsList.js`,
+  `dist/sessionContext.js`, the disconnect handlers, `startWithRequestGuard` /
+  `createHttpRequestGuard` / `createHttpAuthenticate`. `dist/readTracker.js`'s
+  keyed session map collapsed to one no-context Map (the request-context branch
+  is untouched) and `clearSession` is gone with it. Docs: new
+  `docs/http-mode.md`, README HTTP section rewritten, `docs/architecture.md`
+  de-sessioned, CHANGELOG `## Unreleased (next: 3.0.0)` entry, breaking-change
+  note in the setup wizard's outro. Inventory snapshot: 0 fastmcp imports,
+  0 raw v1 SDK imports, 156 tools.
 
 ### PR3 design decisions worth remembering
 
@@ -145,28 +164,15 @@ Full suite at HEAD: **43 suites, 677 passed, 2 skipped, 0 failed.**
 Verified against code unless marked. Reply to each on the PR naming the fix, or with the
 reasoning for declining, then resolve the thread.
 
-### Still to fix (task #15) — all in `dist/mcpServer.js`
-
-1. **Wrong error shape for missing `MCP-Protocol-Version`.** Returns `400` with
-   `{error: "..."}`. The 2026-07-28 contract wants a JSON-RPC `-32020 HeaderMismatch`
-   addressed to the pending request id, because the official v2 client treats a well-formed
-   modern `400` JSON-RPC error as an in-band `ProtocolError` and a generic HTTP body takes
-   the ordinary HTTP-error path. Test must assert code and body, not just status.
-   (comment 5347936334)
-2. **`closeListenResponse` produces an unexpected remote close, not a graceful one.** It
-   forwards the first chunk (the `notifications/subscriptions/acknowledged` notification),
-   cancels, and closes — never delivering the terminal empty result for the original
-   `subscriptions/listen` request id. Clients then classify the close as remote and may
-   re-listen. Test with a real client so `McpSubscription.closed` resolves `graceful`.
-   (comment 5347938072)
-3. **CORS headers only on preflight.** `corsPreflight()` sets
-   `Access-Control-Allow-Origin` for `OPTIONS`, but real `/mcp` and `/healthz` responses
-   never carry it, so a browser at an allowed origin completes the request and is then
-   blocked from reading the response. Add `Access-Control-Allow-Origin` + `Vary: Origin`
-   to every real response including consumable errors; test an authenticated POST with
-   `Origin`. (comment 5347939420)
-
 ### Resolved
+
+- **Three facade HTTP findings** (comments 5347936334/5347938072/5347939420, task #15,
+  closed) — all fixed in `a84a3f0`: JSON-RPC `-32020` HeaderMismatch envelope for a
+  missing `MCP-Protocol-Version` on modern POSTs; `subscriptions/listen` now emits the
+  terminal empty result for the original request id before closing (no per-subscription
+  SDK close API exists in 2.0.0, so the wrapper writes the SDK-shaped frame itself);
+  allowed Origins get `Access-Control-Allow-Origin` + `Vary: Origin` on every real
+  response. Replies posted on the PR naming the commit.
 
 - **Cross-request read-tracker sharing** (comment 5347959657, task #17) — fixed in
   `f22d245`, proven by `tests/readHandleIntegration.test.js` "does not let request A's Docs
@@ -190,10 +196,11 @@ reasoning for declining, then resolve the thread.
 
 Batching decided with Elliot. One PR per cluster; related issues share a PR.
 
-- **PR4 of the migration** (task #5, part of #109): make the SDK path default, remove
-  fastmcp, `mcp-proxy`, `dist/cachedToolsList.js`, `dist/sessionContext.js`, disconnect
-  handlers, the `http.createServer` request-guard monkey-patch in `dist/httpAuth.js`,
-  `/sse` and sessionful routes. Document the breaking change and client migration steps.
+- ~~**PR4 of the migration**~~ (task #5) — **done**, see the stage status above.
+  One item deliberately left out: writing `CODEX_MCP_PROTOCOL_VERSION=2026-07-28`
+  into the wizard's Codex registration. The plan assigns that to whichever of
+  #75/#48 lands the client-registration work; PR4 documents it in
+  `docs/http-mode.md` instead of touching `codex mcp add` here.
 - **PR B — Docs cluster** (task #9), blocked on the migration: #105, #106, #96, #107, #88,
   #108, #14, and closing #87. Read in dependency order #105 -> #106 -> #87 -> #107 -> #88
   -> #108, not alphabetically. #106 and #108 must be re-read against the handle/workspace

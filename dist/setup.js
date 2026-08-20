@@ -99,7 +99,7 @@ function cancelled() {
 // `npx -y google-tools-mcp` re-resolves and verifies the whole dependency
 // tree on every single launch. On some machines (observed on Windows, likely
 // antivirus scanning of npm's file I/O during install/verify — this package
-// pulls in fastmcp + the full googleapis client library tree) that takes
+// pulls in the full googleapis client library tree) that takes
 // 30+ seconds, even when the exact version is already cached. Claude Code's
 // stdio MCP connection timeout is a fixed 30s, so that's enough to lose the
 // race and surface as "the server won't connect" with no visible cause.
@@ -627,6 +627,18 @@ export async function runSetup() {
             chalk.cyan(`  ${jsonSnippet}`),
         ].join('\n'));
     }
+
+    // Breaking change in this major release: the sessionful HTTP transport is
+    // gone. Named here rather than only in the README because the wizard is
+    // where most people last configured a client, and an existing shared-HTTP
+    // setup will keep starting while its /sse and session routes now 404.
+    p.log.message([
+        chalk.dim('Upgrading and using GOOGLE_MCP_TRANSPORT=http?'),
+        chalk.dim('  HTTP is now stateless (MCP 2026-07-28). Removed: /sse, /messages,'),
+        chalk.dim('  /ping, DELETE session termination, and the Mcp-Session-Id header.'),
+        chalk.dim('  Point clients at the plain POST endpoint; see docs/http-mode.md.'),
+        chalk.dim('  stdio setups (this one) need no changes.'),
+    ].join('\n'));
 
     p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' You\'re ready to use google-tools-mcp.'));
 }

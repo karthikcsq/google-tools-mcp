@@ -7,6 +7,8 @@ The main README is the user-facing guide: install, configure, tool reference, tr
 ## Index
 
 - [How this repo works](architecture.md) — why `dist/` is the source and there is no build step, the entry point and its subcommands, transports, how the 12 tool categories load and what the `addTool` wrapper does for free, auth and config layout, tests, and how to add a tool.
+- [Shared HTTP mode](http-mode.md) — running one long-lived server for many clients, the 3.0.0 stateless-HTTP breaking change (removed `/sse`, `/messages`, `/ping`, session routes, and `Mcp-Session-Id`), the `readHandle` contract for edits over HTTP, and exact Claude Code / Codex reconfiguration steps.
+- [Remote OAuth tunnel](remote-oauth-tunnel.md) — completing the OAuth flow when the server runs on a machine with no browser.
 - [Startup performance](startup-performance.md) — why the server has to boot inside Claude Code's fixed 30s MCP timeout, measured cost of each launch path, where the time actually goes, and how to measure it yourself before adding a dependency.
 - [Common workflows](workflows.md) — safe, minimal examples for email, Docs, Sheets, Slides, and Tasks.
 - [Execution plans](plans/README.md) — one root-cause implementation plan per open issue, with suggested ordering and dependencies.

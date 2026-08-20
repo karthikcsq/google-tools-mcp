@@ -165,7 +165,7 @@ export const ApplyParagraphStyleToolParameters = DocumentIdParameter.extend({
         .describe('The ID of the specific tab to apply formatting in. Use listDocumentTabs to get tab IDs. If not specified, operates on the first tab.'),
 });
 // --- Error Classes ---
-// Use FastMCP's UserError for client-facing issues
+// Use publicError()/UserError from ./errors.js for client-facing issues
 // Define custom errors for internal issues if needed
 export class NotImplementedError extends Error {
     constructor(message = 'This feature is not yet implemented.') {

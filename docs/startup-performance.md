@@ -63,6 +63,8 @@ googleapis: 6054ms   fastmcp: 1561ms   zod: 3ms
 googleapis: 8403ms   fastmcp: 1683ms   zod: 4ms
 ```
 
+These numbers were measured while `fastmcp` was still the runtime. It was removed in the 2026-07-28 migration and replaced by `@modelcontextprotocol/server` + `@modelcontextprotocol/node`, so its ~1.6s line is historical; re-measure with the snippet below before quoting a total. The conclusion is unchanged, because it was never about the MCP framework:
+
 `import('googleapis')` is about 80% of server startup and essentially all of the variance. It is module resolution and evaluation across the umbrella package's 196MB and 1823 files, paid on every launch, warm cache included. Tracked in [issue #71](https://github.com/karthikcsq/google-tools-mcp/issues/71), which proposes swapping to the per-API `@googleapis/*` packages.
 
 The practical read: after removing `npx`, roughly 8 to 11 seconds of the 30 second budget is gone before the server can answer a handshake, on a machine with nothing else wrong with it. Slow disks, antivirus real-time scanning, or a cold page cache consume the rest of the margin.
@@ -103,9 +105,9 @@ From the installed package directory:
 ```bash
 node --input-type=module -e "
 const t0=Date.now(); await import('googleapis');
-const t1=Date.now(); await import('fastmcp');
+const t1=Date.now(); await import('@modelcontextprotocol/server');
 const t2=Date.now(); await import('zod');
-console.log('googleapis: '+(t1-t0)+'ms  fastmcp: '+(t2-t1)+'ms  zod: '+(Date.now()-t2)+'ms');
+console.log('googleapis: '+(t1-t0)+'ms  mcp-sdk: '+(t2-t1)+'ms  zod: '+(Date.now()-t2)+'ms');
 "
 ```
 

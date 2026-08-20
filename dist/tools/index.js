@@ -11,8 +11,6 @@ import { promisify } from 'util';
 import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
-import { runWithSession } from '../sessionContext.js';
-import { getRequestContext } from '../requestContext.js';
 import { getPublicErrorMessage, publicError } from '../errors.js';
 import { google } from 'googleapis';
 import { registerLegacyAliases } from './legacyAliases.js';
@@ -106,21 +104,15 @@ function wrapServerWithAuthRetry(server) {
         const toolName = toolDef.name;
         if (originalExecute) {
             toolDef.execute = async function (...args) {
-                // Bind this request's MCP session so per-session state (e.g. the
-                // read-before-edit tracker) is isolated across concurrent HTTP
-                // clients. context.sessionId is undefined for stdio (single
-                // client), which maps to the default namespace. (PR #36 review)
-                const sessionKey = args[1]?.sessionId ?? null;
-                const run = getRequestContext()
-                    ? async (fn) => fn()
-                    : (fn) => runWithSession(sessionKey, fn);
-                return run(async () => {
-                    try {
-                        return await withAuthRetry(() => originalExecute.apply(this, args));
-                    } catch (err) {
-                        throw appendHintToError(err, toolName);
-                    }
-                });
+                // No session binding here any more: the request context that
+                // scopes per-request state (e.g. the read-before-edit tracker)
+                // is established once by the transport in dist/mcpServer.js and
+                // read ambiently, so this layer is purely auth-retry + hints.
+                try {
+                    return await withAuthRetry(() => originalExecute.apply(this, args));
+                } catch (err) {
+                    throw appendHintToError(err, toolName);
+                }
             };
         }
         return originalAddTool(toolDef);

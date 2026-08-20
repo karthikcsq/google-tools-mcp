@@ -1,7 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { readFile } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
-import { FastMCP } from 'fastmcp';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { registerAllTools } from '../dist/tools/index.js';
 import {
@@ -48,33 +47,38 @@ describe('MCP SDK v2 compatibility spike', () => {
         expect(lockfile.packages[''].dependencies['@modelcontextprotocol/server']).toBe('2.0.0');
         expect(lockfile.packages[''].dependencies['@modelcontextprotocol/node']).toBe('2.0.0');
 
+        // PR 4 cutover: the official SDK is the only runtime. fastmcp is gone
+        // from the manifest, and with it mcp-proxy and the raw v1 SDK it pulled
+        // in transitively — so no v1 SDK can be resolved by accident either.
+        expect(packageJson.dependencies.fastmcp).toBeUndefined();
+        expect(packageJson.devDependencies?.fastmcp).toBeUndefined();
+        expect(lockfile.packages['node_modules/fastmcp']).toBeUndefined();
+        expect(lockfile.packages['node_modules/mcp-proxy']).toBeUndefined();
+        expect(lockfile.packages['node_modules/@modelcontextprotocol/sdk']).toBeUndefined();
+
         const [major, minor] = rootZodManifest.version.split('.').map(Number);
         expect(major > 4 || (major === 4 && minor >= 2)).toBe(true);
     });
 
-    it('registers all 156 default schemas through FastMCP and the official SDK with root Zod v4', async () => {
+    // The Phase 1 decision gate was a DUAL-runtime proof: all 156 schemas
+    // registering through real FastMCP@3.34.0 AND the official SDK under one
+    // root Zod v4 process, which is what authorized the temporary
+    // GOOGLE_MCP_USE_SDK_V2 flag path. That result is historical and is
+    // recorded in
+    // docs/decisions/2026-08-16-mcp-sdk-v2-compatibility-spike.md; PR 4 removed
+    // fastmcp from the dependency tree, so its half cannot be re-run here and
+    // this test keeps the half that still describes shipping behavior.
+    it('registers all 156 default schemas through the official SDK with root Zod v4', async () => {
         const restoreAliases = defaultAliasEnvironment();
-        const fastMcpDefinitions = [];
-        const fastMcp = new FastMCP({ name: 'google-tools-mcp-fastmcp-spike', version: '0.0.0' });
-        const originalAddTool = fastMcp.addTool.bind(fastMcp);
-        fastMcp.addTool = (definition) => {
-            fastMcpDefinitions.push(definition);
-            return originalAddTool(definition);
-        };
-
         const { adapter, definitions: officialDefinitions, officialServer } = createOfficialSdkRegistrationAdapter();
 
         try {
-            await registerAllTools(fastMcp);
             await registerAllTools(adapter);
 
-            const fastMcpNames = fastMcpDefinitions.map(({ name }) => name);
             const officialNames = officialDefinitions.map(({ name }) => name);
-            expect(fastMcpNames).toHaveLength(156);
-            expect(new Set(fastMcpNames).size).toBe(156);
-            expect(officialNames).toEqual(fastMcpNames);
+            expect(officialNames).toHaveLength(156);
+            expect(new Set(officialNames).size).toBe(156);
         } finally {
-            await fastMcp.stop();
             await officialServer.close();
             restoreAliases();
         }

@@ -4,7 +4,9 @@ import { PassThrough } from 'node:stream';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { registerAllTools } from '../dist/tools/index.js';
-import { createV2HttpHandler, prepareMcpServerFactory, startV2HttpServer, startV2Stdio, selectRuntimeKind, MCP_PROTOCOL_VERSION } from '../dist/mcpServer.js';
+import { readFile } from 'node:fs/promises';
+import * as facade from '../dist/mcpServer.js';
+import { createV2HttpHandler, prepareMcpServerFactory, startV2HttpServer, startV2Stdio, MCP_PROTOCOL_VERSION } from '../dist/mcpServer.js';
 import { publicError, redactDiagnostic, registerSecret } from '../dist/errors.js';
 import { getRequestContext } from '../dist/requestContext.js';
 
@@ -125,10 +127,37 @@ describe('official SDK v2 facade', () => {
         const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
         try {
-            expect((await handler.fetch(new Request('http://localhost/healthz'))).status).toBe(401);
+            // The rejection the removed request guard used to write by hand:
+            // 401 with a JSON {error} body and a JSON content-type.
+            const unauthenticated = await handler.fetch(new Request('http://localhost/healthz'));
+            expect(unauthenticated.status).toBe(401);
+            expect(unauthenticated.headers.get('content-type')).toContain('application/json');
+            expect(await unauthenticated.json()).toEqual({ error: 'Unauthorized: missing or invalid authentication token' });
+            const forbidden = await handler.fetch(new Request('http://localhost/healthz', {
+                headers: { authorization: `Bearer ${TOKEN}`, origin: 'https://evil.example' },
+            }));
+            expect(forbidden.status).toBe(403);
+            expect(await forbidden.json()).toEqual({ error: 'Forbidden: request Origin is not allowed' });
             const response = await handler.fetch(new Request('http://localhost/healthz', { headers: { authorization: `Bearer ${TOKEN}` } }));
             expect(await response.json()).toEqual({ status: 'ok' });
-            expect((await handler.fetch(new Request('http://localhost/sse', { headers: { authorization: `Bearer ${TOKEN}` } }))).status).toBe(404);
+            // Documented removal behavior for the session era's routes: /sse,
+            // its /messages companion, mcp-proxy's /ping, and the DELETE that
+            // terminated a session are all 404 now - after the same auth gate,
+            // so an unauthenticated caller cannot even probe for them.
+            for (const path of ['/sse', '/messages', '/ping']) {
+                expect((await handler.fetch(new Request(`http://localhost${path}`))).status).toBe(401);
+                expect((await handler.fetch(new Request(`http://localhost${path}`, {
+                    headers: { authorization: `Bearer ${TOKEN}` },
+                }))).status).toBe(404);
+            }
+            // A session-termination DELETE against the live endpoint is not
+            // routed either: there is no session to terminate.
+            const deleted = await handler.fetch(new Request('http://localhost/mcp', {
+                method: 'DELETE',
+                headers: { authorization: `Bearer ${TOKEN}`, 'mcp-session-id': 'leaked-session-id' },
+            }));
+            expect(deleted.status).toBeGreaterThanOrEqual(400);
+            expect(deleted.headers.get('mcp-session-id')).toBeNull();
         } finally { await handler.close(); }
     });
 
@@ -550,10 +579,28 @@ describe('official SDK v2 facade', () => {
         } finally { await new Promise((resolve) => occupied.close(resolve)); }
     });
 
-    it('selects exactly one runtime and keeps FastMCP as the default', () => {
-        expect(selectRuntimeKind({})).toBe('fastmcp');
-        expect(selectRuntimeKind({ GOOGLE_MCP_USE_SDK_V2: 'false' })).toBe('fastmcp');
-        expect(selectRuntimeKind({ GOOGLE_MCP_USE_SDK_V2: 'true' })).toBe('sdk-v2');
-        expect(['fastmcp', 'sdk-v2']).toContain(selectRuntimeKind({ GOOGLE_MCP_USE_SDK_V2: '1' }));
+    // Replaces the dual-runtime `selectRuntimeKind` test. There is no runtime
+    // selection left: `selectRuntimeKind` and GOOGLE_MCP_USE_SDK_V2 were removed
+    // in the PR 4 cutover, so what is worth pinning is that no runtime switch
+    // can be reintroduced by an env var and that the entrypoint starts the
+    // facade directly while keeping its startup diagnostics and EOF shutdown.
+    it('exposes exactly one runtime, with no selection flag left to set', async () => {
+        expect(facade.selectRuntimeKind).toBeUndefined();
+        expect(typeof facade.startV2Stdio).toBe('function');
+        expect(typeof facade.startV2HttpServer).toBe('function');
+
+        const entrypoint = await readFile(new URL('../dist/index.js', import.meta.url), 'utf8');
+        expect(entrypoint).not.toMatch(/GOOGLE_MCP_USE_SDK_V2/);
+        expect(entrypoint).not.toMatch(/selectRuntimeKind/);
+        expect(entrypoint).not.toMatch(/fastmcp/i);
+        expect(entrypoint).not.toMatch(/startWithRequestGuard|createHttpRequestGuard/);
+        expect(entrypoint).not.toMatch(/'disconnect'/);
+        expect(entrypoint).toMatch(/installRuntimeLifecycle\(runtime, \{ useStdio: !useHttp/);
+        expect(entrypoint).toMatch(/checkForUpdate\(/);
+        // Compatibility contract: the same env names keep selecting the same
+        // transport, so an existing stdio or HTTP config starts unchanged.
+        expect(entrypoint).toMatch(/GOOGLE_MCP_TRANSPORT/);
+        expect(entrypoint).toMatch(/GOOGLE_MCP_PORT/);
+        expect(entrypoint).toMatch(/GOOGLE_MCP_ENDPOINT/);
     });
 });
