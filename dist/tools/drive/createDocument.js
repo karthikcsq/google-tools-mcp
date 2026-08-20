@@ -1,8 +1,10 @@
 import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient, getDocsClient } from '../../clients.js';
-import { insertMarkdown, formatInsertResult } from '../../markdown-transformer/index.js';
+import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { getDefaultTextColor, buildDefaultColorStyleRequest } from '../../googleDocsApiHelpers.js';
+import { trackRead } from '../../readTracker.js';
+import { mintDocsReadHandle } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'createDocument',
@@ -40,11 +42,11 @@ export function register(server) {
                     supportsAllDrives: true,
                 });
                 const document = response.data;
+                const docs = await getDocsClient();
                 // Add initial content if provided
                 let contentWarnings;
                 if (args.initialContent) {
                     try {
-                        const docs = await getDocsClient();
                         if (args.contentFormat === 'raw') {
                             await docs.documents.batchUpdate({
                                 documentId: document.id,
@@ -108,6 +110,45 @@ export function register(server) {
                         log.warn(`Document created but failed to add initial content: ${contentError.message}`);
                     }
                 }
+                // Seed post-create read state so an immediate follow-up mutation
+                // doesn't fail as "unread" (#87 gap 2). The content is knowable for
+                // every createDocument flow (raw, markdown, or empty) because we
+                // control every write that produced it — but we fetch the document
+                // back rather than trust our own inputs, so the seeded snapshot
+                // matches exactly what a real readDocument call would return
+                // (actual indices/structure, and whatever partial state resulted if
+                // the initial-content step above warned or failed).
+                let readHandle;
+                try {
+                    const seedRes = await docs.documents.get({ documentId: document.id, fields: '*' });
+                    const contentSource = seedRes.data;
+                    const markdownContent = docsJsonToMarkdown(contentSource);
+                    let modifiedTime = null;
+                    try {
+                        const modInfo = await drive.files.get({
+                            fileId: document.id,
+                            fields: 'modifiedTime',
+                            supportsAllDrives: true,
+                        });
+                        modifiedTime = modInfo.data.modifiedTime || null;
+                    }
+                    catch { /* best effort; legacy guard tolerates a null modifiedTime */ }
+                    trackRead(document.id, modifiedTime, markdownContent, seedRes.data.revisionId);
+                    const minted = await mintDocsReadHandle({
+                        documentId: document.id,
+                        tabId: null,
+                        revisionId: seedRes.data.revisionId ?? null,
+                        contentSource,
+                        content: markdownContent,
+                    });
+                    readHandle = minted?.readHandle;
+                }
+                catch (seedError) {
+                    // The document itself was created successfully; failing to seed
+                    // read state only means the next mutation must call readDocument
+                    // first (fail closed), not that this tool call failed.
+                    log.warn(`Document ${document.id} created but read state could not be seeded: ${seedError.message}`);
+                }
                 return JSON.stringify({
                     id: document.id,
                     name: document.name,
@@ -115,6 +156,9 @@ export function register(server) {
                     ...(contentWarnings && {
                         warnings: contentWarnings,
                         warningNote: `${contentWarnings.length} item${contentWarnings.length === 1 ? '' : 's'} of initialContent could not be converted and ${contentWarnings.length === 1 ? 'was' : 'were'} dropped — see warnings.`,
+                    }),
+                    ...(readHandle && {
+                        readHandleNote: 'This document has been seeded as read. You can mutate it immediately without calling readDocument first.',
                     }),
                 }, null, 2);
             }
