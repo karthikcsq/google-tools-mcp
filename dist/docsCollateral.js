@@ -141,15 +141,51 @@ export async function listAllComments(drive, fileId) {
  * endIndex) is projected onto the concatenated text: everything covered is
  * "removed", everything else "preserved".
  */
+// Separator joining non-contiguous preserved runs. Real document text cannot
+// contain a NUL byte, so this can never collide with a genuine quote and
+// always breaks an includes() match across a gap.
+const PRESERVED_SEPARATOR = '\u0000';
+
 export function splitTextByRange(fullText, segments, startIndex, endIndex) {
     let removed = '';
     let preserved = '';
+    // A removed span sits BETWEEN two document indices that are themselves
+    // still numerically adjacent (deleting text does not renumber the
+    // characters around it), so a gap check based only on "does this
+    // character's docIndex immediately follow the last one" never fires
+    // across a deletion — the indices on either side of a removed span are
+    // still consecutive integers. `crossedGap` tracks it explicitly instead:
+    // it is set whenever a removed character is skipped, or whenever the
+    // next preserved character's docIndex does not immediately follow the
+    // last PRESERVED character's docIndex (covering a gap between segments
+    // that isn't a removal at all, e.g. two unrelated text runs). Either way
+    // forces a separator before the next preserved character.
+    //
+    // Concatenating every preserved character with no separator made a quote
+    // that straddles the deletion boundary (part before startIndex, part
+    // after endIndex) — or any two preserved runs separated by a removed
+    // span — match `preserved` as if still contiguous, under-reporting it as
+    // surviving when it does not. The separator makes such a quote fail
+    // includes() and get reported instead of silently dropped.
+    let lastPreservedDocIndex = null;
+    let crossedGap = false;
     for (const segment of segments ?? []) {
         const text = segment.text ?? '';
         for (let offset = 0; offset < text.length; offset += 1) {
             const docIndex = segment.start + offset;
-            if (docIndex >= startIndex && docIndex < endIndex) removed += text[offset];
-            else preserved += text[offset];
+            if (docIndex >= startIndex && docIndex < endIndex) {
+                removed += text[offset];
+                crossedGap = true;
+                continue;
+            }
+            const isGap = crossedGap
+                || (lastPreservedDocIndex !== null && docIndex !== lastPreservedDocIndex + 1);
+            if (preserved !== '' && isGap) {
+                preserved += PRESERVED_SEPARATOR;
+            }
+            preserved += text[offset];
+            lastPreservedDocIndex = docIndex;
+            crossedGap = false;
         }
     }
     return { removed, preserved };

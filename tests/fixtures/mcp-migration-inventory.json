@@ -801,7 +801,7 @@
       },
       {
         "file": "dist/tools/docs/batchModifyText.js",
-        "line": 311,
+        "line": 317,
         "match": ".addTool({"
       },
       {
@@ -851,7 +851,7 @@
       },
       {
         "file": "dist/tools/docs/formatting/applyParagraphStyle.js",
-        "line": 145,
+        "line": 187,
         "match": ".addTool({"
       },
       {

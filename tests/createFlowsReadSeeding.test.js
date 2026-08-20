@@ -22,10 +22,18 @@ const TOKEN = 'create-flows-seed-token-aaaaaaaaaaaaaaaa';
 
 let fakeDocs;
 let fakeDrive;
+// Fix 10: toggled true by the "Docs client failure after Drive create"
+// test below to simulate getDocsClient() throwing AFTER the Drive file was
+// already created — the exact ordering that used to orphan the file when
+// getDocsClient() was hoisted to the top of createDocument's execute().
+let docsClientShouldFail = false;
 
 const unusedClient = async () => { throw new Error('client not used in this suite'); };
 jest.unstable_mockModule('../dist/clients.js', () => ({
-    getDocsClient: async () => fakeDocs,
+    getDocsClient: async () => {
+        if (docsClientShouldFail) throw new Error('simulated Docs client failure');
+        return fakeDocs;
+    },
     getDriveClient: async () => fakeDrive,
     getSheetsClient: unusedClient,
     getAuthClient: unusedClient,
@@ -178,6 +186,7 @@ async function stdioClient(factory, epoch) {
 
 afterEach(() => {
     resetHandleRuntimeState();
+    docsClientShouldFail = false;
 });
 
 afterAll(async () => {
@@ -245,6 +254,59 @@ describe('createDocument seeds post-create read state (#87 gap 2)', () => {
         const body = JSON.parse(result);
         expect(body.id).toBe(docId);
         expect(hasBeenRead(docId)).toBe(true);
+    });
+
+    // Fix 10: getDocsClient() used to be hoisted to the top of execute(),
+    // before the Drive file was created. That meant a Docs-client failure
+    // failed the WHOLE tool call even though the Drive file was already
+    // created — an orphan the caller never learns about. The fix acquires
+    // the Docs client lazily, wherever it's actually needed (initialContent,
+    // then read-state seeding), so a failure there degrades to a warning
+    // that names the created document instead of throwing.
+    it('Docs client failure after Drive create still returns success, with a warning naming the created file', async () => {
+        const docId = freshDocId('createdoc-docsclient-fail');
+        const { filesCreate } = setUpGoogleMocks(docId);
+        docsClientShouldFail = true;
+        const server = { addTool(def) { this._def = def; }, getTool() { return this._def; } };
+        registerCreateDocument(server);
+
+        const result = await server.getTool().execute(
+            { title: 'New Doc' },
+            { log: { info() {}, warn() {}, error() {} } },
+        );
+
+        // The Drive file was created and is reported successfully — the tool
+        // call itself does not throw or come back as an error.
+        expect(filesCreate).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(result);
+        expect(body.id).toBe(docId);
+        expect(body.name).toBe('New Doc');
+        // No read handle could be seeded (the Docs client never came up), and
+        // that is surfaced as a warning naming the created document, not
+        // silently dropped.
+        expect(body.readHandle).toBeUndefined();
+        expect(body.readHandleNote).toBeUndefined();
+        expect(body.warnings).toBeDefined();
+        expect(body.warnings.some((w) => w.includes(docId))).toBe(true);
+    });
+
+    it('Docs client failure with initialContent also warns, naming the file, and still returns success', async () => {
+        const docId = freshDocId('createdoc-docsclient-fail-content');
+        const { filesCreate } = setUpGoogleMocks(docId);
+        docsClientShouldFail = true;
+        const server = { addTool(def) { this._def = def; }, getTool() { return this._def; } };
+        registerCreateDocument(server);
+
+        const result = await server.getTool().execute(
+            { title: 'New Doc', initialContent: 'raw text', contentFormat: 'raw' },
+            { log: { info() {}, warn() {}, error() {} } },
+        );
+
+        expect(filesCreate).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(result);
+        expect(body.id).toBe(docId);
+        expect(body.warnings).toBeDefined();
+        expect(body.warnings.some((w) => w.includes(docId))).toBe(true);
     });
 });
 

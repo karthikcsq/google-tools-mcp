@@ -45,8 +45,8 @@ export function register(server) {
                 .int()
                 .min(1)
                 .max(100)
-                .default(50)
-                .describe('Maximum number of comments to return in this page (1-100, default 50).'),
+                .default(100)
+                .describe('Maximum number of comments to return in this page (1-100, default 100).'),
             pageToken: z
                 .string()
                 .optional()
@@ -67,7 +67,7 @@ export function register(server) {
             unansweredOnly: z
                 .boolean()
                 .default(false)
-                .describe('If true, only return unresolved comments whose latest reply (if any) was not written by the authenticated user. Heuristic: a comment with no replies counts as unanswered; a comment last replied to by the authenticated user counts as answered even if that reply did not resolve it.'),
+                .describe('If true, only return unresolved comments whose latest reply (if any) was not written by the authenticated user. Heuristic: a comment with no replies counts as unanswered; a comment last replied to by the authenticated user counts as answered even if that reply did not resolve it. Filtering happens AFTER fetching this page: count and comments reflect the post-filter page, while nextPageToken is computed from the pre-filter page, so a page that filters down to zero comments can still carry a nextPageToken — follow it rather than reading an empty page as "no more results".'),
         }),
         execute: async (args, { log }) => {
             log.info(`Listing comments for document ${args.documentId}`);
@@ -82,7 +82,13 @@ export function register(server) {
                     ...(args.updatedAfter ? { startModifiedTime: args.updatedAfter } : {}),
                 });
                 let rawComments = response.data.comments || [];
-                if (args.unansweredOnly) rawComments = rawComments.filter(isUnanswered);
+                const fetchedCount = rawComments.length;
+                let filteredOutCount = 0;
+                if (args.unansweredOnly) {
+                    const filtered = rawComments.filter(isUnanswered);
+                    filteredOutCount = rawComments.length - filtered.length;
+                    rawComments = filtered;
+                }
                 const comments = rawComments.map((comment) => {
                     const replies = comment.replies || [];
                     const mapped = {
@@ -101,10 +107,18 @@ export function register(server) {
                     }
                     return mapped;
                 });
+                // count is post-filter, nextPageToken is pre-filter: a page
+                // that unansweredOnly filters down to zero must not read as
+                // "nothing left to see" when a token still says otherwise.
+                const note = (args.unansweredOnly && fetchedCount > 0 && filteredOutCount > 0)
+                    ? `${filteredOutCount} comment${filteredOutCount === 1 ? '' : 's'} on this page were filtered out by unansweredOnly` +
+                      (response.data.nextPageToken ? '; more pages exist — follow nextPageToken.' : '.')
+                    : undefined;
                 return JSON.stringify({
                     comments,
                     count: comments.length,
                     nextPageToken: response.data.nextPageToken || undefined,
+                    ...(note ? { note } : {}),
                 }, null, 2);
             }
             catch (error) {

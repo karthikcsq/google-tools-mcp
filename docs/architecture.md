@@ -82,7 +82,7 @@ The guard above is document-scoped: any change anywhere blocks every pending edi
 
 ## Explicit text color on inserted content (issue #14)
 
-Text inserted by this server carries the document's `NORMAL_TEXT` foreground color explicitly, when that named style defines an RGB color; a theme-color-based or undefined `NORMAL_TEXT` default inserts inherit-only text (no error). The lookup lives in `getDefaultTextColor` (`dist/googleDocsApiHelpers.js`), shared by `insertMarkdown`, `modifyText`, `appendText`, `createDocument`'s raw path, and `insertTableWithData`; `findAndReplace` and `createDocumentFromTemplate`'s `replaceAllText` are deliberately excluded because that Docs API request inherits the style of the text it replaces rather than producing style-less text.
+Text inserted by this server carries the document's `NORMAL_TEXT` foreground color explicitly, when that named style defines an RGB color; a theme-color-based or undefined `NORMAL_TEXT` default inserts inherit-only text (no error). The lookup lives in `getDefaultTextColor` (`dist/googleDocsApiHelpers.js`), shared by `insertMarkdown`, `modifyText`, `batchModifyText`, `appendText`, `createDocument`'s raw path, and `insertTableWithData`; `findAndReplace` and `createDocumentFromTemplate`'s `replaceAllText` are deliberately excluded because that Docs API request inherits the style of the text it replaces rather than producing style-less text.
 
 ## Adding a tool
 

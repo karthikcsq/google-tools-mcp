@@ -252,6 +252,10 @@ export function register(server) {
                     defaultColor,
                 });
                 if (requests.length === 0) {
+                    // Nothing was written, so the lease must not stay RESERVED —
+                    // release it so the handle is still usable for a follow-up
+                    // mutation.
+                    await lease.abort();
                     return 'No operations to perform.';
                 }
                 await lease.write(

@@ -230,6 +230,30 @@ describe('Docs comment tools (#86)', () => {
             expect(secondPage.nextPageToken).toBeUndefined();
             expect(commentsList.mock.calls[1][0].pageToken).toBe('page-2-token');
         });
+
+        // Fix 4(a): the maxResults schema default must be 100 (the old
+        // hard-coded pageSize before maxResults/pageToken existed), not 50 —
+        // 50 silently halved the effective default page size. The mock
+        // server harness in this suite stores the raw tool (bypassing the
+        // real server's schema-application layer, same as every other test
+        // here), so the default is asserted against the schema directly,
+        // exactly what the real server runs before execute() ever sees args.
+        it('schema default for maxResults is 100, not 50', () => {
+            const parsed = tools.get('listComments').parameters.parse({ documentId: docId });
+            expect(parsed.maxResults).toBe(100);
+        });
+
+        it('sends pageSize 100 to the Drive API when maxResults is omitted (via schema default)', async () => {
+            commentsList.mockResolvedValueOnce({ data: { comments: [] } });
+            const parsed = tools.get('listComments').parameters.parse({ documentId: docId });
+
+            await tools.get('listComments').execute(
+                parsed,
+                { log: { info: () => {}, error: () => {} } },
+            );
+
+            expect(commentsList.mock.calls[0][0].pageSize).toBe(100);
+        });
     });
 
     // -------------------------------------------------------------------
@@ -330,6 +354,67 @@ describe('Docs comment tools (#86)', () => {
             const result = JSON.parse(raw);
 
             expect(result.comments).toHaveLength(4);
+        });
+
+        // Fix 4(b): count is post-filter, nextPageToken is pre-filter. A page
+        // that unansweredOnly filters down to zero comments must still say
+        // more pages exist via an explicit `note`, or count:0 + a token reads
+        // as "nothing left", which is wrong.
+        it('adds a note when unansweredOnly filters a non-empty page down to zero, with a nextPageToken', async () => {
+            const allAnswered = [
+                {
+                    id: 'answered-1',
+                    content: 'done',
+                    author: { displayName: 'Alice', me: false },
+                    resolved: false,
+                    replies: [{ id: 'r1', content: 'ack', author: { displayName: 'Me', me: true }, createdTime: 't1' }],
+                },
+                {
+                    id: 'resolved-1',
+                    content: 'resolved',
+                    author: { displayName: 'Alice', me: false },
+                    resolved: true,
+                    replies: [],
+                },
+            ];
+            commentsList.mockResolvedValueOnce({ data: { nextPageToken: 'page-2', comments: allAnswered } });
+
+            const raw = await tools.get('listComments').execute(
+                { documentId: docId, maxResults: 50, includeDeleted: false, includeQuotedText: true, unansweredOnly: true },
+                { log: { info: () => {}, error: () => {} } },
+            );
+            const result = JSON.parse(raw);
+
+            expect(result.comments).toHaveLength(0);
+            expect(result.count).toBe(0);
+            expect(result.nextPageToken).toBe('page-2');
+            expect(result.note).toBeTruthy();
+            expect(result.note).toMatch(/filtered out/i);
+            expect(result.note).toMatch(/nextPageToken/);
+        });
+
+        it('adds no note when unansweredOnly filters nothing out', async () => {
+            commentsList.mockResolvedValueOnce({ data: { comments: baseComments() } });
+
+            const raw = await tools.get('listComments').execute(
+                { documentId: docId, maxResults: 50, includeDeleted: false, includeQuotedText: true, unansweredOnly: false },
+                { log: { info: () => {}, error: () => {} } },
+            );
+            const result = JSON.parse(raw);
+
+            expect(result.note).toBeUndefined();
+        });
+
+        it('adds no note when the fetched page was already empty', async () => {
+            commentsList.mockResolvedValueOnce({ data: { comments: [] } });
+
+            const raw = await tools.get('listComments').execute(
+                { documentId: docId, maxResults: 50, includeDeleted: false, includeQuotedText: true, unansweredOnly: true },
+                { log: { info: () => {}, error: () => {} } },
+            );
+            const result = JSON.parse(raw);
+
+            expect(result.note).toBeUndefined();
         });
 
         it('truncates comment content, reply content, and quoted text at the 2,000-char cap with a marker', async () => {

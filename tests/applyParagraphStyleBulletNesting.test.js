@@ -77,9 +77,52 @@ describe('applyParagraphStyle — bulletNestingLevel', () => {
         const requests = batchUpdate.mock.calls[0][0].requestBody.requests;
         expect(requests).toEqual([
             { deleteParagraphBullets: { range: { startIndex: 1, endIndex: 20 } } },
+            {
+                updateParagraphStyle: {
+                    range: { startIndex: 1, endIndex: 20 },
+                    paragraphStyle: {
+                        indentStart: { magnitude: 0, unit: 'PT' },
+                        indentFirstLine: { magnitude: 0, unit: 'PT' },
+                    },
+                    fields: 'indentStart,indentFirstLine',
+                },
+            },
             { insertText: { location: { index: 1 }, text: '\t' } },
             { createParagraphBullets: { range: { startIndex: 1, endIndex: 21 }, bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' } },
         ]);
+    });
+
+    it('zeroes indentStart/indentFirstLine after deleteParagraphBullets so repeated nesting changes do not accumulate indent (#fix2a)', async () => {
+        const documentId = `bnl-zero-indent-${Date.now()}`;
+        const content = [paragraph(1, 20, 'Item one\n', { listId: 'L1', nestingLevel: 0 })];
+        const lists = { L1: { listProperties: { nestingLevels: [{ glyphType: 'DISC' }] } } };
+        const { batchUpdate } = setUpDocs({ content, lists });
+        trackRead(documentId, null, null, 'rev-read');
+
+        await getTool().execute({
+            documentId,
+            target: { startIndex: 1, endIndex: 20 },
+            bulletNestingLevel: 1,
+        }, { log: noopLog });
+
+        const requests = batchUpdate.mock.calls[0][0].requestBody.requests;
+        const deleteIdx = requests.findIndex((r) => r.deleteParagraphBullets);
+        const zeroIdx = requests.findIndex((r) => r.updateParagraphStyle
+            && r.updateParagraphStyle.fields === 'indentStart,indentFirstLine');
+        const createIdx = requests.findIndex((r) => r.createParagraphBullets);
+        expect(deleteIdx).toBeGreaterThanOrEqual(0);
+        expect(zeroIdx).toBeGreaterThan(deleteIdx);
+        expect(zeroIdx).toBeLessThan(createIdx);
+        expect(requests[zeroIdx]).toEqual({
+            updateParagraphStyle: {
+                range: { startIndex: 1, endIndex: 20 },
+                paragraphStyle: {
+                    indentStart: { magnitude: 0, unit: 'PT' },
+                    indentFirstLine: { magnitude: 0, unit: 'PT' },
+                },
+                fields: 'indentStart,indentFirstLine',
+            },
+        });
     });
 
     it('tab adjustment: moving deeper inserts leading tabs, moving shallower deletes them', async () => {
@@ -212,13 +255,77 @@ describe('applyParagraphStyle — bulletNestingLevel', () => {
         expect(batchUpdate).toHaveBeenCalledTimes(1);
         const { requests, writeControl } = batchUpdate.mock.calls[0][0].requestBody;
         expect(writeControl).toEqual({ requiredRevisionId: 'rev-read' });
-        expect(requests[0]).toEqual({
+        expect(requests.some((r) => r.createParagraphBullets)).toBe(true);
+        // Caller-supplied paragraph style (#fix2b): must be the LAST request
+        // in the batch, so it is not clobbered by the bullet-nesting
+        // sequence's own zero-indent cleanup request — caller intent wins.
+        expect(requests[requests.length - 1]).toEqual({
             updateParagraphStyle: {
                 range: { startIndex: 1, endIndex: 20 },
                 paragraphStyle: { alignment: 'CENTER' },
                 fields: 'alignment',
             },
         });
-        expect(requests.some((r) => r.createParagraphBullets)).toBe(true);
+    });
+
+    it('treats a non-list paragraph\'s leading literal tabs as its current nesting level (#fix2c)', async () => {
+        // Two leading tabs the user actually typed, on a paragraph that is
+        // NOT a list item. currentTabs must read as 2 (not 0), so raising to
+        // level 3 inserts exactly one more tab (delta = 3 - 2 = 1) rather
+        // than three, and does not delete any of the user's real tabs.
+        const documentId = `bnl-plain-tabs-up-${Date.now()}`;
+        const content = [paragraph(1, 22, '\t\tPlain but indented\n')];
+        const { batchUpdate } = setUpDocs({ content });
+        trackRead(documentId, null, null, 'rev-read');
+
+        await getTool().execute({
+            documentId,
+            target: { startIndex: 1, endIndex: 22 },
+            bulletNestingLevel: 3,
+            bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+        }, { log: noopLog });
+
+        const requests = batchUpdate.mock.calls[0][0].requestBody.requests;
+        expect(requests).toContainEqual({ insertText: { location: { index: 1 }, text: '\t' } });
+        expect(requests.some((r) => r.deleteContentRange)).toBe(false);
+        expect(requests).toContainEqual({
+            createParagraphBullets: { range: { startIndex: 1, endIndex: 23 }, bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
+        });
+
+        // Lowering to level 1 (delta = 1 - 2 = -1) removes exactly one of the
+        // two real leading tabs, not the whole paragraph's worth.
+        const documentId2 = `bnl-plain-tabs-down-${Date.now()}`;
+        const { batchUpdate: batchUpdate2 } = setUpDocs({ content });
+        trackRead(documentId2, null, null, 'rev-read');
+        await getTool().execute({
+            documentId: documentId2,
+            target: { startIndex: 1, endIndex: 22 },
+            bulletNestingLevel: 1,
+            bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+        }, { log: noopLog });
+        const requests2 = batchUpdate2.mock.calls[0][0].requestBody.requests;
+        expect(requests2).toContainEqual({ deleteContentRange: { range: { startIndex: 1, endIndex: 2 } } });
+        expect(requests2).toContainEqual({
+            createParagraphBullets: { range: { startIndex: 1, endIndex: 21 }, bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
+        });
+    });
+
+    it('bulletPreset schema rejects an unknown value and names the valid ones (#fix6)', () => {
+        // The mock server's getTool().execute() calls the tool's raw execute
+        // function directly, bypassing the framework's schema-validation
+        // layer, so schema rejection is exercised against the tool's own
+        // `parameters` zod schema here, exactly as the real server does
+        // before execute() ever runs.
+        const tool = getTool();
+        const result = tool.parameters.safeParse({
+            documentId: 'doc-1',
+            target: { startIndex: 1, endIndex: 20 },
+            bulletNestingLevel: 0,
+            bulletPreset: 'NOT_A_REAL_PRESET',
+        });
+        expect(result.success).toBe(false);
+        const message = JSON.stringify(result.error.issues);
+        expect(message).toContain('BULLET_DISC_CIRCLE_SQUARE');
+        expect(message).toContain('NUMBERED_DECIMAL_ALPHA_ROMAN');
     });
 });

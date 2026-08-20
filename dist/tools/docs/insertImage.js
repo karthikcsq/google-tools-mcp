@@ -87,10 +87,11 @@ export function register(server) {
                         );
                     }
                     catch (uploadError) {
-                        // Nothing was written to the document, but the lease was
-                        // reserved for this operation and must be released rather
-                        // than left dangling.
-                        await appsScriptLease.fail();
+                        // Nothing was written to the document, so this is not a
+                        // failed mutation — fail() would terminalize the handle
+                        // as INVALID. abort() returns the record to active so a
+                        // corrected retry can reuse the same handle.
+                        await appsScriptLease.abort();
                         throw uploadError;
                     }
                     log.info(`[AppsScript] Inserting image via marker at index ${args.index} (fileId: ${driveFileId})`);
@@ -147,8 +148,11 @@ export function register(server) {
                         resolvedUrl = await GDocsHelpers.uploadImageToDrive(drive, args.localImagePath, parentFolderId);
                     }
                     catch (uploadError) {
-                        // Nothing was written to the document; release the reserved lease.
-                        await lease.fail();
+                        // Nothing was written to the document, so this is not a
+                        // failed mutation — fail() would terminalize the handle
+                        // as INVALID. abort() returns the record to active so a
+                        // corrected retry can reuse the same handle.
+                        await lease.abort();
                         throw uploadError;
                     }
                     log.info(`Image uploaded successfully, URL: ${resolvedUrl}`);

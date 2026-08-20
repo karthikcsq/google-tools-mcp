@@ -23,6 +23,30 @@ import { ReadHandleParameter, beginDocsMutation } from '../../../docsHandles.js'
 
 const NUMBERED_GLYPH_HINT = /DECIMAL|ALPHA|ROMAN/;
 
+// The full Google Docs API `BulletGlyphPreset` enum
+// (https://developers.google.com/docs/api/reference/rest/v1/documents/request#bulletglyphpreset).
+// The codebase already emits BULLET_DISC_CIRCLE_SQUARE, BULLET_CHECKBOX, and
+// NUMBERED_DECIMAL_ALPHA_ROMAN (markdown-transformer/markdownToDocs.js);
+// the rest are valid API values not currently emitted elsewhere but equally
+// legal input here.
+const BULLET_GLYPH_PRESETS = [
+    'BULLET_DISC_CIRCLE_SQUARE',
+    'BULLET_DIAMONDX_ARROW3D_SQUARE',
+    'BULLET_CHECKBOX',
+    'BULLET_ARROW_DIAMOND_DISC',
+    'BULLET_STAR_CIRCLE_SQUARE',
+    'BULLET_ARROW3D_CIRCLE_SQUARE',
+    'BULLET_LEFTTRIANGLE_DIAMOND_DISC',
+    'BULLET_DIAMONDX_HOLLOWDIAMOND_SQUARE',
+    'BULLET_DIAMOND_CIRCLE_SQUARE',
+    'NUMBERED_DECIMAL_ALPHA_ROMAN',
+    'NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS',
+    'NUMBERED_DECIMAL_NESTED',
+    'NUMBERED_UPPERALPHA_ALPHA_ROMAN',
+    'NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL',
+    'NUMBERED_ZERODECIMAL_ALPHA_ROMAN',
+];
+
 function countLeadingTabs(text) {
     let count = 0;
     while (count < text.length && text[count] === '\t') count += 1;
@@ -112,6 +136,24 @@ export async function buildBulletNestingRequests({ docs, documentId, tabId, star
     for (const paragraph of bottomToTop) {
         const range = { startIndex: paragraph.startIndex, endIndex: paragraph.endIndex, ...(tabId ? { tabId } : {}) };
         requests.push({ deleteParagraphBullets: { range } });
+        // deleteParagraphBullets preserves the paragraph's visual position by
+        // ADDING indentStart/indentFirstLine to it (the Docs API's own
+        // behavior, not ours) — it never zeros them back out. Left alone,
+        // repeated nesting-level changes on the same paragraph accumulate
+        // that indent and drift it right on every call. Zero both explicitly,
+        // the same way buildBoundaryCleanupRequests
+        // (replaceRangeWithMarkdown.js) does, so createParagraphBullets below
+        // starts from a clean indent instead of stacking onto a preserved one.
+        requests.push({
+            updateParagraphStyle: {
+                range,
+                paragraphStyle: {
+                    indentStart: { magnitude: 0, unit: 'PT' },
+                    indentFirstLine: { magnitude: 0, unit: 'PT' },
+                },
+                fields: 'indentStart,indentFirstLine',
+            },
+        });
         const delta = bulletNestingLevel - paragraph.currentTabs;
         let newEnd = paragraph.endIndex;
         if (delta > 0) {
@@ -159,10 +201,9 @@ export function register(server) {
                 .min(0)
                 .max(8)
                 .optional()
-                .describe('Sets the target paragraph(s) list nesting depth explicitly (0 = top level). The target must resolve to whole paragraphs and, if it spans more than one, they must all belong to the same list (or none). Emits deleteParagraphBullets, leading-tab adjustment, and createParagraphBullets in one batchUpdate.'),
+                .describe('Sets the target paragraph(s) list nesting depth explicitly (0 = top level). The target must resolve to whole paragraphs and, if it spans more than one, they must all belong to the same list (or none). Emits deleteParagraphBullets, leading-tab adjustment, and createParagraphBullets in one batchUpdate. For a paragraph that is not already a list item, any leading tab characters in its text are treated as its current nesting level (they are what createParagraphBullets itself would consume into nesting), so the tab count changed here is relative to that existing count, not zero.'),
             bulletPreset: z
-                .string()
-                .min(1)
+                .enum(BULLET_GLYPH_PRESETS)
                 .optional()
                 .describe('Bullet glyph preset to use when setting bulletNestingLevel on paragraphs that are not already list items (e.g. "BULLET_DISC_CIRCLE_SQUARE", "NUMBERED_DECIMAL_ALPHA_ROMAN"). Ignored without bulletNestingLevel. When the paragraphs already belong to a list, the existing list\'s style is reused unless this is set.'),
         }),
@@ -258,7 +299,12 @@ export function register(server) {
                     }
                     log.info(`Setting bulletNestingLevel=${bulletNestingLevel} on the paragraph(s) in ${startIndex}-${endIndex} (${bulletRequests.length} requests).`);
                 }
-                const allRequests = [...(requestInfo ? [requestInfo.request] : []), ...bulletRequests];
+                // The bulletNestingLevel sequence's own zero-indent request
+                // (deleteParagraphBullets's preservation cleanup) must not be
+                // allowed to clobber caller-supplied paragraph style options —
+                // caller intent wins, so requestInfo goes LAST rather than
+                // first.
+                const allRequests = [...bulletRequests, ...(requestInfo ? [requestInfo.request] : [])];
                 await lease.write(
                     (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, allRequests, writeControl),
                     (response) => response?.writeControl?.requiredRevisionId,

@@ -421,7 +421,7 @@ The categories above contain 156 service-specific tools. Four general utilities 
 
 ## Finding Character Indices in a Doc
 
-Every index-addressed Docs tool (`modifyText`, `replaceRangeWithMarkdown`, `deleteRange`, `insertTable`, `insertTableWithData`, `insertPageBreak`) needs `startIndex`/`endIndex` values. Get them with `readDocument` and `format='index'`:
+Every index-addressed Docs tool (`modifyText`, `batchModifyText`, `replaceRangeWithMarkdown`, `deleteRange`, `insertTable`, `insertTableWithData`, `insertPageBreak`) needs `startIndex`/`endIndex` values. Get them with `readDocument` and `format='index'`:
 
 ```json
 {"format":"index","documentId":"…","revisionId":"…","tabId":null,"documentEnd":151,
@@ -434,7 +434,7 @@ Every index-addressed Docs tool (`modifyText`, `replaceRangeWithMarkdown`, `dele
    {"start":80,"end":81,"tabId":null,"type":"horizontalRule","nesting":null,"preview":""}]}
 ```
 
-`type` is one of `heading`, `listItem`, `paragraph`, `table`, `sectionBreak`, `tableOfContents`, `horizontalRule`, `pageBreak`, or `inlineObject` — a paragraph is exactly one of them, never two. Ranges are the raw Docs indices, 1-based and end-exclusive, so they can be handed straight to a mutating tool. Top-level ranges never overlap; the one nesting is table cells, which carry their own indices inside their table's `cells` array.
+`type` is one of `heading`, `listItem`, `paragraph`, `table`, `sectionBreak`, `tableOfContents`, `horizontalRule`, `pageBreak`, or `inlineObject` — a paragraph is exactly one of them, never two. An `inlineObject` is further promoted to a more specific type when the underlying element is one of `footnoteReference`, `columnBreak`, `equation`, `richLink`, `person`, or `autoText`. Ranges are the raw Docs indices, 1-based and end-exclusive, so they can be handed straight to a mutating tool. Top-level ranges never overlap; the one nesting is table cells, which carry their own indices inside their table's `cells` array.
 
 The fetch is a narrow field mask, not the whole document, including for tabbed documents (`tabId=…`). That is the difference from `format='json'`, which returns the raw unpruned API response and is only for callers that genuinely need suggestions or style provenance — an oversized `json` read without `maxLength` now fails with a message pointing here instead of emitting a megabyte.
 

@@ -180,6 +180,28 @@ describe('batchModifyText — atomicity and ordering contract', () => {
         }, { log: noopLog })).rejects.toThrow(/inserts text inside the range the other replaces/);
     });
 
+    // Fix 8: an insertion point exactly AT a range operation's startIndex
+    // used to be accepted, but after sorting both land at the same index and
+    // caller order silently decides which text comes first — exactly the
+    // ambiguity the overlap contract exists to reject. The boundary at
+    // endIndex stays legal (covered by the "touch at a boundary" test above).
+    it('rejects an insertion point exactly at a range operation\'s startIndex, by name', async () => {
+        const documentId = nextDocId();
+        const { batchUpdate } = makeGoogle(buildBody(TEXTS));
+        trackRead(documentId, null, 'old', 'rev-read');
+
+        const range = rangeOf(TEXTS, 0, 'one'); // e.g. startIndex 10, endIndex 20-ish
+        await expect(getTool().execute({
+            documentId,
+            operations: [
+                { target: range, text: 'REPLACED', label: 'range-op' },
+                { target: { insertionIndex: range.startIndex }, text: 'X', label: 'point-op' },
+            ],
+        }, { log: noopLog })).rejects.toThrow(/operation 1 \("range-op"\).*operation 2 \("point-op"\)/s);
+
+        expect(batchUpdate).not.toHaveBeenCalled();
+    });
+
     it('allows two edits that merely touch at a boundary', async () => {
         const documentId = nextDocId();
         const { batchUpdate } = makeGoogle(buildBody(TEXTS));
@@ -218,6 +240,11 @@ describe('batchModifyText — atomicity and ordering contract', () => {
         expect(thrown).toBeDefined();
         expect(thrown.message).toContain(`above this tool's limit of ${MAX_REQUESTS}`);
         expect(thrown.message).toContain('never split');
+        // Fix 8: the real per-operation max is five requests (delete, insert,
+        // default-colour paint, text style, paragraph style) — the message
+        // used to undercount it at four.
+        expect(thrown.message).toContain('up to five requests');
+        expect(thrown.message).not.toContain('up to four requests');
         expect(batchUpdate).not.toHaveBeenCalled();
     });
 });
@@ -440,6 +467,22 @@ describe('batchModifyText — pure helpers', () => {
         const ops = [
             { position: 1, startIndex: 5, endIndex: undefined, source: { target: { insertionIndex: 5 } } },
             { position: 2, startIndex: 9, endIndex: undefined, source: { target: { insertionIndex: 9 } } },
+        ];
+        expect(findOverlap(ops)).toBeNull();
+    });
+
+    it('findOverlap rejects an insertion point exactly at a range\'s startIndex (#fix8)', () => {
+        const ops = [
+            { position: 1, startIndex: 10, endIndex: 20, source: { target: { startIndex: 10, endIndex: 20 } } },
+            { position: 2, startIndex: 10, endIndex: undefined, source: { target: { insertionIndex: 10 } } },
+        ];
+        expect(findOverlap(ops)?.reason).toMatch(/inserts text inside the range/);
+    });
+
+    it('findOverlap still allows an insertion point exactly at a range\'s endIndex', () => {
+        const ops = [
+            { position: 1, startIndex: 10, endIndex: 20, source: { target: { startIndex: 10, endIndex: 20 } } },
+            { position: 2, startIndex: 20, endIndex: undefined, source: { target: { insertionIndex: 20 } } },
         ];
         expect(findOverlap(ops)).toBeNull();
     });

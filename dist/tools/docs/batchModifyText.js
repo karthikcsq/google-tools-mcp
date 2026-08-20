@@ -240,7 +240,13 @@ export function findOverlap(operations) {
             if (aIsPoint || bIsPoint) {
                 const point = aIsPoint ? a : b;
                 const range = aIsPoint ? b : a;
-                if (point.startIndex > range.startIndex && point.startIndex < range.endIndex) {
+                // An insertion point exactly AT range.startIndex is rejected
+                // too: after sorting, it lands at the same index as the
+                // range's own start and which one "wins" depends on caller
+                // order — the exact ambiguity this contract exists to reject.
+                // A point exactly at range.endIndex stays legal (it lands
+                // strictly after the range once the range's own edit applies).
+                if (point.startIndex >= range.startIndex && point.startIndex < range.endIndex) {
                     return { a, b, reason: 'one inserts text inside the range the other replaces or deletes' };
                 }
                 continue;
@@ -471,7 +477,7 @@ export function register(server) {
                     throw publicError(`These ${args.operations.length} operations produce ${requests.length} Google Docs API requests, ` +
                         `above this tool's limit of ${MAX_REQUESTS}. The batch is never split, because splitting would give up the ` +
                         'all-or-nothing guarantee. Split the work across several calls yourself, re-reading the document between them. ' +
-                        '(Each operation emits up to four requests: delete, insert, default-colour paint, and style.)');
+                        '(Each operation emits up to five requests: delete, insert, default-colour paint, text style, and paragraph style.)');
                 }
 
                 // --- diff ---------------------------------------------------

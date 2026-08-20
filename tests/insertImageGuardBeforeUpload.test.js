@@ -54,15 +54,22 @@ function docPayload(text = 'Hello world\n', revisionId = REVISION) {
     };
 }
 
-function setUpGoogleMocks() {
+function setUpGoogleMocks({ failUploadTimes = 0 } = {}) {
+    let uploadFailuresLeft = failUploadTimes;
     const uploadCreate = jest.fn(async ({ media } = {}) => {
         if (media?.body) {
+            // Drain the readable stream regardless of outcome, matching how a
+            // real HTTP client consumes the request body before failing.
             await new Promise((resolve, reject) => {
                 media.body.on('data', () => {});
                 media.body.on('end', resolve);
                 media.body.on('close', resolve);
                 media.body.on('error', reject);
             });
+        }
+        if (uploadFailuresLeft > 0) {
+            uploadFailuresLeft -= 1;
+            throw new Error('simulated Drive upload failure');
         }
         return { data: { id: 'uploaded-file-id', webViewLink: 'https://drive/uploaded', webContentLink: 'https://drive/uploaded-content' } };
     });
@@ -198,6 +205,43 @@ describe('insertImage guard-before-upload (#87 gap 1), standard path', () => {
             const uploadOrder = uploadCreate.mock.invocationCallOrder[0];
             const writeOrder = batchUpdate.mock.invocationCallOrder[0];
             expect(uploadOrder).toBeLessThan(writeOrder);
+        } finally { await handler.close(); }
+    });
+
+    // Fix 1: a failed Drive upload wrote nothing to the document, so the
+    // mutation lease must be released with abort() (returns the handle to
+    // active) rather than fail() (terminalizes it as INVALID). This proves
+    // it end to end: the SAME readHandle from the failed attempt authorizes
+    // the corrected retry.
+    it('an upload failure releases the lease so the SAME readHandle succeeds on retry', async () => {
+        const { uploadCreate, batchUpdate } = setUpGoogleMocks({ failUploadTimes: 1 });
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readDocument', { documentId: DOC_ID, format: 'markdown' });
+            expect(read.readHandle).toBeTruthy();
+
+            const failedWrite = await call(handler, 'insertImage', {
+                documentId: DOC_ID,
+                localImagePath: tmpImagePath,
+                index: 1,
+                readHandle: read.readHandle,
+            });
+            expect(failedWrite.isError).toBe(true);
+            expect(uploadCreate).toHaveBeenCalledTimes(1);
+            expect(batchUpdate).not.toHaveBeenCalled();
+
+            // Retry with the exact same handle — a fail()-terminalized handle
+            // would be rejected here as already-consumed/invalid.
+            const retryWrite = await call(handler, 'insertImage', {
+                documentId: DOC_ID,
+                localImagePath: tmpImagePath,
+                index: 1,
+                readHandle: read.readHandle,
+            });
+            expect(retryWrite.isError).toBeFalsy();
+            expect(uploadCreate).toHaveBeenCalledTimes(2);
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
         } finally { await handler.close(); }
     });
 });
