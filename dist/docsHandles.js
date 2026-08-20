@@ -28,6 +28,7 @@ import {
     isWorkspaceDirtyOnDisk,
     noteWorkspaceExpiry,
     setResultHandle,
+    setResultWarning,
     syncRuntimeBinding,
 } from './handleRuntime.js';
 
@@ -253,31 +254,110 @@ export async function beginDocsMutation(documentId, {
         async complete(newRevisionId) {
             if (settled) return;
             settled = true;
+            const resolvedRevisionId = typeof newRevisionId === 'string' ? newRevisionId : null;
             // A successor workspace is required because the predecessor owned
             // one. It starts empty on purpose: we know the post-write revision,
             // but not the post-write content, and seeding it with pre-write
             // content would hand the caller a working copy that silently
             // reverts their own edit. Re-read to refill it.
-            const successorWorkspace = await createHandleWorkspace({
-                profile: context.profile,
-                fileId: documentId,
-                tabId,
-                revisionId: typeof newRevisionId === 'string' ? newRevisionId : null,
-                fingerprint: null,
-                content: '',
-            });
-            const successor = store.completeSuccess(lease.operationId, {
-                revisionId: typeof newRevisionId === 'string' ? newRevisionId : null,
-                // The structure this handle was issued against no longer exists
-                // after our own write, so it is cleared rather than inherited.
-                structuralFingerprint: null,
-                workspace: successorWorkspace.workspace,
-            });
-            noteWorkspaceExpiry(successorWorkspace.workspace.workspaceId, successor.expiresAt);
+            //
+            // By the time complete() runs, the Google write has ALREADY
+            // committed -- this call only exists to mint the next local
+            // handle. So a failure here (disk full, permissions, temp I/O)
+            // must never surface as "the write failed": it is caught rather
+            // than left to propagate, and the predecessor is still
+            // terminalized immediately below regardless. A committed write
+            // consumes its handle unconditionally; whether a successor
+            // workspace could be rebuilt is a separate, non-fatal concern.
+            let successorWorkspace = null;
+            try {
+                successorWorkspace = await createHandleWorkspace({
+                    profile: context.profile,
+                    fileId: documentId,
+                    tabId,
+                    revisionId: resolvedRevisionId,
+                    fingerprint: null,
+                    content: '',
+                });
+            } catch { /* handled below: terminalize first, warn instead of throwing */ }
+
+            // completeSuccess is the transition that terminalizes the
+            // predecessor as consumed (vs. reserved/invalid) and (usually)
+            // registers a successor, so it always runs here -- with a real
+            // successor workspace when we have one, or an explicit
+            // `workspace: null` when we don't. It can itself still throw
+            // (any internal invariant -- capacity, a colliding id, a store
+            // bug); that throw is caught below rather than letting it leave
+            // the predecessor stuck `reserved`, since by this point the
+            // Google write has ALREADY committed.
+            let successor;
+            try {
+                successor = store.completeSuccess(lease.operationId, {
+                    revisionId: resolvedRevisionId,
+                    // The structure this handle was issued against no longer
+                    // exists after our own write, so it is cleared rather
+                    // than inherited.
+                    structuralFingerprint: null,
+                    workspace: successorWorkspace ? successorWorkspace.workspace : null,
+                });
+            } catch {
+                // completeSuccess only mutates the store (registering a
+                // successor, terminalizing the predecessor) after every
+                // validation step above it succeeds, so a throw here means
+                // the predecessor is still sitting `reserved` and, if
+                // createHandleWorkspace built one, the successor workspace
+                // was never handed to the store at all. The write already
+                // committed regardless, so the predecessor must still end up
+                // terminal: fall back to the store's other terminal
+                // transition (best effort -- the write already committed
+                // either way, so a failure here does not change what we tell
+                // the caller).
+                try { store.completeAfterWriteFailure(lease.operationId); }
+                catch { /* best effort: the write already committed regardless */ }
+                // Neither workspace will ever be discovered by anything else
+                // from here: the successor was never registered with the
+                // store, so it has no expiresAt and cleanupHandleWorkspaces's
+                // expiry check can never match it (plan §3's cleanup only
+                // ever consults ownedWorkspaces + expiresAt, never a glob);
+                // and completeAfterWriteFailure's dirty-retention machinery
+                // exists to protect a workspace whose content might still
+                // need recovering after a genuine write failure, which does
+                // not apply here since the write already landed. Reap both
+                // explicitly instead of leaving either as a permanent orphan.
+                if (successorWorkspace) {
+                    await discardHandleWorkspace(successorWorkspace.workspace.workspaceId);
+                }
+                if (workspaceId) await discardHandleWorkspace(workspaceId);
+                setResultWarning(
+                    'Document write committed successfully, but the local read-handle bookkeeping could not ' +
+                    'be finalized. Re-read the document before further edits.',
+                );
+                return;
+            }
             if (workspaceId) await discardHandleWorkspace(workspaceId);
-            setResultHandle(successor.readHandle, successor.expiresAt);
-            if (context.transport === 'stdio') {
-                store.setImplicit(successor.readHandle, { key: implicitKey(documentId, tabId) });
+
+            if (successorWorkspace) {
+                noteWorkspaceExpiry(successorWorkspace.workspace.workspaceId, successor.expiresAt);
+                setResultHandle(successor.readHandle, successor.expiresAt);
+                if (context.transport === 'stdio') {
+                    store.setImplicit(successor.readHandle, { key: implicitKey(documentId, tabId) });
+                }
+            } else {
+                // completeSuccess still had to mint a successor record to keep
+                // the store's invariant (every successful mutation produces
+                // exactly one), but a workspace-less handle has no editable
+                // copy behind it and would be misleading to hand back as if it
+                // were usable, so it is revoked immediately instead of
+                // surfaced. The stdio implicit slot is deliberately left
+                // pointing at the now-tombstoned predecessor capability: the
+                // next call that resolves it implicitly gets the honest
+                // "already consumed" error rather than silently reusing a
+                // handle with nothing behind it.
+                try { store.revoke(successor.readHandle); } catch { /* best effort */ }
+                setResultWarning(
+                    'Document write committed successfully, but no successor read handle could be issued ' +
+                    '(the local workspace could not be created). Re-read the document before further edits.',
+                );
             }
         },
         async fail() {

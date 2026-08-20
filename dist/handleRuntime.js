@@ -203,33 +203,53 @@ export async function createHandleWorkspace({
         await fs.access(baselinePath);
     } catch {
         baselineShared = false;
-        await writeFileSecurely(baselinePath, content);
     }
 
     const workspaceId = newInternalId();
     const ownershipManifest = newInternalId();
     const dir = workspaceDirFor(workspaceId);
-    await ensureSafeDirectory(dir);
     const editablePath = path.join(dir, EDITABLE_FILE);
     const manifestPath = path.join(dir, MANIFEST_FILE);
-    // Copy, never link or share: handle A's edits must never appear in B's file.
-    await writeFileSecurely(editablePath, content);
+    let baselineCreatedHere = false;
 
-    const manifest = {
-        workspaceId,
-        ownershipManifest,
-        editablePath,
-        manifestPath,
-        directory: dir,
-        baselineId,
-        baselinePath,
-        baselineHash: sha256Hex(content),
-        createdAt: Date.now(),
-        expiresAt,
-    };
-    await writeFileSecurely(manifestPath, JSON.stringify(manifest, null, 2));
-    ownedWorkspaces.set(workspaceId, manifest);
-    addBaselineReference(baselineId, workspaceId);
+    // Every write below is fallible (disk full, permissions, temp I/O), and
+    // `ownedWorkspaces.set` — the ONLY thing cleanup ever consults (plan §3,
+    // "never a glob") — is deliberately the very last step. If anything in
+    // between throws, this call has already put bytes on disk that no owner
+    // will ever be told to reap, so the catch below removes exactly what this
+    // call created (and only what this call created: a shared pre-existing
+    // baseline is never touched) before propagating the original error.
+    try {
+        if (!baselineShared) {
+            await writeFileSecurely(baselinePath, content);
+            baselineCreatedHere = true;
+        }
+        // Copy, never link or share: handle A's edits must never appear in B's file.
+        await ensureSafeDirectory(dir);
+        await writeFileSecurely(editablePath, content);
+
+        const manifest = {
+            workspaceId,
+            ownershipManifest,
+            editablePath,
+            manifestPath,
+            directory: dir,
+            baselineId,
+            baselinePath,
+            baselineHash: sha256Hex(content),
+            createdAt: Date.now(),
+            expiresAt,
+        };
+        await writeFileSecurely(manifestPath, JSON.stringify(manifest, null, 2));
+        ownedWorkspaces.set(workspaceId, manifest);
+        addBaselineReference(baselineId, workspaceId);
+    } catch (error) {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+        if (baselineCreatedHere) {
+            await fs.rm(baselinePath, { force: true }).catch(() => {});
+        }
+        throw error;
+    }
 
     return {
         baselineShared,
@@ -322,7 +342,7 @@ export async function cleanupHandleWorkspaces({ all = false, now = Date.now() } 
  * handle to another. This slot is per execution.
  */
 export function runWithResultAnnotations(fn) {
-    return resultAnnotationStorage.run({ readHandle: null, expiresAt: null }, fn);
+    return resultAnnotationStorage.run({ readHandle: null, expiresAt: null, warnings: [] }, fn);
 }
 
 /** Ask the facade to surface `readHandle` as a top-level result field. */
@@ -335,20 +355,50 @@ export function setResultHandle(readHandle, expiresAt = null) {
 }
 
 /**
+ * Attach an operator-facing warning to the in-flight tool result, without the
+ * tool itself needing to thread it through its own return value.
+ *
+ * The seam this exists for: a Docs write that has already committed to Google
+ * but whose successor read-handle workspace could not be created (see
+ * `docsHandles.js` `complete()`). That failure must not read as "the write
+ * failed" — it already succeeded — so it is surfaced here instead of thrown,
+ * and merged into the result the same way `setResultHandle` merges a minted
+ * handle: every tool gets it for free via `applyResultAnnotations` below, with
+ * zero changes to individual tool files.
+ */
+export function setResultWarning(message) {
+    const slot = resultAnnotationStorage.getStore();
+    if (!slot || typeof message !== 'string' || message.length === 0) return false;
+    slot.warnings.push(message);
+    return true;
+}
+
+/**
  * Merge any annotation into a normalized tool result. `readHandle` is a named
  * top-level field (plan §2) and is mirrored into `structuredContent` for clients
- * that only read structured output.
+ * that only read structured output. `warnings` (if any were recorded) are both
+ * appended as an additional text block, so a plain-text-only client still sees
+ * them, and mirrored into `structuredContent.warnings`.
  */
 export function applyResultAnnotations(result) {
     const slot = resultAnnotationStorage.getStore();
-    if (!slot?.readHandle) return result;
+    const warnings = slot?.warnings ?? [];
+    if (!slot?.readHandle && warnings.length === 0) return result;
+    const content = warnings.length > 0
+        ? [
+            ...(Array.isArray(result.content) ? result.content : []),
+            ...warnings.map((message) => ({ type: 'text', text: `Warning: ${message}` })),
+        ]
+        : result.content;
     return {
         ...result,
-        readHandle: slot.readHandle,
+        ...(content !== result.content ? { content } : {}),
+        ...(slot?.readHandle ? { readHandle: slot.readHandle } : {}),
         structuredContent: {
             ...(result.structuredContent ?? {}),
-            readHandle: slot.readHandle,
-            ...(slot.expiresAt === null ? {} : { readHandleExpiresAt: slot.expiresAt }),
+            ...(slot?.readHandle ? { readHandle: slot.readHandle } : {}),
+            ...(slot?.readHandle && slot.expiresAt !== null ? { readHandleExpiresAt: slot.expiresAt } : {}),
+            ...(warnings.length > 0 ? { warnings } : {}),
         },
     };
 }

@@ -603,6 +603,9 @@
         "file": "tests/packageScripts.test.js"
       },
       {
+        "file": "tests/publicErrorBoundary.test.js"
+      },
+      {
         "file": "tests/readGoogleDocTabs.test.js"
       },
       {

@@ -265,6 +265,57 @@ describe('diagnostic redaction', () => {
         expect(redacted).not.toContain(secretValues[1]);
     });
 
+    it('redacts a secret embedded in a Symbol description, a function source, and nested {fn, sym} properties', () => {
+        const secret = 'symbol-and-closure-guarded-0123456789';
+        const remove = registerSecret(secret);
+        try {
+            const sym = Symbol(`leaked ${secret} description`);
+            // Built via new Function so the *source text* literally embeds the
+            // secret (a closure over a variable named `secret` would only put
+            // the identifier "secret" in the source, not the value).
+            // eslint-disable-next-line no-new-func
+            const tagged = new Function(`return "${secret}";`);
+
+            expectNoSecrets(redactDiagnostic(sym));
+            expectNoSecrets(redactDiagnostic(tagged));
+            expectNoSecrets(redactDiagnostic({ fn: tagged, sym }));
+
+            // No 8+ character window of the secret may survive anywhere.
+            const outputs = [
+                String(redactDiagnostic(sym)),
+                String(redactDiagnostic(tagged)),
+                JSON.stringify(redactDiagnostic({ fn: tagged, sym }), (_key, value) => (
+                    typeof value === 'string' ? value : value
+                )),
+            ];
+            for (const output of outputs) {
+                for (let start = 0; start + 8 <= secret.length; start += 1) {
+                    expect(output).not.toContain(secret.slice(start, start + 8));
+                }
+            }
+        } finally {
+            remove();
+        }
+    });
+
+    it('redacts a bigint stringification and a secret used as an object property key', () => {
+        const secret = 'bigint-and-key-secret-value';
+        const remove = registerSecret(secret);
+        try {
+            const bigintRedacted = redactDiagnostic(123456789012345678901234567890n);
+            expect(typeof bigintRedacted).toBe('string');
+            expect(bigintRedacted).not.toContain(secret);
+
+            const keyed = { [secret]: 'value', safeStatus: 'preserved' };
+            const redacted = redactDiagnostic(keyed);
+            expect(Object.keys(redacted).some((key) => key.includes(secret))).toBe(false);
+            expect(JSON.stringify(redacted)).not.toContain(secret);
+            expect(redacted.safeStatus).toBe('preserved');
+        } finally {
+            remove();
+        }
+    });
+
     it('bounds diagnostic depth and node count', () => {
         const deep = {};
         let cursor = deep;
