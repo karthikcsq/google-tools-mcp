@@ -260,8 +260,13 @@ function visit(value, context, depth) {
     if (typeof value === 'string') return redactString(value, context.secrets);
     if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
     if (typeof value === 'undefined') return undefined;
-    if (typeof value === 'bigint') return String(value);
-    if (typeof value === 'symbol' || typeof value === 'function') return String(value);
+    // bigint, symbol, and function values are stringified for the diagnostic —
+    // a Symbol's description or a function's source can embed a registered
+    // secret (e.g. `Symbol(secret)` or a closure whose source literally
+    // contains it), so every stringification here goes through the same
+    // redactString() pass a plain string value gets, not a bare String(value).
+    if (typeof value === 'bigint') return redactString(String(value), context.secrets);
+    if (typeof value === 'symbol' || typeof value === 'function') return redactString(String(value), context.secrets);
 
     if (context.seen.has(value)) return CIRCULAR;
     context.seen.add(value);
@@ -316,7 +321,12 @@ function serializeObject(value, context, depth) {
             : property.ok
                 ? visit(property.value, context, depth + 1)
                 : property.value;
-        Object.defineProperty(result, key, { value: safeValue, enumerable: true, configurable: true });
+        // The key name itself is also attacker-influenceable data (an object
+        // literally keyed by a secret value) and is never passed through
+        // redactString elsewhere in this function, so redact it too before
+        // using it as the emitted property name.
+        const safeKey = redactString(key, context.secrets);
+        Object.defineProperty(result, safeKey, { value: safeValue, enumerable: true, configurable: true });
     }
     return result;
 }
@@ -353,7 +363,8 @@ function serializeError(error, context, depth) {
             : property.ok
                 ? visit(property.value, context, depth + 1)
                 : property.value;
-        Object.defineProperty(result, key, { value: safeValue, enumerable: true, configurable: true });
+        const safeKey = redactString(key, context.secrets);
+        Object.defineProperty(result, safeKey, { value: safeValue, enumerable: true, configurable: true });
     }
 
     const cause = readProperty(error, 'cause');
