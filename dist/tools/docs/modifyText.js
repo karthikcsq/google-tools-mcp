@@ -115,7 +115,7 @@ export function register(server) {
         description: 'Best for small, targeted, single-location changes within a line or paragraph. ' +
             'Can insert text at a position, replace a range or found text, delete text (replace with empty string ""), ' +
             'apply text styling (bold, italic, etc.), apply paragraph styling (alignment, headings, spacing, etc.), or any combination. ' +
-            "Use readDocument with format='json' to determine indices. " +
+            "Use readDocument with format='index' to determine indices — it returns a compact structural map (headings, list items, tables with per-cell indices) instead of the full raw document. " +
             'Supports \\n for line breaks and \\t for tabs in replacement text. ' +
             'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance. ' +
             "textToFind tolerates markdown list markers copied from readDocument(format='markdown'), because Google Docs stores bullets outside text runs. " +
@@ -169,8 +169,12 @@ export function register(server) {
                 }
                 else if ('textToFind' in args.target) {
                     const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance, args.tabId);
-                    if (!range) {
-                        throw publicError(`Could not find text "${args.target.textToFind}"${args.target.matchInstance ? ` (instance ${args.target.matchInstance})` : ''}${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
+                    // findTextRange returns a structured failure describing where
+                    // matching diverged (issue #105); render it rather than
+                    // collapsing it back to "could not find it".
+                    if (!range || range.found === false) {
+                        throw publicError(range?.message
+                            ?? `Could not find text "${args.target.textToFind}"${args.target.matchInstance ? ` (instance ${args.target.matchInstance})` : ''}${args.tabId ? ` in tab ${args.tabId}` : ''}.`);
                     }
                     startIndex = range.startIndex;
                     endIndex = range.endIndex;

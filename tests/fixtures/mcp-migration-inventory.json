@@ -16,6 +16,9 @@
         "file": "dist/docsHandles.js"
       },
       {
+        "file": "dist/docsIndex.js"
+      },
+      {
         "file": "dist/docsStructure.js"
       },
       {
@@ -525,6 +528,15 @@
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
       },
       {
+        "file": "tests/createFlowsReadSeeding.test.js"
+      },
+      {
+        "file": "tests/defaultTextColor.test.js"
+      },
+      {
+        "file": "tests/docsIndexRead.test.js"
+      },
+      {
         "file": "tests/docsStructure.test.js"
       },
       {
@@ -541,6 +553,9 @@
       },
       {
         "file": "tests/extraDocsToolsWriteControl.test.js"
+      },
+      {
+        "file": "tests/findTextRangeDiagnostics.test.js"
       },
       {
         "file": "tests/fixtures/mcpSdkV2Fixture.js"
@@ -565,6 +580,9 @@
       },
       {
         "file": "tests/httpAuth.test.js"
+      },
+      {
+        "file": "tests/insertImageGuardBeforeUpload.test.js"
       },
       {
         "file": "tests/legacyAliasAuthRetry.test.js"
@@ -613,6 +631,9 @@
       },
       {
         "file": "tests/readHandleIntegration.test.js"
+      },
+      {
+        "file": "tests/readToolParity.test.js"
       },
       {
         "file": "tests/readTracker.test.js"
@@ -803,7 +824,7 @@
       },
       {
         "file": "dist/tools/docs/readGoogleDoc.js",
-        "line": 27,
+        "line": 52,
         "match": ".addTool({"
       },
       {
@@ -853,7 +874,7 @@
       },
       {
         "file": "dist/tools/drive/createDocument.js",
-        "line": 7,
+        "line": 9,
         "match": ".addTool({"
       },
       {
@@ -863,7 +884,7 @@
       },
       {
         "file": "dist/tools/drive/createFromTemplate.js",
-        "line": 5,
+        "line": 8,
         "match": ".addTool({"
       },
       {

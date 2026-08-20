@@ -21,8 +21,9 @@ export function register(server) {
                     // Find the text first
                     log.info(`Finding text "${args.target.textToFind}" (instance ${args.target.matchInstance ?? 'auto'})${args.tabId ? ` in tab ${args.tabId}` : ''}`);
                     const textRange = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance, args.tabId);
-                    if (!textRange) {
-                        throw publicError(`Could not find "${args.target.textToFind}" in the document${args.tabId ? ` (tab: ${args.tabId})` : ''}.`);
+                    if (!textRange || textRange.found === false) {
+                        throw publicError(textRange?.message
+                            ?? `Could not find "${args.target.textToFind}" in the document${args.tabId ? ` (tab: ${args.tabId})` : ''}.`);
                     }
                     log.info(`Found text at range ${textRange.startIndex}-${textRange.endIndex}, now locating containing paragraph`);
                     // Then find the paragraph containing this text

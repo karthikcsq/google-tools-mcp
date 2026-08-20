@@ -9,7 +9,7 @@ import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'deleteRange',
-        description: "Deletes content within a character range [startIndex, endIndex) from a document. Use readDocument with format='json' to determine index positions.",
+        description: "Deletes content within a character range [startIndex, endIndex) from a document. Use readDocument with format='index' to determine index positions — it returns a compact structural map with the exact start/end of every element.",
         parameters: DocumentIdParameter.extend({
             startIndex: z
                 .number()

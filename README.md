@@ -419,6 +419,27 @@ These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separ
 
 The categories above contain 152 service-specific tools. Four general utilities — `help`, `logout`, `troubleshoot`, and `feedback` — bring the default server surface to 156 tools. See [Common Workflows](docs/workflows.md) for practical examples.
 
+## Finding Character Indices in a Doc
+
+Every index-addressed Docs tool (`modifyText`, `deleteRange`, `insertTable`, `insertTableWithData`, `insertPageBreak`) needs `startIndex`/`endIndex` values. Get them with `readDocument` and `format='index'`:
+
+```json
+{"format":"index","documentId":"…","revisionId":"…","tabId":null,"documentEnd":151,
+ "fromIndex":0,"totalElementCount":4,"elementCount":4,"truncated":false,
+ "elements":[
+   {"start":1,"end":12,"tabId":null,"type":"heading","level":1,"nesting":null,"preview":"To Do List"},
+   {"start":12,"end":25,"tabId":null,"type":"listItem","ordered":true,"nesting":0,"preview":"Follow up now"},
+   {"start":25,"end":80,"tabId":null,"type":"table","rows":2,"columns":2,
+    "cells":[{"start":42,"end":50,"row":0,"col":0,"preview":"Name"}]},
+   {"start":80,"end":81,"tabId":null,"type":"horizontalRule","nesting":null,"preview":""}]}
+```
+
+`type` is one of `heading`, `listItem`, `paragraph`, `table`, `sectionBreak`, `tableOfContents`, `horizontalRule`, `pageBreak`, or `inlineObject` — a paragraph is exactly one of them, never two. Ranges are the raw Docs indices, 1-based and end-exclusive, so they can be handed straight to a mutating tool. Top-level ranges never overlap; the one nesting is table cells, which carry their own indices inside their table's `cells` array.
+
+The fetch is a narrow field mask, not the whole document, including for tabbed documents (`tabId=…`). That is the difference from `format='json'`, which returns the raw unpruned API response and is only for callers that genuinely need suggestions or style provenance — an oversized `json` read without `maxLength` now fails with a message pointing here instead of emitting a megabyte.
+
+Large documents paginate at element boundaries: set `maxResponseChars` (default 100000, `0` disables), and when the response comes back `truncated`, call again with `fromIndex` set to the returned `nextFromIndex`. The Docs API has no start-index cursor, so each page costs one more (narrow) fetch.
+
 ## Local Working Copies
 
 `readDocument` (markdown format) saves what it reads to a local working-copy file, keyed by document ID and tab, so you can edit that file directly and push it back with `replaceDocumentWithMarkdown` using `filePath` instead of pasting content inline. `replaceDocumentWithMarkdown` also mirrors any inline `markdown=` push into that same file, so it always reflects what's actually on the document.

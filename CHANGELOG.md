@@ -67,9 +67,30 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   log field is redacted, and an unclassified internal failure returns a generic
   message instead of a raw stack.
 - `docs/http-mode.md`, the reference for HTTP mode and this breaking change.
+- `readDocument` gains `format='index'` (#105): a compact structural map of the
+  document — headings with levels, list items with nesting and orderedness,
+  tables with per-cell indices, section breaks, horizontal rules, inline object
+  anchors — carrying the raw `startIndex`/`endIndex` every index-addressed tool
+  needs. It fetches a narrow field mask rather than `fields:'*'`, including for
+  tabbed documents, and it mints a `readHandle` like any other read. Paginates
+  at element boundaries via `maxResponseChars` / `fromIndex` / `nextFromIndex`.
+  Every tool description and error string that used to recommend `format='json'`
+  for index discovery now names `format='index'`.
+- `readDocument` gains `stripInheritedStyles` (opt-in, `format='json'` only),
+  which drops inherited `textStyle`/`documentStyle`/`namedStyles` and every
+  `suggested*` map while preserving every index.
 
 ### Fixed
 
+- A failed `textToFind` now says *where* matching diverged — the longest
+  matching prefix, the divergence offset, and the surrounding document text —
+  instead of a bare "could not find it". Rendered by `modifyText`,
+  `getFormatting`, and `applyParagraphStyle`.
+- `readDocument format='json'` no longer emits an unbounded raw document when no
+  `maxLength` was given; over the response budget it fails with a directive
+  naming `format='index'`. `maxLength` is validated as a positive integer
+  instead of treating `0` as "unlimited", and its description now says it
+  applies to text, markdown, and json.
 - Read-tracker state can no longer be shared across HTTP requests. One request's
   read of a document could previously satisfy another request's mutation guard.
 - `subscriptions/listen` returns its empty result and closes gracefully instead

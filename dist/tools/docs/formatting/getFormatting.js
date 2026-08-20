@@ -119,9 +119,9 @@ export function register(server) {
                         docs, args.documentId, args.target.textToFind,
                         args.target.matchInstance, args.tabId
                     );
-                    if (!range) {
-                        throw publicError(
-                            `Could not find instance ${args.target.matchInstance ?? 1} of text "${args.target.textToFind}"${args.tabId ? ` in tab ${args.tabId}` : ''}.`
+                    if (!range || range.found === false) {
+                        throw publicError(range?.message
+                            ?? `Could not find instance ${args.target.matchInstance ?? 1} of text "${args.target.textToFind}"${args.tabId ? ` in tab ${args.tabId}` : ''}.`
                         );
                     }
                     startIndex = range.startIndex;

@@ -8,6 +8,31 @@ import { docsJsonToMarkdown, checkMarkdownFidelity } from '../../markdown-transf
 import { trackRead, getLastReadContent } from '../../readTracker.js';
 import { writeWorkspaceFile } from '../../workspace.js';
 import { mintDocsReadHandle } from '../../docsHandles.js';
+import {
+    DEFAULT_INDEX_MAX_RESPONSE_CHARS,
+    INDEX_BODY_FIELDS,
+    INDEX_TABS_FIELDS,
+    serializeDocumentIndex,
+} from '../../docsIndex.js';
+
+// Style objects the Docs API echoes onto essentially every element by
+// inheritance. `stripInheritedStyles` drops exactly these (plus the
+// suggestion maps) from a format='json' response. `paragraphStyle` is
+// deliberately kept: its `namedStyleType` is structural, not inherited noise.
+// Nothing here carries a startIndex/endIndex, so pruning cannot move an index.
+const INHERITED_STYLE_KEYS = new Set(['textStyle', 'documentStyle', 'namedStyles']);
+
+function stripInheritedStyleKeys(value) {
+    if (Array.isArray(value)) return value.map(stripInheritedStyleKeys);
+    if (!value || typeof value !== 'object') return value;
+    const out = {};
+    for (const [key, child] of Object.entries(value)) {
+        if (INHERITED_STYLE_KEYS.has(key)) continue;
+        if (key.startsWith('suggested')) continue;
+        out[key] = stripInheritedStyleKeys(child);
+    }
+    return out;
+}
 
 async function fetchModifiedTime(documentId) {
     try {
@@ -29,17 +54,39 @@ export function register(server) {
         description: "Reads the content of a Google Document. Returns markdown by default (formatted content suitable for editing and re-uploading with replaceDocumentWithMarkdown) and saves it to a local working-copy file (path included in the response). " +
             "PREFERRED EDITING WORKFLOW for large edits: (1) readDocument to get the local file path, (2) edit that file locally, (3) call replaceDocumentWithMarkdown with filePath pointing to it. This avoids inline content truncation and gives you a reviewable working copy before pushing changes. " +
             "If the document contains content markdown cannot represent (images, footnotes), a warning is appended listing what replaceDocumentWithMarkdown would permanently remove — prefer modifyText or appendMarkdown for those documents. " +
-            "Use format='text' for plain text, or format='json' for the raw document structure. Set diffFromLastRead=true (markdown only) to get a unified diff from your previous read in this session instead of the full content.",
+            "Use format='text' for plain text, or format='index' to get a compact structural map (headings, list items and nesting, tables with per-cell indices) with the exact startIndex/endIndex every index-addressed tool needs. " +
+            "format='index' is the cheap way to find indices: it fetches a narrow field mask instead of the whole document, so it stays affordable even for tabbed documents. format='json' returns the raw, unpruned API structure and is only for callers that genuinely need suggestions or style provenance. " +
+            "Set diffFromLastRead=true (markdown only) to get a unified diff from your previous read in this session instead of the full content.",
         parameters: DocumentIdParameter.extend({
             format: z
-                .enum(['text', 'json', 'markdown'])
+                .enum(['text', 'json', 'markdown', 'index'])
                 .optional()
                 .default('markdown')
-                .describe("Output format: 'markdown' (formatted content), 'text' (plain text), 'json' (raw API structure, complex)."),
+                .describe("Output format: 'markdown' (formatted content), 'text' (plain text), 'index' (compact structural map with character indices — use this to find indices for modifyText/deleteRange/insertTable), 'json' (raw API structure, large and unpruned)."),
             maxLength: z
                 .number()
+                .int()
+                .positive()
                 .optional()
-                .describe('Maximum character limit for text output. If not specified, returns full document content. Use this to limit very large documents.'),
+                .describe('Maximum character limit for the returned content. Applies to text, markdown, and json output (not to index, which uses maxResponseChars and truncates at element boundaries). Must be a positive integer; omit it for the full document.'),
+            fromIndex: z
+                .number()
+                .int()
+                .nonnegative()
+                .optional()
+                .default(0)
+                .describe("format='index' only. Resume point: elements ending at or before this document index are dropped. Pass the nextFromIndex from a truncated index response to get the next page. The Docs API has no start-index cursor, so each page costs another (narrow) fetch."),
+            maxResponseChars: z
+                .number()
+                .int()
+                .nonnegative()
+                .optional()
+                .describe("format='index' only. Character budget for the serialized index. Truncation lands on element boundaries so the JSON is always valid. 0 disables the budget. Defaults to 100000."),
+            stripInheritedStyles: z
+                .boolean()
+                .optional()
+                .default(false)
+                .describe("format='json' only. If true, drops inherited textStyle/documentStyle/namedStyles and every suggested* map from the raw document. Every startIndex/endIndex is preserved. Off by default: format='json' means a faithful raw document."),
             tabId: z
                 .string()
                 .optional()
@@ -63,13 +110,23 @@ export function register(server) {
             try {
                 // Determine if we need tabs content
                 const needsTabsContent = !!args.tabId;
-                const fields = args.format === 'json' || args.format === 'markdown'
-                    ? '*' // Get everything for structure analysis
-                    : 'revisionId,body(content(paragraph(elements(textRun(content)))))'; // Just text content
+                // Index mode is the whole point of #105: it never falls back to
+                // '*', not even for tabs, because the affordability claim is
+                // about the *fetch*, not just the response we serialize.
+                let fields;
+                if (args.format === 'index') {
+                    fields = needsTabsContent ? INDEX_TABS_FIELDS : INDEX_BODY_FIELDS;
+                }
+                else if (needsTabsContent || args.format === 'json' || args.format === 'markdown') {
+                    fields = '*'; // Get everything for structure analysis
+                }
+                else {
+                    fields = 'revisionId,body(content(paragraph(elements(textRun(content)))))'; // Just text content
+                }
                 const res = await docs.documents.get({
                     documentId: args.documentId,
                     includeTabsContent: needsTabsContent,
-                    fields: needsTabsContent ? '*' : fields, // Get full document if using tabs
+                    fields,
                 });
                 log.info(`Fetched doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 const modifiedTime = await fetchModifiedTime(args.documentId);
@@ -120,12 +177,47 @@ export function register(server) {
                         return null;
                     }
                 };
-                if (args.format === 'json') {
+                if (args.format === 'index') {
                     if (args.diffFromLastRead) {
                         log.info('diffFromLastRead ignored: only supported for format=markdown');
                     }
                     trackRead(args.documentId, modifiedTime, undefined, res.data.revisionId);
-                    const jsonContent = JSON.stringify(contentSource, null, 2);
+                    const { payload, text: indexContent } = serializeDocumentIndex(contentSource, {
+                        tabId: args.tabId ?? null,
+                        documentId: args.documentId,
+                        revisionId: res.data.revisionId ?? null,
+                        fromIndex: args.fromIndex ?? 0,
+                        maxResponseChars: args.maxResponseChars ?? DEFAULT_INDEX_MAX_RESPONSE_CHARS,
+                    });
+                    log.info(`Index: ${payload.elementCount} of ${payload.totalElementCount} elements` +
+                        `${payload.truncated ? ` (truncated, nextFromIndex=${payload.nextFromIndex ?? 'none'})` : ''}`);
+                    // An index read is still a read: it authorizes the mutation
+                    // that follows. The fingerprint comes from the same document
+                    // JSON that produced the index above, so one fetch serves both.
+                    await mintHandle(indexContent);
+                    return indexContent;
+                }
+                if (args.format === 'json') {
+                    if (args.diffFromLastRead) {
+                        log.info('diffFromLastRead ignored: only supported for format=markdown');
+                    }
+                    const jsonSource = args.stripInheritedStyles
+                        ? stripInheritedStyleKeys(contentSource)
+                        : contentSource;
+                    const jsonContent = JSON.stringify(jsonSource, null, 2);
+                    // Emitting a megabyte of raw document because nobody set a
+                    // limit is the failure #105 exists to remove. Fail with a
+                    // directive instead, naming the read mode that completes.
+                    if (!args.maxLength && jsonContent.length > DEFAULT_INDEX_MAX_RESPONSE_CHARS) {
+                        throw publicError(
+                            `The raw JSON for this document is ${jsonContent.length} characters, over the ` +
+                            `${DEFAULT_INDEX_MAX_RESPONSE_CHARS}-character response budget. If you need character ` +
+                            "indices, call readDocument with format='index' — it returns a compact structural map " +
+                            'with the same startIndex/endIndex values for a fraction of the size. If you genuinely ' +
+                            "need the raw document, re-run with maxLength set (and optionally stripInheritedStyles=true).",
+                        );
+                    }
+                    trackRead(args.documentId, modifiedTime, undefined, res.data.revisionId);
                     await mintHandle(jsonContent);
                     // Apply length limit to JSON if specified
                     if (args.maxLength && jsonContent.length > args.maxLength) {

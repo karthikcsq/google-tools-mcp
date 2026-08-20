@@ -411,12 +411,108 @@ function findAllOccurrences(fullText, segments, textToFind) {
     }
     return occurrences;
 }
+const SEARCH_FAILURE_CONTEXT_CHARS = 40;
+
+/**
+ * Work out *where* a failed `textToFind` stopped matching (issue #105).
+ *
+ * Previously a miss produced a bare `null` and each caller turned that into
+ * "Could not find X", which tells the caller nothing about which part of their
+ * string was wrong — the common real cause being a near-miss on a long
+ * multi-line search string.
+ *
+ * The longest matching prefix is monotonic (if a prefix of length k appears in
+ * the document, so does every shorter one), so a binary search finds it in
+ * O(log n) `indexOf` calls. Everything is measured on the *normalized* text,
+ * the most forgiving of the four match strategies, so the reported divergence
+ * is the point past which no strategy could have matched.
+ *
+ * @returns {{found:false, reason:string, textToFind:string, candidateCount:number,
+ *   bestPrefixLength:number, divergenceIndex:number|null, matchedPrefix:string,
+ *   contextBefore:string, contextAfter:string, message:string}}
+ */
+function diagnoseTextSearchFailure(fullText, textToFind, { reason = 'notFound', candidateCount = 0, tabId = null, requestedInstance = null } = {}) {
+    const scope = tabId ? ` in tab ${tabId}` : '';
+    const failure = {
+        found: false,
+        reason,
+        textToFind,
+        candidateCount,
+        bestPrefixLength: 0,
+        divergenceIndex: null,
+        matchedPrefix: '',
+        contextBefore: '',
+        contextAfter: '',
+        message: '',
+    };
+    const searchText = normalizeForSearch(stripMarkdownListMarkersForSearch(textToFind ?? ''));
+    const { normalized: haystack } = normalizeWithPositionMap(fullText ?? '');
+    if (searchText.length > 0 && haystack.length > 0) {
+        let lo = 0;
+        let hi = searchText.length;
+        while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (haystack.indexOf(searchText.slice(0, mid)) !== -1) lo = mid;
+            else hi = mid - 1;
+        }
+        failure.bestPrefixLength = lo;
+        if (lo > 0) {
+            const prefix = searchText.slice(0, lo);
+            const at = haystack.indexOf(prefix);
+            let count = 0;
+            for (let from = at; from !== -1; from = haystack.indexOf(prefix, from + 1)) count += 1;
+            failure.candidateCount = candidateCount || count;
+            failure.divergenceIndex = lo < searchText.length ? lo : null;
+            failure.matchedPrefix = prefix.slice(-SEARCH_FAILURE_CONTEXT_CHARS).replace(/\n/g, '\\n');
+            failure.contextBefore = haystack
+                .slice(Math.max(0, at - SEARCH_FAILURE_CONTEXT_CHARS), at)
+                .replace(/\n/g, '\\n');
+            failure.contextAfter = haystack
+                .slice(at + lo, at + lo + SEARCH_FAILURE_CONTEXT_CHARS)
+                .replace(/\n/g, '\\n');
+        }
+    }
+
+    if (reason === 'noContent') {
+        failure.message = `The document has no readable text content${scope}, so "${textToFind}" cannot be located.`;
+    }
+    else if (reason === 'instanceOutOfRange') {
+        failure.candidateCount = candidateCount;
+        failure.message =
+            `Instance ${requestedInstance ?? '?'} of "${textToFind}"${scope} does not exist: only ` +
+            `${candidateCount} match${candidateCount === 1 ? '' : 'es'} were found. ` +
+            'Pass a matchInstance between 1 and ' + candidateCount + '.';
+    }
+    else if (failure.bestPrefixLength === 0) {
+        failure.message =
+            `Could not find "${textToFind}"${scope}. Not even its first character matched anywhere in the document, ` +
+            "so the search string likely belongs to a different document or tab. Call readDocument with format='index' " +
+            'to see the document structure.';
+    }
+    else if (failure.divergenceIndex === null) {
+        failure.message = `Could not find "${textToFind}"${scope}.`;
+    }
+    else {
+        const expectedTail = searchText
+            .slice(failure.divergenceIndex, failure.divergenceIndex + SEARCH_FAILURE_CONTEXT_CHARS)
+            .replace(/\n/g, '\\n');
+        failure.message =
+            `Could not find "${textToFind}"${scope}. The first ${failure.bestPrefixLength} character(s) matched ` +
+            `(${failure.candidateCount} place${failure.candidateCount === 1 ? '' : 's'} in the document), then the ` +
+            `search diverged at offset ${failure.divergenceIndex}: the document has ` +
+            `"…${failure.matchedPrefix}${failure.contextAfter}…" where the search expected ` +
+            `"…${failure.matchedPrefix}${expectedTail}…". ` +
+            "Copy the exact text from readDocument, or address the edit by index using format='index'.";
+    }
+    return failure;
+}
+
 export async function findTextRange(docs, documentId, textToFind, instance, tabId) {
     try {
         const result = await getDocumentTextAndSegments(docs, documentId, tabId);
         if (!result) {
             logger.warn(`No content found in document ${documentId}${tabId ? ` (tab: ${tabId})` : ''}`);
-            return null;
+            return diagnoseTextSearchFailure('', textToFind, { reason: 'noContent', tabId });
         }
         const { fullText, segments } = result;
         logger.debug(`Document ${documentId} contains ${segments.length} text segments and ${fullText.length} characters in total.`);
@@ -498,7 +594,9 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         }
         if (allOccurrences.length === 0) {
             logger.warn(`Text "${textToFind}" not found in document ${documentId}`);
-            return null;
+            // Structured failure, not a bare null: the caller renders where the
+            // match diverged instead of "could not find it" (issue #105).
+            return diagnoseTextSearchFailure(fullText, textToFind, { reason: 'notFound', tabId });
         }
         // If instance is not specified and there are multiple matches, return all of them
         // so the caller can disambiguate
@@ -511,7 +609,12 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         const targetInstance = instance ?? 1;
         if (targetInstance > allOccurrences.length) {
             logger.warn(`Requested instance ${targetInstance} but only ${allOccurrences.length} found`);
-            return null;
+            return diagnoseTextSearchFailure(fullText, textToFind, {
+                reason: 'instanceOutOfRange',
+                candidateCount: allOccurrences.length,
+                requestedInstance: targetInstance,
+                tabId,
+            });
         }
         const match = allOccurrences[targetInstance - 1];
         if (match.startIndex === -1 || match.endIndex === -1) {
@@ -863,7 +966,7 @@ export async function getTableCellRange(docs, documentId, tableStartIndex, rowIn
     // Find the table element matching tableStartIndex
     const tableElement = bodyContent.find((el) => el.table && el.startIndex === tableStartIndex);
     if (!tableElement || !tableElement.table) {
-        throw publicError(`No table found at startIndex ${tableStartIndex}. Use readGoogleDoc with format='json' to find the correct table startIndex.`);
+        throw publicError(`No table found at startIndex ${tableStartIndex}. Use readDocument with format='index' to find the correct table startIndex.`);
     }
     const table = tableElement.table;
     const rows = table.tableRows;

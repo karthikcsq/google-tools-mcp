@@ -216,7 +216,9 @@ describe('v2 HTTP: reads mint handles and handles authorize writes', () => {
         const factory = await buildFactory();
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
         try {
-            for (const format of ['markdown', 'text', 'json']) {
+            // 'index' included: a structural index read is still a read, and it
+            // must authorize the mutation that follows (issue #105).
+            for (const format of ['markdown', 'text', 'json', 'index']) {
                 const read = await call(handler, 'readDocument', { documentId: DOC_ID, format });
                 expect(read.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
                 expect(read.structuredContent.readHandle).toBe(read.readHandle);

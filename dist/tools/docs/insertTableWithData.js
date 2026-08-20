@@ -95,7 +95,7 @@ export function register(server) {
                 .int()
                 .min(1)
                 .describe('1-based character index within the document body where the table should be inserted. ' +
-                "Use readDocument with format='json' to inspect indices."),
+                "Use readDocument with format='index' to inspect indices."),
             hasHeaderRow: z
                 .boolean()
                 .optional()
