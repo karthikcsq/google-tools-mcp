@@ -13,6 +13,9 @@
         "file": "dist/clients.js"
       },
       {
+        "file": "dist/docsChangePrecision.js"
+      },
+      {
         "file": "dist/docsCollateral.js"
       },
       {
@@ -561,6 +564,12 @@
         "file": "tests/defaultTextColor.test.js"
       },
       {
+        "file": "tests/docsChangePrecision.test.js"
+      },
+      {
+        "file": "tests/docsConflictGuardPrecision.test.js"
+      },
+      {
         "file": "tests/docsHandleLeaseFailure.test.js"
       },
       {
@@ -607,6 +616,9 @@
       },
       {
         "file": "tests/guardMutationRevisionRefresh.test.js"
+      },
+      {
+        "file": "tests/handleRuntimeStructuralFingerprint.test.js"
       },
       {
         "file": "tests/helpers.test.js"

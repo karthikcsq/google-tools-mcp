@@ -117,11 +117,32 @@ export function syncRuntimeBinding(context) {
  * while pulling document text into a value that gets stored and compared.
  * Length is included so an edit that preserves the element tree but changes how
  * much text a run holds still moves the fingerprint.
+ *
+ * `document` (and therefore how `tabId` gets used) takes one of two shapes,
+ * matching dist/tools/docs/readGoogleDoc.js's `contentSource`:
+ *   - A full tabbed `Document` (`document.tabs` is a non-empty array): walked
+ *     WITH the `tabId` filter, so only that tab's nodes are hashed (or every
+ *     tab's, when `tabId` is null).
+ *   - A body-only fragment — a single `DocumentTab`'s own `{ body, lists }`,
+ *     with no `tabs` array at all (this is exactly what a tab-scoped read
+ *     fetches; see readGoogleDoc.js's `contentSource = { body: targetTab
+ *     .documentTab.body, lists: ... }`). This fragment IS already the tab's
+ *     content, so it must be walked WITHOUT a `tabId` filter: `walkDocument`
+ *     treats "tabId filter set + no `tabs` array" as "this can never match"
+ *     and returns zero nodes (a body-only document has no tab to match
+ *     against), which would otherwise make every tab-scoped fingerprint the
+ *     same degenerate `sha256-0-...` constant no matter the fragment's actual
+ *     structure.
  */
 export function computeStructuralFingerprint(document, { tabId = null } = {}) {
     const hash = createHash('sha256');
     let nodes = 0;
-    for (const entry of walkDocument(document, { tabId: tabId ?? undefined, includeTabNodes: true })) {
+    const isTabbedDocument = Array.isArray(document?.tabs) && document.tabs.length > 0;
+    const walkOptions = {
+        tabId: isTabbedDocument ? (tabId ?? undefined) : undefined,
+        includeTabNodes: true,
+    };
+    for (const entry of walkDocument(document, walkOptions)) {
         nodes += 1;
         const textLength = entry.kind === NODE_KINDS.TEXT_RUN && typeof entry.node?.content === 'string'
             ? entry.node.content.length
