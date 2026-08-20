@@ -1,7 +1,8 @@
 // Gmail Message tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, foldHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, wrapTextBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
+import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
+import { assembleMultipart, assembleSinglePart, encodeAddressList, encodeHeaderValue, foldHeader, toBase64Url } from '../../mime.js';
 
 export function register(server) {
     server.addTool({
@@ -10,14 +11,14 @@ export function register(server) {
         parameters: z.object({
             raw: z.string().optional().describe("The entire email message in base64url encoded RFC 2822 format, ignores to, cc, bcc, subject, body if provided"),
             threadId: z.string().optional().describe("The thread ID to associate this message with"),
-            to: z.array(z.string()).optional().describe("List of recipient email addresses"),
+            to: z.array(z.string()).optional().describe("List of recipient email addresses. Each entry must be either 'addr@example.com' or 'Display Name <addr@example.com>'; non-ASCII display names are RFC 2047 encoded automatically. Other RFC 5322 forms (groups, comments, a quoted display name containing a '<') are sent through unencoded."),
             cc: z.array(z.string()).optional().describe("List of CC recipient email addresses"),
             bcc: z.array(z.string()).optional().describe("List of BCC recipient email addresses"),
             subject: z.string().optional().describe("The subject of the email"),
             body: z.string().optional().describe("The body of the email. Supports plain text or HTML (auto-detected). Use HTML tags like <p>, <br>, <b> for formatted emails."),
             attachments: z.array(z.object({
                 filename: z.string().describe("Attachment file name"),
-                mimeType: z.string().describe("MIME type of the attachment"),
+                mimeType: z.string().describe("MIME type of the attachment. Must be an RFC 2045 media type of the form 'type/subtype' (e.g. 'application/pdf'); anything else is rejected."),
                 base64Data: z.string().describe("Base64 encoded attachment data"),
             })).optional().describe("File attachments to include"),
             includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return for each body"),
@@ -51,12 +52,12 @@ export function register(server) {
             messageId: z.string().describe("The ID of the message to reply to"),
             body: z.string().describe("The reply body text. Supports plain text or HTML (auto-detected). Use HTML tags like <p>, <br>, <b> for formatted replies."),
             replyAll: z.boolean().optional().describe("If true, reply to all original recipients (To + Cc minus yourself). Default: false"),
-            to: z.array(z.string()).optional().describe("Override recipient list (if omitted, replies to sender or Reply-To)"),
+            to: z.array(z.string()).optional().describe("Override recipient list (if omitted, replies to sender or Reply-To). Each entry must be either 'addr@example.com' or 'Display Name <addr@example.com>'; non-ASCII display names are RFC 2047 encoded automatically. Other RFC 5322 forms (groups, comments, a quoted display name containing a '<') are sent through unencoded."),
             cc: z.array(z.string()).optional().describe("Override CC list (if omitted and replyAll, uses original To + Cc minus yourself)"),
             bcc: z.array(z.string()).optional().describe("Optional BCC recipients"),
             attachments: z.array(z.object({
                 filename: z.string().describe("Attachment file name"),
-                mimeType: z.string().describe("MIME type of the attachment"),
+                mimeType: z.string().describe("MIME type of the attachment. Must be an RFC 2045 media type of the form 'type/subtype' (e.g. 'application/pdf'); anything else is rejected."),
                 base64Data: z.string().describe("Base64 encoded attachment data"),
             })).optional().describe("Optional attachments to include in the reply"),
             includeBodyHtml: z.boolean().optional().describe("Whether to include the parsed HTML in the return"),
@@ -110,46 +111,21 @@ export function register(server) {
             }
             const fullBody = params.body + quotedContent;
             // Build raw message
+            // Display names are encoded; the addr-spec, In-Reply-To and
+            // References are protocol atoms copied verbatim from Gmail and are
+            // never encoded (RFC 2047 §5 forbids encoded-words there).
             const msgHeaders = [];
-            if (to?.length) msgHeaders.push(foldHeader('To', to.join(', ')));
-            if (cc?.length) msgHeaders.push(foldHeader('Cc', cc.join(', ')));
-            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', params.bcc.join(', ')));
-            msgHeaders.push(foldHeader('Subject', subject));
+            if (to?.length) msgHeaders.push(foldHeader('To', encodeAddressList(to)));
+            if (cc?.length) msgHeaders.push(foldHeader('Cc', encodeAddressList(cc)));
+            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', encodeAddressList(params.bcc)));
+            msgHeaders.push(foldHeader('Subject', encodeHeaderValue(subject)));
             if (messageIdHeader) msgHeaders.push(foldHeader('In-Reply-To', messageIdHeader));
             if (references.length) msgHeaders.push(foldHeader('References', references.join(' ')));
             const htmlMode = isHtmlBody(params.body);
-            let raw;
-            if (params.attachments?.length) {
-                const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-                msgHeaders.push('MIME-Version: 1.0');
-                msgHeaders.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-                const parts = [];
-                parts.push([
-                    `--${boundary}`,
-                    `Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
-                    'Content-Transfer-Encoding: base64',
-                    '',
-                    Buffer.from(fullBody).toString('base64'),
-                ].join('\r\n'));
-                for (const att of params.attachments) {
-                    parts.push([
-                        `--${boundary}`,
-                        `Content-Type: ${att.mimeType}; name="${att.filename}"`,
-                        'Content-Transfer-Encoding: base64',
-                        `Content-Disposition: attachment; filename="${att.filename}"`,
-                        '',
-                        att.base64Data,
-                    ].join('\r\n'));
-                }
-                const rawStr = [msgHeaders.join('\r\n'), '', parts.join('\r\n'), `--${boundary}--`].join('\r\n');
-                raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-            } else {
-                msgHeaders.push(`Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`);
-                msgHeaders.push('Content-Transfer-Encoding: quoted-printable');
-                msgHeaders.push('MIME-Version: 1.0');
-                const rawStr = [msgHeaders.join('\r\n'), '', htmlMode ? fullBody : wrapTextBody(fullBody)].join('\r\n');
-                raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-            }
+            const rawStr = params.attachments?.length
+                ? assembleMultipart(msgHeaders, fullBody, htmlMode, params.attachments)
+                : assembleSinglePart(msgHeaders, fullBody, htmlMode);
+            const raw = toBase64Url(rawStr);
             const { data } = await gmail.users.messages.send({
                 userId: 'me',
                 requestBody: { raw, threadId },
@@ -166,7 +142,7 @@ export function register(server) {
         description: 'Forward a message to new recipients. Includes the original message body as quoted content and re-attaches any original attachments.',
         parameters: z.object({
             messageId: z.string().describe("The ID of the message to forward"),
-            to: z.array(z.string()).describe("Recipient email addresses to forward to"),
+            to: z.array(z.string()).describe("Recipient email addresses to forward to. Each entry must be either 'addr@example.com' or 'Display Name <addr@example.com>'; non-ASCII display names are RFC 2047 encoded automatically. Other RFC 5322 forms (groups, comments, a quoted display name containing a '<') are sent through unencoded."),
             cc: z.array(z.string()).optional().describe("CC recipient email addresses"),
             bcc: z.array(z.string()).optional().describe("BCC recipient email addresses"),
             body: z.string().optional().describe("Optional commentary to prepend above the forwarded content. Supports plain text or HTML (auto-detected)."),
@@ -224,48 +200,22 @@ export function register(server) {
                 attachmentParts.push({
                     filename: att.filename,
                     mimeType: att.mimeType,
-                    base64Data: attData.data.replace(/-/g, '+').replace(/_/g, '/'),
+                    // Gmail returns base64url; normalizeBase64 in dist/mime.js
+                    // converts it to the standard alphabet when the part is built.
+                    base64Data: attData.data,
                 });
             }
             // Build raw message
             const msgHeaders = [];
-            msgHeaders.push(foldHeader('To', params.to.join(', ')));
-            if (params.cc?.length) msgHeaders.push(foldHeader('Cc', params.cc.join(', ')));
-            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', params.bcc.join(', ')));
-            msgHeaders.push(foldHeader('Subject', subject));
-            const fwdHtmlMode = params.body && isHtmlBody(params.body);
-            let raw;
-            if (attachmentParts.length) {
-                const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-                msgHeaders.push('MIME-Version: 1.0');
-                msgHeaders.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-                const parts = [];
-                parts.push([
-                    `--${boundary}`,
-                    `Content-Type: ${fwdHtmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
-                    'Content-Transfer-Encoding: base64',
-                    '',
-                    Buffer.from(fullBody).toString('base64'),
-                ].join('\r\n'));
-                for (const att of attachmentParts) {
-                    parts.push([
-                        `--${boundary}`,
-                        `Content-Type: ${att.mimeType}; name="${att.filename}"`,
-                        'Content-Transfer-Encoding: base64',
-                        `Content-Disposition: attachment; filename="${att.filename}"`,
-                        '',
-                        att.base64Data,
-                    ].join('\r\n'));
-                }
-                const rawStr = [msgHeaders.join('\r\n'), '', parts.join('\r\n'), `--${boundary}--`].join('\r\n');
-                raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-            } else {
-                msgHeaders.push(`Content-Type: ${fwdHtmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`);
-                msgHeaders.push('Content-Transfer-Encoding: quoted-printable');
-                msgHeaders.push('MIME-Version: 1.0');
-                const rawStr = [msgHeaders.join('\r\n'), '', fwdHtmlMode ? fullBody : wrapTextBody(fullBody)].join('\r\n');
-                raw = Buffer.from(rawStr).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-            }
+            msgHeaders.push(foldHeader('To', encodeAddressList(params.to)));
+            if (params.cc?.length) msgHeaders.push(foldHeader('Cc', encodeAddressList(params.cc)));
+            if (params.bcc?.length) msgHeaders.push(foldHeader('Bcc', encodeAddressList(params.bcc)));
+            msgHeaders.push(foldHeader('Subject', encodeHeaderValue(subject)));
+            const fwdHtmlMode = Boolean(params.body && isHtmlBody(params.body));
+            const rawStr = attachmentParts.length
+                ? assembleMultipart(msgHeaders, fullBody, fwdHtmlMode, attachmentParts)
+                : assembleSinglePart(msgHeaders, fullBody, fwdHtmlMode);
+            const raw = toBase64Url(rawStr);
             const { data } = await gmail.users.messages.send({
                 userId: 'me',
                 requestBody: { raw },

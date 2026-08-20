@@ -55,6 +55,9 @@
         "file": "dist/mcpServer.js"
       },
       {
+        "file": "dist/mime.js"
+      },
+      {
         "file": "dist/readHandles.js"
       },
       {
@@ -597,6 +600,9 @@
         "file": "tests/mcpServerFacade.test.js"
       },
       {
+        "file": "tests/mime.test.js"
+      },
+      {
         "file": "tests/modifyText.test.js"
       },
       {
@@ -1049,52 +1055,52 @@
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 7,
+        "line": 8,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 47,
+        "line": 48,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 164,
+        "line": 140,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 280,
+        "line": 230,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 300,
+        "line": 250,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 343,
+        "line": 293,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 362,
+        "line": 312,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 376,
+        "line": 326,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 402,
+        "line": 352,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 431,
+        "line": 381,
         "match": ".addTool({"
       },
       {

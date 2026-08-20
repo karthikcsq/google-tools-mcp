@@ -85,23 +85,33 @@ describe('header folding', () => {
     // flatly illegal for Message-ID/In-Reply-To/References. The only
     // RFC-legal move for a wordless, over-length token is to leave it whole
     // on one (possibly >998-octet) line rather than mutate it.
-    it('leaves an unbreakable over-length token whole instead of injecting a corrupting fold', () => {
-        // 300 emoji, no whitespace -> ~1200 octets on one token. There is no
-        // FWS-legal place to fold inside it, so it must survive as one line.
+    it('leaves an unbreakable over-length token whole instead of injecting a corrupting fold, but the composed path never produces one (issue #73)', async () => {
+        // 300 emoji, no whitespace -> ~1200 octets on one token. foldHeader is
+        // the LAST stage and, on its own, still has no FWS-legal place to fold
+        // inside such a token, so it must survive as one line rather than be
+        // mutated. That contract is unchanged.
         const run = '😀'.repeat(300);
         const folded = foldHeader('Subject', run);
 
-        // No fold was injected: exactly one line, and it legitimately
-        // exceeds the 998-octet hard limit because it cannot be split.
         expect(folded.split('\r\n')).toHaveLength(1);
         expect(Buffer.byteLength(folded, 'utf8')).toBeGreaterThan(998);
-
         // True RFC unfolding (remove CRLF only - there isn't one here, so
         // this is a no-op) reproduces the original byte-for-byte, with no
         // manual space-stripping required.
         expect(folded).toBe(`Subject: ${run}`);
-        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
-        expect(decoded).not.toContain('�');
+        expect(Buffer.from(folded, 'utf8').toString('utf8')).not.toContain('�');
+
+        // The inverse is now what actually ships: nothing reaches foldHeader
+        // un-encoded any more, so the same subject sent through the real
+        // builder produces only legal lines. This is the assertion that
+        // replaced the old "our output exceeds 998 octets" expectation.
+        const raw = await constructRawMessage(null, { to: ['a@b.com'], subject: run, body: 'x' });
+        const headerBlock = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
+        const subjectLines = headerBlock.split('\r\n');
+        expect(subjectLines.length).toBeGreaterThan(1);
+        for (const line of subjectLines) {
+            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(78);
+        }
     });
 
     it('does not split a multi-byte character straddling the old hard limit', () => {

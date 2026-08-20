@@ -1,5 +1,21 @@
 // Gmail message processing helpers.
 // Ported from @shinzolabs/gmail-mcp with minimal changes.
+//
+// All header/body encoding lives in dist/mime.js (issue #73). Nothing in this
+// file interpolates caller-supplied text into a header line directly.
+import {
+    assembleMultipart,
+    assembleSinglePart,
+    encodeAddressList,
+    encodeHeaderValue,
+    foldHeader,
+    toBase64Url,
+} from './mime.js';
+
+// Re-exported so every existing importer and test keeps its import path. The
+// implementation moved to dist/mime.js unchanged so the encoder and the folder
+// live in one module and there is no import cycle between them.
+export { foldHeader } from './mime.js';
 
 const RESPONSE_HEADERS_LIST = [
     'Date',
@@ -119,7 +135,9 @@ const getThreadHeaders = (thread) => {
         if (!subjectHeader.toLowerCase().startsWith('re:')) {
             subjectHeader = `Re: ${subjectHeader}`;
         }
-        headers.push(`Subject: ${subjectHeader}`);
+        // Encode AFTER the "Re: " prefix is applied, so the prefix is part of
+        // the encoded-word run rather than a stray literal beside it.
+        headers.push(`Subject: ${encodeHeaderValue(subjectHeader)}`);
     }
     const messageIdHeader = findHeader(lastMessage.payload?.headers || [], 'message-id');
     if (messageIdHeader) {
@@ -132,66 +150,16 @@ const getThreadHeaders = (thread) => {
     return headers;
 };
 
+// Legacy soft-line-break wrapper. It is NOT quoted-printable (it escapes
+// nothing and emits bare LF), which is exactly the mismatch issue #73 fixed:
+// every live builder now uses qpEncodeBody from dist/mime.js instead. Kept
+// exported only because the dead duplicate modules issue #74 deletes still
+// import it.
 export const wrapTextBody = (text) => text.split('\n').map(line => {
     if (line.length <= 76) return line;
     const chunks = line.match(/.{1,76}/g) || [];
     return chunks.join('=\n');
 }).join('\n');
-
-// RFC 5322 line limits are measured in OCTETS, not UTF-16 code units. The raw
-// message is serialized as UTF-8, so a non-ASCII subject or display name can
-// blow past the 998-octet hard limit while `string.length` stays small.
-// Measure with byte length so wrapping decisions account for multi-byte UTF-8
-// octets.
-//
-// Folding (a CRLF followed by WSP) is only legal at a point where folding
-// white space is already allowed (RFC 5322 §2.2.3, §3.2.2). A run of
-// characters with no internal whitespace has no such point: a message-id
-// atom "does not have internal CFWS anywhere in the message identifier"
-// (§3.6.4), an address atom is likewise unbreakable, and an RFC 2047
-// encoded-word's encoded-text "MUST NOT be continued from one encoded-word
-// to another" (RFC 2047 §2). Even for a plain unstructured run (e.g. a CJK
-// or emoji subject with no spaces), inserting a fold is not safe: §2.2.3
-// defines unfolding as "simply removing any CRLF that is immediately
-// followed by WSP" - the CRLF is removed, but the WSP is NOT, so an
-// injected fold leaves a permanent extra space in the decoded value that
-// was never in the original. The only RFC-safe behavior for a wordless,
-// over-length token is to leave it unfolded on its own line, even if that
-// line then exceeds the 998-octet hard limit: an overlong line is a
-// robustness concern (§2.1.1, "Individual implementations MAY choose to
-// include higher limits"), whereas splitting the token would corrupt a
-// structured value (breaking Message-ID/References matching, or DKIM
-// signatures over the raw header bytes) or silently change an unstructured
-// one.
-const byteLen = (str) => Buffer.byteLength(str, 'utf8');
-const SOFT_LIMIT = 78; // recommended max octets per line (RFC 5322 §2.1.1)
-
-export const foldHeader = (name, value) => {
-    const prefix = `${name}: `;
-    const normalizedValue = String(value).replace(/(?:\r\n?|\n)[ \t]*/g, ' ');
-    const unfolded = prefix + normalizedValue;
-    if (byteLen(unfolded) <= SOFT_LIMIT) return unfolded;
-
-    const lines = [];
-    let line = prefix;
-    const tokens = normalizedValue.match(/\S+(?:[ \t]+|$)/g) || [];
-    for (const token of tokens) {
-        const minBytes = line === prefix ? prefix.length : 1;
-        if (byteLen(line) > minBytes && byteLen(line) + byteLen(token) > SOFT_LIMIT) {
-            lines.push(line.trimEnd());
-            line = ' ';
-        }
-        // Tokens are only ever joined at existing whitespace (see the regex
-        // above), which is the one place FWS is unconditionally legal. A
-        // single token that is itself over-length (a long message-id, an
-        // address, an encoded-word, or a wordless CJK/emoji run) is never
-        // split internally - it just becomes a long line, folded away from
-        // its neighbors on the next token boundary.
-        line += token;
-    }
-    lines.push(line.trimEnd());
-    return lines.join('\r\n');
-};
 
 // getThreadHeaders returns pre-joined "Name: value" strings; split on the
 // first colon (header field-names are always ASCII and never contain one)
@@ -210,31 +178,36 @@ export const constructRawMessage = async (gmail, params) => {
         const { data } = await gmail.users.threads.get({ userId: 'me', id: params.threadId, format: 'full' });
         thread = data;
     }
-    const message = [];
-    if (params.to?.length) message.push(foldHeader('To', params.to.join(', ')));
-    if (params.cc?.length) message.push(foldHeader('Cc', params.cc.join(', ')));
-    if (params.bcc?.length) message.push(foldHeader('Bcc', params.bcc.join(', ')));
+    const headers = buildRecipientAndSubjectHeaders(params, thread);
+    const htmlMode = Boolean(params.body && isHtmlBody(params.body));
+    return toBase64Url(assembleSinglePart(headers, buildBodyText(params, thread), htmlMode));
+};
+
+// Shared by both builders: recipients with encoded display names, then either
+// the thread's (already encoded) Subject/In-Reply-To/References or the caller's
+// own encoded Subject.
+const buildRecipientAndSubjectHeaders = (params, thread) => {
+    const headers = [];
+    if (params.to?.length) headers.push(foldHeader('To', encodeAddressList(params.to)));
+    if (params.cc?.length) headers.push(foldHeader('Cc', encodeAddressList(params.cc)));
+    if (params.bcc?.length) headers.push(foldHeader('Bcc', encodeAddressList(params.bcc)));
     if (thread) {
-        message.push(...getThreadHeaders(thread).map(foldThreadHeader));
+        headers.push(...getThreadHeaders(thread).map(foldThreadHeader));
     } else if (params.subject) {
-        message.push(foldHeader('Subject', params.subject));
+        headers.push(foldHeader('Subject', encodeHeaderValue(params.subject)));
     } else {
-        message.push('Subject: (No Subject)');
+        headers.push('Subject: (No Subject)');
     }
-    const htmlMode = params.body && isHtmlBody(params.body);
-    message.push(`Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`);
-    message.push('Content-Transfer-Encoding: quoted-printable');
-    message.push('MIME-Version: 1.0');
-    message.push('');
-    if (params.body) message.push(htmlMode ? params.body : wrapTextBody(params.body));
+    return headers;
+};
+
+const buildBodyText = (params, thread) => {
+    let bodyText = params.body || '';
     if (thread) {
         const quotedContent = getQuotedContent(thread);
-        if (quotedContent) {
-            message.push('');
-            message.push(wrapTextBody(quotedContent));
-        }
+        if (quotedContent) bodyText += (bodyText ? '\n\n' : '') + quotedContent;
     }
-    return Buffer.from(message.join('\r\n')).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return bodyText;
 };
 
 export const constructRawMessageWithAttachments = async (gmail, params) => {
@@ -243,54 +216,9 @@ export const constructRawMessageWithAttachments = async (gmail, params) => {
         const { data } = await gmail.users.threads.get({ userId: 'me', id: params.threadId, format: 'full' });
         thread = data;
     }
-    const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const headers = [];
-    if (params.to?.length) headers.push(foldHeader('To', params.to.join(', ')));
-    if (params.cc?.length) headers.push(foldHeader('Cc', params.cc.join(', ')));
-    if (params.bcc?.length) headers.push(foldHeader('Bcc', params.bcc.join(', ')));
-    if (thread) {
-        headers.push(...getThreadHeaders(thread).map(foldThreadHeader));
-    } else if (params.subject) {
-        headers.push(foldHeader('Subject', params.subject));
-    } else {
-        headers.push('Subject: (No Subject)');
-    }
-    headers.push('MIME-Version: 1.0');
-    headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-    const parts = [];
-    // Text body part
-    let bodyText = params.body || '';
-    if (thread) {
-        const quotedContent = getQuotedContent(thread);
-        if (quotedContent) bodyText += '\n\n' + quotedContent;
-    }
-    const htmlMode = isHtmlBody(bodyText);
-    parts.push([
-        `--${boundary}`,
-        `Content-Type: ${htmlMode ? 'text/html' : 'text/plain'}; charset="UTF-8"`,
-        'Content-Transfer-Encoding: base64',
-        '',
-        Buffer.from(bodyText).toString('base64'),
-    ].join('\r\n'));
-    // Attachment parts
-    for (const att of params.attachments) {
-        const attHeaders = [
-            `--${boundary}`,
-            `Content-Type: ${att.mimeType}; name="${att.filename}"`,
-            'Content-Transfer-Encoding: base64',
-            `Content-Disposition: attachment; filename="${att.filename}"`,
-            '',
-            att.base64Data,
-        ];
-        parts.push(attHeaders.join('\r\n'));
-    }
-    const raw = [
-        headers.join('\r\n'),
-        '',
-        parts.join('\r\n'),
-        `--${boundary}--`,
-    ].join('\r\n');
-    return Buffer.from(raw).toString('base64url').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const headers = buildRecipientAndSubjectHeaders(params, thread);
+    const bodyText = buildBodyText(params, thread);
+    return toBase64Url(assembleMultipart(headers, bodyText, isHtmlBody(bodyText), params.attachments));
 };
 
 export const getPlainTextBody = (messagePart) => {
