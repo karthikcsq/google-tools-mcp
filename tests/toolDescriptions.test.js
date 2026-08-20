@@ -46,6 +46,39 @@ describe('Tool description cross-references (issue #12)', () => {
         expect(tool.description).toMatch(/small|targeted|single/i);
     });
 
+    // Issue #88: the point of batchModifyText is that a model reaching for a
+    // full-body rewrite to make ten small edits should be steered here instead,
+    // so the routing has to be stated on every neighbouring tool.
+    it('modifyText points at batchModifyText for multiple edits', () => {
+        const tool = allTools.get('modifyText');
+        expect(tool.description).toContain('batchModifyText');
+        expect(tool.description).toMatch(/MULTIPLE edits/i);
+    });
+
+    it('batchModifyText says which tools own structured content and whole-body rewrites', () => {
+        const tool = allTools.get('batchModifyText');
+        expect(tool.description).toContain('replaceRangeWithMarkdown');
+        expect(tool.description).toContain('replaceDocumentWithMarkdown');
+        expect(tool.description).toContain('modifyText');
+        expect(tool.description).toMatch(/TEXT-ONLY/);
+        expect(tool.description).toMatch(/atomic/i);
+        expect(tool.description).toContain('dryRun');
+    });
+
+    it('replaceDocumentWithMarkdown warns about comment and heading collateral and names dryRun', () => {
+        const tool = allTools.get('replaceDocumentWithMarkdown');
+        expect(tool.description).toMatch(/comment/i);
+        expect(tool.description).toContain('headingId');
+        expect(tool.description).toContain('dryRun');
+        expect(tool.description).toContain('batchModifyText');
+    });
+
+    it('listHeadings distinguishes itself from readDocument format=index', () => {
+        const tool = allTools.get('listHeadings');
+        expect(tool.description).toContain("format='index'");
+        expect(tool.description).toContain('headingId is null');
+    });
+
     it('replaceDocumentWithMarkdown description references modifyText', () => {
         const tool = allTools.get('replaceDocumentWithMarkdown');
         expect(tool.description).toContain('modifyText');

@@ -237,22 +237,34 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
 }
 // --- Text Finding Helper ---
 // This improved version is more robust in handling various text structure scenarios
+// --- text-search snapshots (issue #88) --------------------------------------
+//
+// `findTextRange` used to be the only entry point, and it fetched the document
+// on every call. `batchModifyText` resolves N text-search targets that must all
+// address ONE consistent document state, so the search core is split into a
+// pure `findTextRangeInDoc(docJson, ...)` over a caller-supplied snapshot, with
+// `findTextRange` becoming fetch-then-delegate. Both share this field mask, so
+// a snapshot taken with `textSearchFields()` resolves identically either way.
+const TEXT_SEARCH_BODY_SUBTREE =
+    'content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex)';
+
+/** Field mask a snapshot must be fetched with to be usable by findTextRangeInDoc. */
+export function textSearchFields(tabId) {
+    return tabId
+        ? `tabs(tabProperties(tabId),documentTab(body(${TEXT_SEARCH_BODY_SUBTREE})))`
+        : `body(${TEXT_SEARCH_BODY_SUBTREE})`;
+}
+
 /**
- * Fetches document content and builds a flat text representation with segment mappings.
- * Shared by findTextRange and other text-search utilities.
+ * Pure form of getDocumentTextAndSegments: flat text plus index segments for an
+ * already-fetched document. Tab selection is identical to the fetching form —
+ * a snapshot variant that ignored `tabId` would resolve against the default
+ * body and silently target the wrong tab.
  */
-async function getDocumentTextAndSegments(docs, documentId, tabId) {
-    const needsTabsContent = !!tabId;
-    const res = await docs.documents.get({
-        documentId,
-        ...(needsTabsContent && { includeTabsContent: true }),
-        fields: needsTabsContent
-            ? 'tabs(tabProperties(tabId),documentTab(body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))))'
-            : 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
-    });
+export function extractTextAndSegments(docJson, tabId) {
     let bodyContent;
     if (tabId) {
-        const targetTab = findTabById(res.data, tabId);
+        const targetTab = findTabById(docJson, tabId);
         if (!targetTab) {
             throw publicError(`Tab with ID "${tabId}" not found in document.`);
         }
@@ -262,7 +274,7 @@ async function getDocumentTextAndSegments(docs, documentId, tabId) {
         bodyContent = targetTab.documentTab.body.content;
     }
     else {
-        bodyContent = res.data.body?.content;
+        bodyContent = docJson?.body?.content;
     }
     if (!bodyContent) {
         return null;
@@ -300,6 +312,20 @@ async function getDocumentTextAndSegments(docs, documentId, tabId) {
     collectTextFromContent(bodyContent);
     segments.sort((a, b) => a.start - b.start);
     return { fullText, segments };
+}
+
+/**
+ * Fetches document content and builds a flat text representation with segment
+ * mappings. Thin fetch-then-delegate wrapper over `extractTextAndSegments`.
+ */
+async function getDocumentTextAndSegments(docs, documentId, tabId) {
+    const needsTabsContent = !!tabId;
+    const res = await docs.documents.get({
+        documentId,
+        ...(needsTabsContent && { includeTabsContent: true }),
+        fields: textSearchFields(tabId),
+    });
+    return extractTextAndSegments(res.data, tabId);
 }
 /**
  * Maps a position in the concatenated fullText back to the actual document index.
@@ -507,15 +533,16 @@ function diagnoseTextSearchFailure(fullText, textToFind, { reason = 'notFound', 
     return failure;
 }
 
-export async function findTextRange(docs, documentId, textToFind, instance, tabId) {
-    try {
-        const result = await getDocumentTextAndSegments(docs, documentId, tabId);
-        if (!result) {
-            logger.warn(`No content found in document ${documentId}${tabId ? ` (tab: ${tabId})` : ''}`);
-            return diagnoseTextSearchFailure('', textToFind, { reason: 'noContent', tabId });
-        }
+/**
+ * The search itself, over an already-extracted `{ fullText, segments }`.
+ * Identical behavior for the fetching and the snapshot entry points: the full
+ * four-strategy fallback chain (exact -> list-marker-stripped -> unicode
+ * normalized -> both), the multi-instance disambiguation error, and the
+ * structured failure diagnostics all live here and nowhere else.
+ */
+function searchTextSegments(result, textToFind, instance, tabId, documentId = 'snapshot') {
+    {
         const { fullText, segments } = result;
-        logger.debug(`Document ${documentId} contains ${segments.length} text segments and ${fullText.length} characters in total.`);
         let allOccurrences = findAllOccurrences(fullText, segments, textToFind);
         // Fallback: markdown exports include list markers that are absent from
         // Docs API text runs. Retry after stripping line-start markdown markers.
@@ -623,6 +650,38 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         }
         logger.debug(`Successfully mapped "${textToFind}" instance ${targetInstance} to document range ${match.startIndex}-${match.endIndex}`);
         return { startIndex: match.startIndex, endIndex: match.endIndex };
+    }
+}
+
+/**
+ * Resolve `textToFind` against an ALREADY-FETCHED document snapshot.
+ *
+ * Exists so a multi-operation tool can resolve every target against one
+ * consistent document state instead of re-fetching per operation (which would
+ * let the document shift under successive resolutions). The snapshot must have
+ * been fetched with `textSearchFields(tabId)` (a superset mask is fine).
+ *
+ * Same return contract as `findTextRange`: `{startIndex,endIndex}` on success,
+ * a structured `{found:false, message, ...}` diagnosis on a miss, and a thrown
+ * publicError when the text is ambiguous and no `instance` was given.
+ */
+export function findTextRangeInDoc(docJson, textToFind, instance, tabId) {
+    const result = extractTextAndSegments(docJson, tabId);
+    if (!result) {
+        return diagnoseTextSearchFailure('', textToFind, { reason: 'noContent', tabId });
+    }
+    return searchTextSegments(result, textToFind, instance, tabId);
+}
+
+export async function findTextRange(docs, documentId, textToFind, instance, tabId) {
+    try {
+        const result = await getDocumentTextAndSegments(docs, documentId, tabId);
+        if (!result) {
+            logger.warn(`No content found in document ${documentId}${tabId ? ` (tab: ${tabId})` : ''}`);
+            return diagnoseTextSearchFailure('', textToFind, { reason: 'noContent', tabId });
+        }
+        logger.debug(`Document ${documentId} contains ${result.segments.length} text segments and ${result.fullText.length} characters in total.`);
+        return searchTextSegments(result, textToFind, instance, tabId, documentId);
     }
     catch (error) {
         if (isPublicError(error))

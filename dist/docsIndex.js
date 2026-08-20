@@ -414,3 +414,140 @@ export function serializeDocumentIndex(document, options = {}) {
     const payload = buildDocumentIndex(document, { ...options, indent });
     return { payload, text: JSON.stringify(payload, null, indent) };
 }
+
+// --- headings and internal heading links (issues #95, #98) ------------------
+//
+// Both live here rather than in a tool file because three callers need the
+// same answer and must never disagree: `listHeadings` (the lightweight
+// structure API), the post-write heading map `replaceDocumentWithMarkdown`
+// returns so callers can repair links, and the pre-write collateral scan that
+// warns when a full-body replace is about to regenerate the heading ids those
+// links point at. They are built on `walkDocument` for the same reason the
+// index is: it is the codebase's single traversal, and it descends into table
+// cells, so a link buried in a table is found rather than silently missed.
+
+/** Heading paragraph subtree. Everything a heading map needs and nothing else. */
+const HEADING_BODY_SUBTREE =
+    'content(startIndex,endIndex,' +
+    'paragraph(paragraphStyle(namedStyleType,headingId),elements(textRun(content))))';
+
+/** Field mask for a legacy / body-only heading read (`includeTabsContent:false`). */
+export const HEADING_BODY_FIELDS = `revisionId,body(${HEADING_BODY_SUBTREE})`;
+
+/** Field mask for a tabbed heading read (`includeTabsContent:true`). */
+export const HEADING_TABS_FIELDS =
+    `revisionId,tabs(tabProperties(tabId),documentTab(body(${HEADING_BODY_SUBTREE})))`;
+
+// Heading links need the link target on every text run, plus table structure so
+// the walk reaches cell content. Deliberately separate from the heading mask:
+// the two scans have different costs and only the replace path pays for both.
+const LINK_BODY_SUBTREE =
+    'content(startIndex,endIndex,' +
+    'paragraph(elements(startIndex,endIndex,textRun(content,textStyle(link)))),' +
+    'table(tableRows(tableCells(content(startIndex,endIndex,' +
+    'paragraph(elements(startIndex,endIndex,textRun(content,textStyle(link)))))))),' +
+    'tableOfContents(content(startIndex,endIndex,' +
+    'paragraph(elements(startIndex,endIndex,textRun(content,textStyle(link)))))))';
+
+export const HEADING_LINK_BODY_FIELDS = `revisionId,body(${LINK_BODY_SUBTREE})`;
+export const HEADING_LINK_TABS_FIELDS =
+    `revisionId,tabs(tabProperties(tabId),documentTab(body(${LINK_BODY_SUBTREE})))`;
+
+/**
+ * Every heading in document order.
+ *
+ * TITLE and SUBTITLE count as headings (levels 1 and 2), matching
+ * `headingLevelOf` above and the markdown exporter, so a document whose only
+ * "heading" is its title is not reported as heading-free.
+ *
+ * `headingId` is nullable on purpose and is NOT synthesized: Google Docs only
+ * assigns one once the heading has been an anchor target, so a freshly typed
+ * heading legitimately has none, and inventing a value would produce link
+ * targets that do not resolve.
+ *
+ * @param {object} document Docs API document, or a `{ body }` fragment.
+ * @param {object} [options]
+ * @param {string|null} [options.tabId]
+ * @returns {Array<{text:string, headingId:string|null, level:number,
+ *   namedStyleType:string, startIndex:number, endIndex:number, tabId:string|null}>}
+ */
+export function collectHeadings(document, { tabId = null } = {}) {
+    const headings = [];
+    let current = null;
+    const hasTabs = Array.isArray(document?.tabs) && document.tabs.length > 0;
+    const walkOptions = { includeTabNodes: false };
+    if (hasTabs && tabId) walkOptions.tabId = tabId;
+
+    for (const node of walkDocument(document, walkOptions)) {
+        if (node.kind === NODE_KINDS.PARAGRAPH) {
+            const paragraph = node.node?.paragraph;
+            const level = headingLevelOf(paragraph);
+            // A heading inside a table cell is not a document heading in the
+            // Docs outline, so only body-level paragraphs qualify.
+            if (level === null || node.depth !== 0 || paragraph?.bullet) {
+                current = null;
+                continue;
+            }
+            current = {
+                text: '',
+                headingId: paragraph?.paragraphStyle?.headingId ?? null,
+                level,
+                namedStyleType: paragraph.paragraphStyle.namedStyleType,
+                startIndex: node.startIndex ?? null,
+                endIndex: node.endIndex ?? null,
+                tabId: node.tabId ?? tabId ?? null,
+            };
+            headings.push(current);
+            continue;
+        }
+        if (node.kind === NODE_KINDS.TEXT_RUN && current) {
+            current.text += node.node?.content ?? '';
+        }
+    }
+    // The paragraph mark is part of the run text; callers want the heading, not
+    // the newline.
+    for (const heading of headings) heading.text = heading.text.replace(/\n+$/, '');
+    return headings;
+}
+
+/**
+ * Every text run whose link targets an in-document heading id, anywhere in the
+ * body INCLUDING table cells and a generated table of contents.
+ *
+ * Consecutive runs carrying the same link are merged, because Docs splits a
+ * single hyperlink across runs whenever the formatting changes mid-link, and
+ * reporting "3 broken links" for one visible link would be misleading.
+ *
+ * @returns {Array<{text:string, headingId:string, startIndex:number|null,
+ *   endIndex:number|null, inTable:boolean, tabId:string|null}>}
+ */
+export function collectHeadingLinks(document, { tabId = null } = {}) {
+    const links = [];
+    const hasTabs = Array.isArray(document?.tabs) && document.tabs.length > 0;
+    const walkOptions = { includeTabNodes: false };
+    if (hasTabs && tabId) walkOptions.tabId = tabId;
+
+    for (const node of walkDocument(document, walkOptions)) {
+        if (node.kind !== NODE_KINDS.TEXT_RUN) continue;
+        const headingId = node.node?.textStyle?.link?.headingId;
+        if (typeof headingId !== 'string' || headingId.length === 0) continue;
+        const previous = links[links.length - 1];
+        if (previous && previous.headingId === headingId && previous.endIndex === node.startIndex) {
+            previous.text += node.node?.content ?? '';
+            previous.endIndex = node.endIndex ?? previous.endIndex;
+            continue;
+        }
+        links.push({
+            text: node.node?.content ?? '',
+            headingId,
+            startIndex: node.startIndex ?? null,
+            endIndex: node.endIndex ?? null,
+            // depth > 1 means the run is nested below a body-level paragraph,
+            // i.e. inside a table cell or a table of contents.
+            inTable: node.depth > 1,
+            tabId: node.tabId ?? tabId ?? null,
+        });
+    }
+    for (const link of links) link.text = link.text.replace(/\n+$/, '');
+    return links;
+}
