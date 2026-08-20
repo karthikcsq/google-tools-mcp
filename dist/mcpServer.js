@@ -255,6 +255,20 @@ function withCors(response, corsHeaders) {
  * workaround) reads this close as graceful rather than an unexpected remote
  * disconnect.
  */
+/**
+ * True only when the SDK's response to a subscriptions/listen POST is an
+ * actual SSE stream. createListenRouter returns a plain application/json
+ * JSON-RPC error Response -- not SSE -- for invalid or missing
+ * params.notifications (-32602) and for subscription-capacity rejection
+ * (-32603). closeListenResponse appends an SSE terminal frame to whatever
+ * body it is given, which would corrupt those JSON error bodies, so only a
+ * genuine text/event-stream response gets the graceful-close treatment.
+ */
+function isEventStreamResponse(response) {
+    const contentType = response.headers.get('content-type') || '';
+    return /^\s*text\/event-stream\s*(;.*)?$/i.test(contentType);
+}
+
 async function closeListenResponse(response, { id, serverInfo } = {}) {
     if (!response.body) return response;
     const reader = response.body.getReader();
@@ -319,7 +333,7 @@ export function createV2HttpHandler(factory, {
         const token = auth?.noAuth ? 'http-no-auth' : (extractBearerToken({ headers: Object.fromEntries(request.headers) }) || '');
         const context = createHttpRequestContext({ principalFingerprint: fingerprintCredential(token), profile, epoch });
         const response = await runWithRequestContext(context, () => handler.fetch(request));
-        if (requestInfo.modern && request.headers.get('mcp-method') === 'subscriptions/listen') {
+        if (requestInfo.modern && request.headers.get('mcp-method') === 'subscriptions/listen' && isEventStreamResponse(response)) {
             return respond(await closeListenResponse(response, { id: requestInfo.id, serverInfo: DEFAULT_SERVER_INFO }));
         }
         return respond(response);

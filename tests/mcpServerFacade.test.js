@@ -444,6 +444,69 @@ describe('official SDK v2 facade', () => {
         } finally { await handler.close(); }
     });
 
+    // PR #109 review comment (https://github.com/elliotdrel/google-tools-mcp/pull/109#discussion_r5350322736):
+    // closeListenResponse wrapped EVERY modern subscriptions/listen POST, but
+    // createListenRouter answers invalid/missing `params.notifications` (and
+    // subscription-capacity rejection) with a plain `application/json`
+    // JSON-RPC error -- not SSE. Wrapping that appended a hand-built SSE
+    // `event: message` frame after a JSON body, corrupting the error under a
+    // header that still said application/json. Confirmed empirically against
+    // the raw SDK handler (see dist/mcpServer.js's isEventStreamResponse doc
+    // comment): missing/invalid notifications both come back as
+    // `{status: 200, content-type: application/json}` carrying a JSON-RPC
+    // error with code -32602. These two tests pin that the facade now passes
+    // such responses through untouched.
+    it('passes a subscriptions/listen response with missing notifications through untouched, not SSE-wrapped', async () => {
+        const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const response = await handler.fetch(modern('subscriptions/listen', {}));
+            const contentType = response.headers.get('content-type') || '';
+            expect(contentType).toContain('application/json');
+            expect(contentType).not.toContain('text/event-stream');
+            const raw = await response.text();
+            expect(raw).not.toContain('event: message');
+            expect(raw).not.toContain('data: ');
+            const payload = JSON.parse(raw);
+            expect(payload).toEqual({
+                jsonrpc: '2.0',
+                id: 1,
+                error: expect.objectContaining({ code: -32602 }),
+            });
+        } finally { await handler.close(); }
+    });
+
+    it('passes a subscriptions/listen response with invalid (wrong-typed) notifications through untouched, not SSE-wrapped', async () => {
+        const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const response = await handler.fetch(modern('subscriptions/listen', { notifications: 'not-an-object' }));
+            const contentType = response.headers.get('content-type') || '';
+            expect(contentType).toContain('application/json');
+            expect(contentType).not.toContain('text/event-stream');
+            const raw = await response.text();
+            expect(raw).not.toContain('event: message');
+            expect(raw).not.toContain('data: ');
+            const payload = JSON.parse(raw);
+            expect(payload).toEqual({
+                jsonrpc: '2.0',
+                id: 1,
+                error: expect.objectContaining({ code: -32602 }),
+            });
+        } finally { await handler.close(); }
+    });
+
+    // Subscription-capacity rejection (-32603) is the third non-SSE error
+    // shape createListenRouter can return, per the same review comment. It
+    // was not practical to trigger cheaply here: opening 500 concurrent
+    // in-process listens against the raw SDK handler (scratch probe, deleted
+    // after use) never produced a capacity rejection, so there is no
+    // observed threshold to drive a real request past. The guard added
+    // (isEventStreamResponse in dist/mcpServer.js) is content-type-based and
+    // makes no assumption about *why* a response is non-SSE, so it covers
+    // this error path identically to the two proven above without a
+    // dedicated test faking the rejection.
+
     it('passes only immutable public errors to callers and redacts internal failures', async () => {
         const logger = { error: jest.fn(), warn: jest.fn() };
         const remove = registerSecret(TOKEN);
