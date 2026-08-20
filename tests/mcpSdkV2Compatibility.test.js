@@ -61,14 +61,15 @@ describe('MCP SDK v2 compatibility spike', () => {
     });
 
     // The Phase 1 decision gate was a DUAL-runtime proof: all 156 schemas
-    // registering through real FastMCP@3.34.0 AND the official SDK under one
-    // root Zod v4 process, which is what authorized the temporary
-    // GOOGLE_MCP_USE_SDK_V2 flag path. That result is historical and is
-    // recorded in
+    // (pre-docs-cluster; now 160 with the 4 new docs tools added in the
+    // docs-cluster branch) registering through real FastMCP@3.34.0 AND the
+    // official SDK under one root Zod v4 process, which is what authorized the
+    // temporary GOOGLE_MCP_USE_SDK_V2 flag path. That result is historical and
+    // is recorded in
     // docs/decisions/2026-08-16-mcp-sdk-v2-compatibility-spike.md; PR 4 removed
     // fastmcp from the dependency tree, so its half cannot be re-run here and
     // this test keeps the half that still describes shipping behavior.
-    it('registers all 156 default schemas through the official SDK with root Zod v4', async () => {
+    it('registers all 160 default schemas through the official SDK with root Zod v4', async () => {
         const restoreAliases = defaultAliasEnvironment();
         const { adapter, definitions: officialDefinitions, officialServer } = createOfficialSdkRegistrationAdapter();
 
@@ -76,8 +77,8 @@ describe('MCP SDK v2 compatibility spike', () => {
             await registerAllTools(adapter);
 
             const officialNames = officialDefinitions.map(({ name }) => name);
-            expect(officialNames).toHaveLength(156);
-            expect(new Set(officialNames).size).toBe(156);
+            expect(officialNames).toHaveLength(160);
+            expect(new Set(officialNames).size).toBe(160);
         } finally {
             await officialServer.close();
             restoreAliases();

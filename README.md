@@ -2,7 +2,7 @@
 
 The **easiest way** to connect your AI agent to Google Workspace.
 
-**156 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, Tasks, and Maps — all in one package. One install, one auth, and you're done.
+**160 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, Tasks, and Maps — all in one package. One install, one auth, and you're done.
 
 ```bash
 npx -y google-tools-mcp setup
@@ -25,7 +25,7 @@ npx -y google-tools-mcp setup
 - **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, and Tasks. No juggling multiple tokens or servers.
 - **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
 - **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
-- **156 tools, zero config.** Every tool is available the moment the server starts. Send emails, create Docs and Slides, manage Tasks and calendar events, build forms, search places — it's all there.
+- **160 tools, zero config.** Every tool is available the moment the server starts. Send emails, create Docs and Slides, manage Tasks and calendar events, build forms, search places — it's all there.
 - **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
 - **No telemetry. No tracking. Fully open source.**
 
@@ -358,10 +358,10 @@ Google Drive file management and content reading.
 
 `listDriveFiles`, `searchDocuments`, `getFileInfo`, `getFilePath`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `downloadFile`, `uploadFile`, `listPermissions`, `addPermission`, `removePermission`, `updatePermission`, `listRevisions`, `getRevision`, `updateRevision`, `readFile`, `searchFileContents`, `readDriveFile`
 
-### `documents` (22 tools)
+### `documents` (26 tools)
 Google Docs read/write/format with markdown support.
 
-`readDocument`, `appendText`, `deleteRange`, `modifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`, `replaceRangeWithMarkdown`
+`readDocument`, `appendText`, `deleteRange`, `modifyText`, `batchModifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `listHeadings`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `updateComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`, `replaceRangeWithMarkdown`
 
 ### `spreadsheets` (30 tools)
 Google Sheets operations.
@@ -417,7 +417,7 @@ Google Maps and Places tools for geocoding, reverse geocoding, nearby and text s
 
 These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separate from the Google OAuth credentials used everywhere else and not covered by the setup wizard or by [Step 1](#step-1-create-google-oauth-credentials) above. To get one: enable the **Geocoding API**, **Places API (New)**, and **Routes API** for your Google Cloud project, then go to **Credentials** → **Create Credentials** → **API key**, and set it as `GOOGLE_MAPS_API_KEY`. Without it, the `maps` tools are still listed, but calling any of them fails with a clear error telling you to set the key.
 
-The categories above contain 152 service-specific tools. Four general utilities — `help`, `logout`, `troubleshoot`, and `feedback` — bring the default server surface to 156 tools. See [Common Workflows](docs/workflows.md) for practical examples.
+The categories above contain 156 service-specific tools. Four general utilities — `help`, `logout`, `troubleshoot`, and `feedback` — bring the default server surface to 160 tools. See [Common Workflows](docs/workflows.md) for practical examples.
 
 ## Finding Character Indices in a Doc
 

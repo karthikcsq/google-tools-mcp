@@ -79,6 +79,16 @@ your config changes.** The breaking changes are all in shared HTTP mode.
 - `readDocument` gains `stripInheritedStyles` (opt-in, `format='json'` only),
   which drops inherited `textStyle`/`documentStyle`/`namedStyles` and every
   `suggested*` map while preserving every index.
+- `replaceRangeWithMarkdown`: replaces an index range in a Google Doc with
+  parsed Markdown in one call, instead of a `deleteRange` + `appendMarkdown`
+  pair.
+- `updateComment`: edits the body of an existing Google Docs comment.
+- `batchModifyText`: applies multiple `modifyText`-style edits to a document
+  in a single call, so multi-edit workflows no longer need one round trip per
+  edit.
+- `listHeadings`: returns the document's heading outline (text, level, and
+  `startIndex`/`endIndex`) without paginating through the full `format='index'`
+  structural map.
 
 ### Fixed
 
