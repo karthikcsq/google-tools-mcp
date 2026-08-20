@@ -152,28 +152,44 @@ export function docsJsonToMarkdown(docData, options = {}) {
     const conversionOptions = {
         richMarkdown: options.plainMarkdown ? false : options.richMarkdown ?? true,
     };
+    // Stateful list-rendering context threaded through the whole conversion
+    // loop: per-nesting-level ordinal counters (keyed to the Docs listId so a
+    // list resumes its count across an interrupting paragraph but resets when
+    // a different list, or a new parent item, takes over that level) plus
+    // whether the immediately preceding block was a list item (so a following
+    // non-list block gets a blank-line separator instead of being read as a
+    // lazy continuation of the last list item).
+    const listState = { listStack: [], lastWasListItem: false };
     let markdown = '';
     for (const element of body.content) {
         if (element.paragraph) {
-            markdown += convertParagraph(element.paragraph, lists, conversionOptions);
+            markdown += convertParagraph(element.paragraph, lists, conversionOptions, listState);
         }
         else if (element.table) {
-            markdown += convertTable(element.table, conversionOptions);
+            markdown += separatorIfAfterListItem(listState) + convertTable(element.table, conversionOptions);
+            listState.lastWasListItem = false;
         }
         else if (element.sectionBreak) {
             if (isInitialDocumentSectionBreak(element)) {
                 continue;
             }
-            markdown += '\n---\n\n';
+            markdown += separatorIfAfterListItem(listState) + '\n---\n\n';
+            listState.lastWasListItem = false;
         }
     }
     return markdown.trim();
+}
+// A blank-line separator so a non-list block that immediately follows a list
+// item is parsed as its own block rather than a lazy continuation line of the
+// last list item (CommonMark's "lazy continuation" rule).
+function separatorIfAfterListItem(listState) {
+    return listState.lastWasListItem ? '\n' : '';
 }
 function isInitialDocumentSectionBreak(element) {
     return element.endIndex === 1 && element.startIndex === undefined;
 }
 // --- Paragraph Conversion ---
-function convertParagraph(paragraph, lists, options) {
+function convertParagraph(paragraph, lists, options, listState) {
     // 1. Determine paragraph type
     const headingLevel = getHeadingLevel(paragraph);
     const listInfo = getListInfo(paragraph, lists);
@@ -181,27 +197,70 @@ function convertParagraph(paragraph, lists, options) {
     const elements = paragraph.elements ?? [];
     const text = extractFormattedText(elements, options);
     // 3. Format based on type
+    if (listInfo && text.trim()) {
+        // List items are handled before the "was the previous block a list
+        // item" separator check below — they ARE the list, not the thing that
+        // needs separating from it.
+        return renderListItem(listInfo, text.trim(), listState);
+    }
+    const separator = separatorIfAfterListItem(listState);
+    listState.lastWasListItem = false;
     if (headingLevel && text.trim()) {
         const hashes = '#'.repeat(Math.min(headingLevel, 6));
-        return `${hashes} ${text.trim()}\n\n`;
-    }
-    if (listInfo && text.trim()) {
-        const indent = '  '.repeat(listInfo.nestingLevel);
-        const marker = listInfo.ordered ? `1.` : `-`;
-        return `${indent}${marker} ${text.trim()}\n`;
+        return `${separator}${hashes} ${text.trim()}\n\n`;
     }
     if (text.trim()) {
         const trimmed = text.trim();
         if (options.richMarkdown && isBlockquoteParagraph(paragraph)) {
-            return `<blockquote>${trimmed}</blockquote>\n\n`;
+            return `${separator}<blockquote>${trimmed}</blockquote>\n\n`;
         }
         const alignment = paragraphAlignmentToHtml(paragraph.paragraphStyle?.alignment);
         if (options.richMarkdown && alignment) {
-            return `<p align="${alignment}">${trimmed}</p>\n\n`;
+            return `${separator}<p align="${alignment}">${trimmed}</p>\n\n`;
         }
-        return `${trimmed}\n\n`;
+        return `${separator}${trimmed}\n\n`;
     }
-    return '\n';
+    return `${separator}\n`;
+}
+// Renders one list item's marker/indent and updates the per-level ordinal
+// state. Indentation for a level is the cumulative rendered width (marker +
+// trailing space) of every ancestor level's marker, so a nested item lands
+// past its parent's marker column regardless of whether the parent is a
+// `-` (2 columns) or a multi-digit ordinal like `12.` (4 columns) — the bug
+// this replaces used a flat 2-space-per-level indent that only happened to
+// work for unordered lists.
+function renderListItem(listInfo, text, listState) {
+    const { nestingLevel, ordered, listId } = listInfo;
+    const stack = listState.listStack;
+    // Preserve this level's existing entry (needed below to decide whether the
+    // ordinal continues or resets) while discarding any deeper levels: we have
+    // returned to `nestingLevel`, so whatever nested sub-list state existed
+    // below it no longer applies to what comes next.
+    const existing = stack[nestingLevel];
+    stack.length = nestingLevel + 1;
+    let count;
+    if (existing && existing.listId === listId) {
+        // Same Docs list resuming at this level — continue counting even if a
+        // non-list paragraph interrupted it (an "interrupted/resumed" list).
+        count = existing.count + 1;
+    }
+    else {
+        // A different list, or the first item a new parent introduces at this
+        // level: sequential numbering restarts at 1.
+        count = 1;
+    }
+    const marker = ordered ? `${count}.` : '-';
+    stack[nestingLevel] = { listId, count, markerWidth: marker.length + 1 };
+    let indent = '';
+    for (let level = 0; level < nestingLevel; level++) {
+        const ancestor = stack[level];
+        // No ancestor entry means Docs jumped straight to a deep nesting level
+        // with no intervening parent item observed; fall back to the classic
+        // 2-column indent for that level rather than losing indentation.
+        indent += ' '.repeat(ancestor ? ancestor.markerWidth : 2);
+    }
+    listState.lastWasListItem = true;
+    return `${indent}${marker} ${text}\n`;
 }
 // --- Heading Detection ---
 function getHeadingLevel(paragraph) {
@@ -233,7 +292,7 @@ function getListInfo(paragraph, lists) {
             }
         }
     }
-    return { ordered, nestingLevel };
+    return { ordered, nestingLevel, listId };
 }
 // --- Text Run Conversion ---
 function extractFormattedText(elements, options) {

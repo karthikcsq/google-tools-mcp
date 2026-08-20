@@ -49,6 +49,13 @@ export function register(server) {
                 .optional()
                 .default(false)
                 .describe('If true and this document has already been read in this session (with format=markdown), returns a unified diff from the previous read to the current document instead of the full content. Ignored on first read or when format is not markdown.'),
+            plainMarkdown: z
+                .boolean()
+                .optional()
+                .default(false)
+                .describe('For Google Docs markdown output only. If true, suppresses rich HTML-style formatting extensions and returns cleaner portable markdown. ' +
+                    'The local working-copy file and diff/conflict tracking always keep the rich version — for lossless editing, edit the working-copy file, not this plain text. ' +
+                    'Ignored (with a note) when diffFromLastRead is true.'),
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -128,8 +135,18 @@ export function register(server) {
                     return jsonContent;
                 }
                 if (args.format === 'markdown') {
+                    // Canonical rich markdown. This is what mints the read handle,
+                    // seeds the working-copy file, and feeds trackRead/diffing —
+                    // never the plain variant, so a plainMarkdown=true read can never
+                    // cause a later push to silently drop the document's existing
+                    // colors/formatting.
                     const markdownContent = docsJsonToMarkdown(contentSource);
-                    const totalLength = markdownContent.length;
+                    // The variant actually returned in the response text. Only this
+                    // (and its length) is affected by plainMarkdown.
+                    const responseMarkdown = args.plainMarkdown
+                        ? docsJsonToMarkdown(contentSource, { plainMarkdown: true })
+                        : markdownContent;
+                    const totalLength = responseMarkdown.length;
                     log.info(`Generated markdown: ${totalLength} characters`);
                     // Derive fidelity warnings from EXACTLY the body that will be replaced
                     // (contentSource.body is the active tab's body in tab mode, the document
@@ -174,7 +191,10 @@ export function register(server) {
                             // so it never shows up as a change. The workspace file was still
                             // refreshed above, and pushing it back would delete that content.
                             // Carry the same warning the full read gives.
-                            return patch + fidelityNotice;
+                            const plainMarkdownIgnoredNotice = args.plainMarkdown
+                                ? '\n\n---\nNote: plainMarkdown was ignored for this diff. Diffs are always computed from rich markdown so they stay comparable across reads regardless of flag usage.\n---'
+                                : '';
+                            return patch + plainMarkdownIgnoredNotice + fidelityNotice;
                         }
                         log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
                     }
@@ -197,13 +217,16 @@ export function register(server) {
                         }
                     }
                     if (localPath) log.info(`Saved to ${localPath}`);
-                    // Apply length limit to markdown if specified
+                    // Apply length limit to markdown if specified. Computed against
+                    // responseMarkdown (the variant actually returned below), not the
+                    // rich canonical markdownContent, so a plainMarkdown response is
+                    // never truncated against a length longer than what it received.
                     let output;
                     if (args.maxLength && totalLength > args.maxLength) {
-                        const truncatedContent = markdownContent.substring(0, args.maxLength);
+                        const truncatedContent = responseMarkdown.substring(0, args.maxLength);
                         output = `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`;
                     } else {
-                        output = markdownContent;
+                        output = responseMarkdown;
                     }
                     // Append fidelity warning after the markdown so the AI knows what
                     // replaceDocumentWithMarkdown would permanently destroy.
@@ -215,7 +238,10 @@ export function register(server) {
                         // If this was a tab read, the file holds only that tab's content, so the
                         // push must target the same tab to avoid writing it into the wrong tab.
                         const tabAdvice = args.tabId ? ` tabId="${args.tabId}"` : '';
-                        output += `\n\n📄 Local file: ${localPath}\nEdit this file, then call replaceDocumentWithMarkdown with filePath="${jsonSafePath}"${tabAdvice} to push changes.`;
+                        const richFileNote = args.plainMarkdown
+                            ? ' Note: the text above is the plain variant (plainMarkdown=true), but this local file always holds the rich version — edit the file, not the text above, for lossless round-trip editing.'
+                            : '';
+                        output += `\n\n📄 Local file: ${localPath}\nEdit this file, then call replaceDocumentWithMarkdown with filePath="${jsonSafePath}"${tabAdvice} to push changes.${richFileNote}`;
                     }
                     return output;
                 }

@@ -29,7 +29,7 @@ There is nothing deeper under this: the option exists, one call site doesn't for
    Reuse the `readDriveFile.js:57-61` wording for the first sentence so the two tools document it identically.
 2. At `readGoogleDoc.js:104`: keep `markdownContent` (rich) as canonical; add `const responseMarkdown = args.plainMarkdown ? docsJsonToMarkdown(contentSource, { plainMarkdown: true }) : markdownContent;`. Full-read response path (~:149-179) returns `responseMarkdown`; `totalLength`/`maxLength` truncation computed on `responseMarkdown`.
 3. Diff path (~:119-144): unchanged output, plus the "plainMarkdown ignored for diff" note when the flag was set.
-4. `trackRead` calls (:94/:130/:149/:214) and `writeWorkspaceFile` calls (:134/:154) keep receiving rich `markdownContent` — no change.
+4. **Migration-era correction (implemented as written, not as originally planned):** the working copy is no longer written by a direct `writeWorkspaceFile` call at fixed line numbers — on the 2026-07-28 runtime it is seeded by `mintHandle(<rich markdownContent>)` (the `readGoogleDoc.js` closure around `mintDocsReadHandle`, called for every format including diff reads), with `writeWorkspaceFile` surviving only as the legacy/no-runtime fallback when `mintHandle` returns `null`. Both `trackRead` and every `mintHandle` call site keep receiving the rich `markdownContent`, never `responseMarkdown` — this is unchanged from the plan's intent, just relocated from `writeWorkspaceFile` to `mintHandle` by the migration that landed in between.
 5. Local-file advice string (~:171-179): mention that the file on disk is the rich version when the flag is set.
 
 ## Tests
