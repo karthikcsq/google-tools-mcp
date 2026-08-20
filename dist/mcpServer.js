@@ -19,6 +19,19 @@ const require = createRequire(import.meta.url);
 const DEFAULT_SERVER_INFO = Object.freeze({ name: 'google-tools-mcp', version: require('../package.json').version });
 const CACHE_HINT = Object.freeze({ ttlMs: 60_000, cacheScope: 'private' });
 const GENERIC_TOOL_FAILURE = 'The tool could not complete safely. Call troubleshoot for diagnostics.';
+// The draft schema's HEADER_MISMATCH (SEP-2243) code, confirmed against the
+// installed SDK's own emitter for every other header/body mismatch cell:
+// node_modules/@modelcontextprotocol/server/dist/src-CX2iR2pK.mjs
+// HEADER_MISMATCH_ERROR_CODE.
+const HEADER_MISMATCH_ERROR_CODE = -32020;
+// Wire meta keys the SDK stamps onto its own graceful subscriptions/listen
+// close (node_modules/@modelcontextprotocol/server/dist/mcp-DXXb3Vv3.mjs
+// SUBSCRIPTION_ID_META_KEY / SERVER_INFO_META_KEY, and the anchored
+// SubscriptionsListenResultMetaSchema in src-CX2iR2pK.mjs). Not re-exported
+// from the package's public entry points, so pinned here as literal wire
+// strings rather than imported.
+const SUBSCRIPTION_ID_META_KEY = 'io.modelcontextprotocol/subscriptionId';
+const SERVER_INFO_META_KEY = 'io.modelcontextprotocol/serverInfo';
 
 let runtimeEpochCounter = 0;
 /**
@@ -128,22 +141,143 @@ function corsPreflight(request, { endpoint, allowedOrigins = [] }) {
     } });
 }
 
-async function isModernRequest(request) {
-    if (request.method !== 'POST') return false;
+/**
+ * Classify a POST as modern (2026-07-28+) traffic by its body's `_meta`
+ * envelope claim, mirroring the SDK's own body-primary classifier
+ * (node_modules/@modelcontextprotocol/server/dist/src-CX2iR2pK.mjs
+ * classifyRequestBody / hasEnvelopeClaim). Also extracts the JSON-RPC id and
+ * claimed protocol version so a header-mismatch response emitted before the
+ * SDK ever sees the request can still address the pending request id,
+ * exactly like a response the SDK itself would produce.
+ */
+async function classifyModernRequest(request) {
+    if (request.method !== 'POST') return { modern: false, id: null };
     try {
         const body = await request.clone().json();
-        return Boolean(body?.params?._meta?.['io.modelcontextprotocol/protocolVersion']);
-    } catch { return false; }
+        const claimedVersion = body?.params?._meta?.['io.modelcontextprotocol/protocolVersion'];
+        const id = typeof body?.id === 'string' || typeof body?.id === 'number' ? body.id : null;
+        return { modern: Boolean(claimedVersion), id, claimedVersion };
+    } catch { return { modern: false, id: null }; }
 }
 
-async function closeListenResponse(response) {
+/**
+ * The `-32020` (HeaderMismatch) response for a modern-classified request
+ * whose `MCP-Protocol-Version` header is entirely absent
+ * (typescript-sdk#2589) -- the one header/body mismatch cell the installed
+ * @modelcontextprotocol/server@2.0.0 leaves unenforced (it only cross-checks
+ * the header when present; see the "rejects modern POST header/body
+ * mismatches" test in tests/mcpServerFacade.test.js, which pins every cell
+ * the SDK *does* enforce natively). Built by hand to match the identical
+ * shape the SDK emits for every other -32020 cell:
+ * node_modules/@modelcontextprotocol/server/dist/index.mjs
+ * jsonRpcErrorResponse/rejectionResponse -- `{jsonrpc, id, error:{code,
+ * message, data}}` at HTTP 400 -- and the `data.mismatch` shape
+ * node_modules/@modelcontextprotocol/server/dist/src-CX2iR2pK.mjs
+ * crossCheckMismatch uses, including its "(missing)" sentinel for an absent
+ * header value.
+ */
+function headerMismatchResponse(id, claimedVersion) {
+    const body = `the request body claims protocol revision ${claimedVersion} but the required MCP-Protocol-Version header is absent`;
+    return Response.json({
+        jsonrpc: '2.0',
+        id: id ?? null,
+        error: {
+            code: HEADER_MISMATCH_ERROR_CODE,
+            message: `Bad Request: the request headers and body disagree: ${body}`,
+            data: { mismatch: { header: '(missing)', body } },
+        },
+    }, { status: 400 });
+}
+
+/**
+ * Access-Control-Allow-Origin + Vary: Origin to attach to every real
+ * response on an allowed browser Origin -- CORS headers were previously only
+ * emitted on the OPTIONS preflight (corsPreflight above), so a browser at an
+ * allowed origin could complete a real POST and then be blocked from reading
+ * the response. Returns null when no Origin header is present (native MCP
+ * clients never send one) or the Origin is not allowed: never reflect a
+ * disallowed origin, and never add the header to a native request.
+ */
+function corsResponseHeaders(request, allowedOrigins) {
+    const origin = request.headers.get('origin');
+    if (!origin || !isOriginAllowed(origin, allowedOrigins)) return null;
+    return { 'access-control-allow-origin': origin, vary: 'Origin' };
+}
+
+/**
+ * Attach CORS headers to a response without assuming its headers are
+ * mutable. `handler.fetch()` (the SDK's own Response) may return a Response
+ * whose Headers are not safe to mutate in place, so this always constructs a
+ * new Response wrapping the same body/status rather than calling
+ * `.headers.set()` on the original. Forwarding `response.body` (a
+ * ReadableStream reference, never read here) keeps a streaming response
+ * (subscriptions/listen) streaming.
+ */
+function withCors(response, corsHeaders) {
+    if (!corsHeaders) return response;
+    const headers = new Headers(response.headers);
+    for (const [key, value] of Object.entries(corsHeaders)) headers.set(key, value);
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+/**
+ * Close subscriptions/listen gracefully instead of dropping the connection.
+ *
+ * This server never has anything to notify (plan §4: no dynamic tool/resource
+ * list, so the honored notification subset is always {}), and the installed
+ * SDK's own listenRouter (node_modules/@modelcontextprotocol/server/dist/
+ * mcp-DXXb3Vv3.mjs createListenRouter) holds such a subscription's SSE stream
+ * open indefinitely: confirmed live against this build (see
+ * scratch-inspect-raw-listen.mjs, run against createMcpHandler directly with
+ * no facade wrapping) -- after the acknowledgement frame the raw SDK stream
+ * never emits again and only closes when the whole handler shuts down
+ * (typescript-sdk#2650).
+ *
+ * A supported SDK API was investigated first: `handler.close()` does call
+ * `listenRouter.closeAll()`, which tears down every open subscription
+ * gracefully, writing the exact terminal frame this function builds by hand
+ * (createListenRouter's internal `teardown(graceful=true)`). But that closes
+ * the ENTIRE handler for every in-flight request, not this one request's
+ * subscription -- and the object createMcpHandler returns exposes only
+ * `fetch`/`notify`/`bus`/`close`, no per-subscription handle to call teardown
+ * on selectively. There is no supported API to gracefully end a single empty
+ * subscription without shutting the whole handler down, so this is the
+ * narrow wrapper the plan calls for, to be deleted once #2650 lands
+ * upstream.
+ *
+ * The terminal frame is built byte-for-byte to match the SDK's own graceful
+ * close: an `event: message` SSE frame carrying
+ * `{jsonrpc:'2.0', id, result:{resultType:'complete', _meta:{...}}}` for the
+ * original subscriptions/listen request id (the wire shape pinned by
+ * SubscriptionsListenResultSchema / SubscriptionsListenResultMetaSchema in
+ * node_modules/@modelcontextprotocol/server/dist/src-CX2iR2pK.mjs), so a
+ * client that already recognizes that shape (Claude Code's own #2650
+ * workaround) reads this close as graceful rather than an unexpected remote
+ * disconnect.
+ */
+async function closeListenResponse(response, { id, serverInfo } = {}) {
     if (!response.body) return response;
     const reader = response.body.getReader();
+    const encoder = new TextEncoder();
     const body = new ReadableStream({
         async start(controller) {
             try {
                 const first = await reader.read();
                 if (!first.done) controller.enqueue(first.value);
+                if (id !== undefined && id !== null) {
+                    const frame = `event: message\ndata: ${JSON.stringify({
+                        jsonrpc: '2.0',
+                        id,
+                        result: {
+                            resultType: 'complete',
+                            _meta: {
+                                [SUBSCRIPTION_ID_META_KEY]: id,
+                                ...(serverInfo ? { [SERVER_INFO_META_KEY]: serverInfo } : {}),
+                            },
+                        },
+                    })}\n\n`;
+                    controller.enqueue(encoder.encode(frame));
+                }
             } finally {
                 await reader.cancel().catch(() => {});
                 controller.close();
@@ -163,23 +297,32 @@ export function createV2HttpHandler(factory, {
     async function fetch(request) {
         const path = new URL(request.url).pathname;
         if (request.method === 'OPTIONS') return corsPreflight(request, { endpoint, allowedOrigins: auth?.allowedOrigins });
+        // Computed once per request, on the Origin header alone, so it applies
+        // identically to every response below -- success, auth failure, 404,
+        // 503, and the header-mismatch/listen-close paths -- without
+        // reflecting a disallowed origin (corsResponseHeaders returns null for
+        // that case, matching checkHttpAuth's own origin gate below).
+        const corsHeaders = corsResponseHeaders(request, auth?.allowedOrigins);
+        const respond = (res) => withCors(res, corsHeaders);
         const result = checkHttpAuth(Object.fromEntries(request.headers), auth);
         if (!result.ok) {
             logger?.warn?.(result.reason);
-            return json(result.status, { error: result.message });
+            return respond(json(result.status, { error: result.message }));
         }
-        if (path === '/healthz' && request.method === 'GET') return json(200, { status: 'ok' });
-        if (path !== endpoint) return json(404, { error: 'Not found' });
-        if (closed) return json(503, { error: 'Service unavailable' });
-        const modern = await isModernRequest(request);
-        if (modern && !request.headers.get('mcp-protocol-version')) {
-            return json(400, { error: 'MCP-Protocol-Version is required for modern MCP requests' });
+        if (path === '/healthz' && request.method === 'GET') return respond(json(200, { status: 'ok' }));
+        if (path !== endpoint) return respond(json(404, { error: 'Not found' }));
+        if (closed) return respond(json(503, { error: 'Service unavailable' }));
+        const requestInfo = await classifyModernRequest(request);
+        if (requestInfo.modern && !request.headers.get('mcp-protocol-version')) {
+            return respond(headerMismatchResponse(requestInfo.id, requestInfo.claimedVersion));
         }
         const token = auth?.noAuth ? 'http-no-auth' : (extractBearerToken({ headers: Object.fromEntries(request.headers) }) || '');
         const context = createHttpRequestContext({ principalFingerprint: fingerprintCredential(token), profile, epoch });
         const response = await runWithRequestContext(context, () => handler.fetch(request));
-        if (modern && request.headers.get('mcp-method') === 'subscriptions/listen') return closeListenResponse(response);
-        return response;
+        if (requestInfo.modern && request.headers.get('mcp-method') === 'subscriptions/listen') {
+            return respond(await closeListenResponse(response, { id: requestInfo.id, serverInfo: DEFAULT_SERVER_INFO }));
+        }
+        return respond(response);
     }
     return Object.freeze({ fetch, async close() {
         closed = true;

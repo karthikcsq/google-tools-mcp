@@ -156,13 +156,98 @@ describe('official SDK v2 facade', () => {
         } finally { await handler.close(); }
     });
 
+    // Gap #3 (docs/plans/mcp-2026-07-28-migration.md §4): corsPreflight() above
+    // only ever answers the OPTIONS preflight. Every real response on /mcp and
+    // /healthz -- success AND the errors a browser is expected to read, like
+    // 401 -- must also carry Access-Control-Allow-Origin + Vary: Origin for an
+    // allowed browser Origin, or the browser blocks the script from reading a
+    // response the server already executed successfully.
+    it('adds Access-Control-Allow-Origin and Vary to real responses for an allowed Origin, and never reflects a disallowed one', async () => {
+        const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN, allowedOrigins: ['https://allowed.example'] } });
+        const withOrigin = (origin, headers = {}) => new Request('http://localhost/mcp', {
+            method: 'POST',
+            headers: {
+                origin,
+                authorization: `Bearer ${TOKEN}`,
+                'content-type': 'application/json',
+                'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+                'mcp-method': 'tools/list',
+                ...headers,
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {
+                _meta: {
+                    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+                    'io.modelcontextprotocol/clientCapabilities': {},
+                },
+            } }),
+        });
+        try {
+            // A real authenticated POST from an allowed browser Origin succeeds
+            // AND carries the header the browser needs to read the response.
+            const ok = await handler.fetch(withOrigin('https://allowed.example'));
+            expect(ok.status).toBe(200);
+            expect(ok.headers.get('access-control-allow-origin')).toBe('https://allowed.example');
+            expect(ok.headers.get('vary')).toBe('Origin');
+            expect((await ok.json()).result.tools.map(({ name }) => name)).toEqual(['noop']);
+
+            // Error responses a browser is expected to consume -- 401, 404, 503
+            // -- carry the same header, so failure is legible to the caller
+            // instead of being swallowed by the browser's own CORS block.
+            const unauthorized = await handler.fetch(new Request('http://localhost/mcp', {
+                method: 'POST',
+                headers: { origin: 'https://allowed.example', 'content-type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+            }));
+            expect(unauthorized.status).toBe(401);
+            expect(unauthorized.headers.get('access-control-allow-origin')).toBe('https://allowed.example');
+            expect(unauthorized.headers.get('vary')).toBe('Origin');
+
+            const notFound = await handler.fetch(new Request('http://localhost/does-not-exist', {
+                headers: { origin: 'https://allowed.example', authorization: `Bearer ${TOKEN}` },
+            }));
+            expect(notFound.status).toBe(404);
+            expect(notFound.headers.get('access-control-allow-origin')).toBe('https://allowed.example');
+
+            // A disallowed Origin is still rejected on its own terms (403, from
+            // checkHttpAuth's origin gate) and never gets the header reflected
+            // back to it.
+            const disallowed = await handler.fetch(withOrigin('https://evil.example'));
+            expect(disallowed.status).toBe(403);
+            expect(disallowed.headers.get('access-control-allow-origin')).toBeNull();
+
+            // A native (non-browser) request with no Origin at all never gets the
+            // header either -- there is nothing to reflect.
+            const native = await handler.fetch(modern('tools/list'));
+            expect(native.status).toBe(200);
+            expect(native.headers.get('access-control-allow-origin')).toBeNull();
+        } finally { await handler.close(); }
+    });
+
     it('keeps legacy stateless HTTP supported but rejects an unheadered modern request', async () => {
         const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
         try {
+            // A modern-classified request with no MCP-Protocol-Version header at
+            // all must fail the same JSON-RPC -32020 (HeaderMismatch) way the SDK
+            // itself fails every other header/body mismatch cell (see the pinned
+            // test below), addressed to the pending request's id -- not a bare
+            // HTTP error body, which the official v2 client would not recognize
+            // as an in-band ProtocolError.
             const missingHeader = modern('tools/list');
             missingHeader.headers.delete('mcp-protocol-version');
-            expect((await handler.fetch(missingHeader)).status).toBe(400);
+            const missingHeaderResponse = await handler.fetch(missingHeader);
+            expect(missingHeaderResponse.status).toBe(400);
+            const missingHeaderBody = await missingHeaderResponse.json();
+            expect(missingHeaderBody).toEqual({
+                jsonrpc: '2.0',
+                id: 1,
+                error: {
+                    code: -32020,
+                    message: expect.stringContaining('MCP-Protocol-Version header is absent'),
+                    data: { mismatch: expect.objectContaining({ header: '(missing)' }) },
+                },
+            });
             const initialized = await legacyJson(await handler.fetch(legacy('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } })));
             expect(initialized.result.protocolVersion).toBe('2025-11-25');
             const listed = await legacyJson(await handler.fetch(legacy('tools/list', {}, 2)));
@@ -280,7 +365,23 @@ describe('official SDK v2 facade', () => {
         } finally { await handler.close(); }
     });
 
-    it('acknowledges subscriptions/listen and promptly closes the otherwise-open SDK stream', async () => {
+    // Gap #2 (docs/plans/mcp-2026-07-28-migration.md §4, Subscriptions spec):
+    // the installed SDK's own listenRouter holds an empty (nothing-to-notify)
+    // subscription's SSE stream open forever after the acknowledgement --
+    // confirmed against the raw, unwrapped createMcpHandler stream, which
+    // never emits a second frame and only ever closes when the whole handler
+    // shuts down (typescript-sdk#2650). A bare transport close with no
+    // terminal result is exactly what the spec says a client MAY treat as an
+    // unexpected disconnect and reconnect on -- the loop Claude Code 2.1.233
+    // had to patch around. `handler.close()` calls `listenRouter.closeAll()`,
+    // which *would* close every open subscription gracefully, but only by
+    // shutting the entire handler down; there is no supported SDK API to
+    // gracefully end one empty subscription in isolation, so the facade's
+    // `closeListenResponse` wrapper (dist/mcpServer.js) builds the SDK's own
+    // graceful-close frame shape by hand. This test proves the client-visible
+    // outcome: an acknowledgement, then the terminal empty result addressed to
+    // the original request id, then a clean end of stream -- not a bare drop.
+    it('acknowledges subscriptions/listen, then delivers a graceful terminal result for the original request id before closing', async () => {
         const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
         try {
@@ -288,7 +389,28 @@ describe('official SDK v2 facade', () => {
             expect(response.headers.get('content-type')).toContain('text/event-stream');
             const reader = response.body.getReader();
             const first = await reader.read();
+            expect(first.done).toBe(false);
             expect(new TextDecoder().decode(first.value)).toContain('notifications/subscriptions/acknowledged');
+
+            const second = await reader.read();
+            expect(second.done).toBe(false);
+            const secondFrame = new TextDecoder().decode(second.value);
+            // The SDK frames every message the same way: "event: message\ndata: <json>\n\n".
+            const secondPayload = JSON.parse(secondFrame.split('\ndata: ')[1].trim());
+            // Addressed to the ORIGINAL subscriptions/listen request's id (1, per
+            // the modern() helper) -- not a notification, a real JSON-RPC result
+            // response -- with the spec's empty-result-before-close shape.
+            expect(secondPayload).toEqual({
+                jsonrpc: '2.0',
+                id: 1,
+                result: {
+                    resultType: 'complete',
+                    _meta: expect.objectContaining({ 'io.modelcontextprotocol/subscriptionId': 1 }),
+                },
+            });
+
+            // The stream then ends cleanly -- no further frames, and the reader
+            // observes a real `done`, not a mid-stream drop.
             await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
         } finally { await handler.close(); }
     });
