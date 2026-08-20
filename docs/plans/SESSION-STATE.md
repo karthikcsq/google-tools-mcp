@@ -55,8 +55,8 @@ If two pieces would conflict or depend on each other, they go in the same PR.
 
 https://github.com/karthikcsq/google-tools-mcp/pull/109
 
-Opened as docs-only; now carries the whole migration implementation. **Its body still
-says "Docs only. No code changes." and must be rewritten before review** (task #7).
+Opened as docs-only; now carries the whole migration implementation. Body and title
+rewritten 2026-08-20 to describe the implementation; PR is awaiting Elliot's review.
 
 Plan of record: `docs/plans/mcp-2026-07-28-migration.md` (staged as plan-PRs 1-4;
 Elliot wants them delivered as one PR with commits grouped by stage).
@@ -77,7 +77,7 @@ Elliot wants them delivered as one PR with commits grouped by stage).
 | `f22d245` | PR3 | **read handles wired**; cross-request isolation closed |
 | `de93015` | fix | redact diagnostics before truncating |
 | `a84a3f0` | fix | protocol error shape, graceful listen close, CORS on real responses |
-| (working tree) | PR4 | **cutover and removals**; fastmcp gone, SDK v2 is the only runtime |
+| `0c8fcb8` | PR4 | **cutover and removals**; fastmcp gone, SDK v2 is the only runtime |
 
 Full suite at HEAD: **44 suites, 672 passed, 2 skipped, 0 failed.**
 (Count moved from 678: the removed dual-runtime surface took ~9 tests with it -
