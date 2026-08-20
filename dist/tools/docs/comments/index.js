@@ -4,6 +4,7 @@ import { register as addComment } from './addComment.js';
 import { register as replyToComment } from './replyToComment.js';
 import { register as resolveComment } from './resolveComment.js';
 import { register as deleteComment } from './deleteComment.js';
+import { register as updateComment } from './updateComment.js';
 export function registerCommentTools(server) {
     listComments(server);
     getComment(server);
@@ -11,4 +12,5 @@ export function registerCommentTools(server) {
     replyToComment(server);
     resolveComment(server);
     deleteComment(server);
+    updateComment(server);
 }

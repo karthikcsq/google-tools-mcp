@@ -1,43 +1,116 @@
 import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
-import { google } from 'googleapis';
-import { getDocsClient, getDriveClient, getAuthClient } from '../../../clients.js';
+import { z } from 'zod';
+import { getDriveClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
+
+const CONTENT_TRUNCATE_LIMIT = 2000;
+const TRUNCATION_MARKER = '…[truncated]';
+
+function truncateText(text) {
+    if (typeof text !== 'string' || text.length <= CONTENT_TRUNCATE_LIMIT) return text;
+    return `${text.slice(0, CONTENT_TRUNCATE_LIMIT)}${TRUNCATION_MARKER}`;
+}
+
+function mapReply(reply) {
+    return {
+        id: reply.id,
+        author: reply.author?.displayName || null,
+        authorIsMe: reply.author?.me === true,
+        content: truncateText(reply.content),
+        action: reply.action || null,
+        createdTime: reply.createdTime,
+    };
+}
+
+// A comment is "unanswered" if it is unresolved and either has no replies, or
+// its most recent reply was not written by the authenticated user. This is a
+// heuristic, not a guarantee: it cannot tell whether a reply from someone
+// else already fully addressed the comment, and treats any self-authored
+// last reply as "handled" even if it was itself a question.
+function isUnanswered(comment) {
+    if (comment.resolved) return false;
+    const replies = comment.replies || [];
+    if (replies.length === 0) return true;
+    const lastReply = replies[replies.length - 1];
+    return lastReply.author?.me !== true;
+}
+
 export function register(server) {
     server.addTool({
         name: 'listComments',
-        description: 'Lists all comments in a document with their IDs, authors, status, and quoted text. Returns data needed to call getComment, replyToComment, resolveComment, or deleteComment.',
-        parameters: DocumentIdParameter,
+        description: 'Lists comments in a document with accurate reply metadata, resolved status, and quoted text. Supports incremental polling (updatedAfter), pagination (maxResults/pageToken), and an unansweredOnly filter. Returns data needed to call getComment, replyToComment, resolveComment, updateComment, or deleteComment. Comment/reply/quoted text over 2,000 characters is truncated with a "…[truncated]" marker.',
+        parameters: DocumentIdParameter.extend({
+            maxResults: z
+                .number()
+                .int()
+                .min(1)
+                .max(100)
+                .default(50)
+                .describe('Maximum number of comments to return in this page (1-100, default 50).'),
+            pageToken: z
+                .string()
+                .optional()
+                .describe('Token from a previous listComments response to fetch the next page.'),
+            updatedAfter: z
+                .string()
+                .datetime()
+                .optional()
+                .describe('ISO 8601 datetime. Only return comments/replies modified after this time (maps to the Drive API startModifiedTime filter). Use for incremental polling.'),
+            includeDeleted: z
+                .boolean()
+                .default(false)
+                .describe('Whether to include deleted comments (their content will be empty).'),
+            includeQuotedText: z
+                .boolean()
+                .default(true)
+                .describe('Whether to include the quoted document text each comment is anchored to. Set false to save tokens.'),
+            unansweredOnly: z
+                .boolean()
+                .default(false)
+                .describe('If true, only return unresolved comments whose latest reply (if any) was not written by the authenticated user. Heuristic: a comment with no replies counts as unanswered; a comment last replied to by the authenticated user counts as answered even if that reply did not resolve it.'),
+        }),
         execute: async (args, { log }) => {
             log.info(`Listing comments for document ${args.documentId}`);
-            const docsClient = await getDocsClient();
-            const driveClient = await getDriveClient();
             try {
-                // First get the document to have context
-                const doc = await docsClient.documents.get({ documentId: args.documentId });
-                // Use Drive API v3 with proper fields to get quoted content
-                const authClient = await getAuthClient();
-                const drive = google.drive({ version: 'v3', auth: authClient });
+                const drive = await getDriveClient();
                 const response = await drive.comments.list({
                     fileId: args.documentId,
-                    fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved)',
-                    pageSize: 100,
+                    fields: 'nextPageToken,comments(id,content,quotedFileContent,author(displayName,me),createdTime,modifiedTime,resolved,replies(id,content,action,author(displayName,me),createdTime))',
+                    pageSize: args.maxResults,
+                    pageToken: args.pageToken,
+                    includeDeleted: args.includeDeleted,
+                    ...(args.updatedAfter ? { startModifiedTime: args.updatedAfter } : {}),
                 });
-                const comments = (response.data.comments || []).map((comment) => ({
-                    id: comment.id,
-                    author: comment.author?.displayName || null,
-                    content: comment.content,
-                    quotedText: comment.quotedFileContent?.value || null,
-                    resolved: comment.resolved || false,
-                    createdTime: comment.createdTime,
-                    modifiedTime: comment.modifiedTime,
-                    replyCount: comment.replies?.length || 0,
-                }));
-                return JSON.stringify({ comments }, null, 2);
+                let rawComments = response.data.comments || [];
+                if (args.unansweredOnly) rawComments = rawComments.filter(isUnanswered);
+                const comments = rawComments.map((comment) => {
+                    const replies = comment.replies || [];
+                    const mapped = {
+                        id: comment.id,
+                        author: comment.author?.displayName || null,
+                        authorIsMe: comment.author?.me === true,
+                        content: truncateText(comment.content),
+                        resolved: comment.resolved || false,
+                        createdTime: comment.createdTime,
+                        modifiedTime: comment.modifiedTime,
+                        replyCount: replies.length,
+                        replies: replies.map(mapReply),
+                    };
+                    if (args.includeQuotedText) {
+                        mapped.quotedText = truncateText(comment.quotedFileContent?.value || null);
+                    }
+                    return mapped;
+                });
+                return JSON.stringify({
+                    comments,
+                    count: comments.length,
+                    nextPageToken: response.data.nextPageToken || undefined,
+                }, null, 2);
             }
             catch (error) {
                 if (isPublicError(error)) throw error;
                 log.error(`Error listing comments: ${error.message || error}`);
-throw wrapOperationError('list document comments', error, { status: error?.code });
+                throw wrapOperationError('list document comments', error, { status: error?.code });
             }
         },
     });
