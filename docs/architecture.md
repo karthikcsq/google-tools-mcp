@@ -69,6 +69,10 @@ If you are adding a tool, you get both by registering through the normal path. D
 - `dist/readTracker.js` gives each request context its own namespace, so one HTTP request's read can never authorize another's write. Guarded Sheets and Drive tools have no handle wiring yet and therefore fail closed over HTTP. The only non-context namespace left is a single module-level map, reached exclusively by callers running outside any transport (direct unit tests, internal startup code) — the session era's keyed map of namespaces and its `clearSession`/disconnect cleanup are gone, because there is nothing multiplexed through the tracker any more.
 - Each handle owns a private editable working copy under `<workspace>/v2-handles/handles/<workspaceId>/`, initialized from a content-addressed immutable baseline under `<workspace>/v2-handles/baselines/` that identical reads share. Cleanup uses the exact paths in each ownership manifest and never deletes a working copy whose contents diverged from its baseline.
 
+## Explicit text color on inserted content (issue #14)
+
+Text inserted by this server carries the document's `NORMAL_TEXT` foreground color explicitly, when that named style defines an RGB color; a theme-color-based or undefined `NORMAL_TEXT` default inserts inherit-only text (no error). The lookup lives in `getDefaultTextColor` (`dist/googleDocsApiHelpers.js`), shared by `insertMarkdown`, `modifyText`, `appendText`, `createDocument`'s raw path, and `insertTableWithData`; `findAndReplace` and `createDocumentFromTemplate`'s `replaceAllText` are deliberately excluded because that Docs API request inherits the style of the text it replaces rather than producing style-less text.
+
 ## Adding a tool
 
 1. Create the module under the right `dist/tools/<category>/` directory, exporting a `register(server)` (or a named `registerXTools(server)` matching the directory's convention).

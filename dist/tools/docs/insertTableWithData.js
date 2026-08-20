@@ -12,7 +12,7 @@ import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
  * Builds the Google Docs API requests to insert a table and populate its cells.
  * Exported for testability (same pattern as convertMarkdownToRequests).
  */
-export function buildInsertTableWithDataRequests(data, index, hasHeaderRow, tabId) {
+export function buildInsertTableWithDataRequests(data, index, hasHeaderRow, tabId, defaultColor) {
     const numRows = data.length;
     const numCols = data.reduce((max, row) => Math.max(max, row.length), 0);
     if (numRows === 0 || numCols === 0) {
@@ -56,6 +56,16 @@ export function buildInsertTableWithDataRequests(data, index, hasHeaderRow, tabI
                     text: cellText,
                 },
             });
+            // Paint the freshly-inserted cell text with the document's
+            // default foreground color (issue #14). Pushed before the bold
+            // header-row request below so header-row formatting (a distinct
+            // field) still applies; both target the same range but different
+            // style fields, so ordering between them doesn't matter — only
+            // ordering relative to any future foregroundColor-setting
+            // request would.
+            const defaultColorReq = GDocsHelpers.buildDefaultColorStyleRequest(adjustedIndex, adjustedIndex + cellText.length, defaultColor, tabId);
+            if (defaultColorReq)
+                formatRequests.push(defaultColorReq);
             // 3. Bold header row cells
             if (hasHeaderRow && r === 0) {
                 const styleReq = GDocsHelpers.buildUpdateTextStyleRequest(adjustedIndex, adjustedIndex + cellText.length, { bold: true }, tabId);
@@ -119,7 +129,14 @@ export function register(server) {
                         throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
-                const requests = buildInsertTableWithDataRequests(args.data, args.index, args.hasHeaderRow ?? false, args.tabId);
+                // Resolve the document's default text color once so populated
+                // cells carry an explicit foreground color instead of leaving
+                // it undefined (issue #14).
+                const { color: defaultColor, error: defaultColorError } = await GDocsHelpers.getDefaultTextColor(docs, args.documentId);
+                if (defaultColorError) {
+                    log.warn(`insertTableWithData: could not fetch document default text color for ${args.documentId}: ${defaultColorError.message}`);
+                }
+                const requests = buildInsertTableWithDataRequests(args.data, args.index, args.hasHeaderRow ?? false, args.tabId, defaultColor);
                 const lease = await beginDocsMutation(args.documentId, {
                     tabId: args.tabId ?? null,
                     readHandle: args.readHandle,

@@ -42,9 +42,17 @@ const ModifyTextParameters = DocumentIdParameter.extend({
 /**
  * Pure, sync function that builds the array of Google Docs API requests for a
  * modifyText operation. Indices must already be resolved (no text-search here).
+ *
+ * `defaultColor` (an rgbColor object from getDefaultTextColor) is optional.
+ * When present and this call actually inserts new text (not a style-only or
+ * delete-only op), a request painting the newly inserted range with that
+ * color is emitted right after the insertText request and before any
+ * caller-supplied style/paragraphStyle requests — so caller-requested
+ * formatting (including an explicit foregroundColor) still wins; it's the
+ * last request touching the range (issue #14).
  */
 export function buildModifyTextRequests(opts) {
-    const { startIndex, endIndex, text, style, paragraphStyle, tabId } = opts;
+    const { startIndex, endIndex, text, style, paragraphStyle, tabId, defaultColor } = opts;
     const requests = [];
     if (text === undefined && !style && !paragraphStyle)
         return requests;
@@ -61,6 +69,13 @@ export function buildModifyTextRequests(opts) {
         if (tabId)
             location.tabId = tabId;
         requests.push({ insertText: { location, text } });
+        // 2b. Paint the freshly-created range with the document default
+        // foreground color, if one was resolved (issue #14). Only for text
+        // that was actually just inserted — never touches existing content.
+        const defaultColorRequest = GDocsHelpers.buildDefaultColorStyleRequest(startIndex, startIndex + text.length, defaultColor, tabId);
+        if (defaultColorRequest) {
+            requests.push(defaultColorRequest);
+        }
     }
     // 3. Apply text formatting
     if (style) {
@@ -105,7 +120,8 @@ export function register(server) {
             'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance. ' +
             "textToFind tolerates markdown list markers copied from readDocument(format='markdown'), because Google Docs stores bullets outside text runs. " +
             'For multi-line or section-level rewrites, use replaceDocumentWithMarkdown instead. ' +
-            'To add content to the end of a doc, use appendMarkdown or appendText.',
+            'To add content to the end of a doc, use appendMarkdown or appendText. ' +
+            "Newly inserted text carries the document's default text color explicitly, when the document defines one.",
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -172,6 +188,18 @@ export function register(server) {
                 const normalizedText = args.text
                     ?.replace(/\\n/g, '\n')
                     .replace(/\\t/g, '\t');
+                // Resolve the document's default text color so freshly
+                // inserted text carries an explicit foreground color instead
+                // of leaving it undefined (issue #14). Only needed when we're
+                // actually inserting new text.
+                let defaultColor;
+                if (normalizedText !== undefined && normalizedText !== '') {
+                    const { color, error: defaultColorError } = await GDocsHelpers.getDefaultTextColor(docs, args.documentId);
+                    defaultColor = color;
+                    if (defaultColorError) {
+                        log.warn(`modifyText: could not fetch document default text color for ${args.documentId}: ${defaultColorError.message}`);
+                    }
+                }
                 const requests = buildModifyTextRequests({
                     startIndex,
                     endIndex,
@@ -179,6 +207,7 @@ export function register(server) {
                     style: args.style,
                     paragraphStyle: args.paragraphStyle,
                     tabId: args.tabId,
+                    defaultColor,
                 });
                 if (requests.length === 0) {
                     return 'No operations to perform.';

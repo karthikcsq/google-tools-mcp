@@ -41,6 +41,11 @@ export function register(server) {
                     try {
                         const docs = await getDocsClient();
                         const requests = [];
+                        // No explicit default-color styling here (issue #14
+                        // audit): like findAndReplace, replaceAllText
+                        // inherits the style of the placeholder text it
+                        // replaces rather than producing style-less text, so
+                        // there is nothing to explicitly re-color.
                         // Create replace requests for each replacement
                         for (const [searchText, replaceText] of Object.entries(args.replacements)) {
                             requests.push({

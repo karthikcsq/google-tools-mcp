@@ -625,6 +625,59 @@ export async function getParagraphRange(docs, documentId, indexWithin, tabId) {
         throw new Error(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
     }
 }
+// --- Default text color (issue #14) ---
+/**
+ * Looks up the document's NORMAL_TEXT named style and returns its explicit
+ * RGB foreground color, if it has one.
+ *
+ * Shared by every insertion path that wants inserted text to carry an
+ * explicit color (matching the document default) instead of leaving it
+ * undefined, which Google Docs treats as "no color selected" in the picker.
+ *
+ * Does NOT log — callers decide what a fetch failure means for them (most
+ * treat it as non-fatal and log a warning, then proceed without a color).
+ * Theme-color-based NORMAL_TEXT styles (no `rgbColor`) are treated the same
+ * as "no explicit default": matching a theme slot can't be done with a fixed
+ * RGB paint without freezing it to today's theme.
+ *
+ * @returns {Promise<{color: {red?:number,green?:number,blue?:number}|null, error: Error|null}>}
+ */
+export async function getDefaultTextColor(docs, documentId) {
+    try {
+        const styleRes = await docs.documents.get({
+            documentId,
+            fields: 'namedStyles',
+        });
+        const normalTextStyle = styleRes.data.namedStyles?.styles?.find((s) => s.namedStyleType === 'NORMAL_TEXT');
+        const rgbColor = normalTextStyle?.textStyle?.foregroundColor?.color?.rgbColor;
+        return { color: rgbColor ?? null, error: null };
+    }
+    catch (error) {
+        return { color: null, error: error instanceof Error ? error : new Error(String(error)) };
+    }
+}
+/**
+ * Builds an updateTextStyle request that paints [startIndex, endIndex) with
+ * an explicit foreground color (an rgbColor object as returned by
+ * getDefaultTextColor). Returns null for an empty/invalid range so callers
+ * can push-if-truthy without an extra guard.
+ */
+export function buildDefaultColorStyleRequest(startIndex, endIndex, color, tabId) {
+    if (!color || endIndex <= startIndex)
+        return null;
+    const range = { startIndex, endIndex };
+    if (tabId)
+        range.tabId = tabId;
+    return {
+        updateTextStyle: {
+            range,
+            textStyle: {
+                foregroundColor: { color: { rgbColor: color } },
+            },
+            fields: 'foregroundColor',
+        },
+    };
+}
 // --- Style Request Builders ---
 export function buildUpdateTextStyleRequest(startIndex, endIndex, style, tabId) {
     const textStyle = {};

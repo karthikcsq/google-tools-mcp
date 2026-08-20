@@ -186,3 +186,88 @@ describe('buildModifyTextRequests', () => {
         expect(requests[0]).toHaveProperty('deleteContentRange');
     });
 });
+
+// --- Issue #14: explicit default text color on freshly inserted text ---
+describe('buildModifyTextRequests — default text color (issue #14)', () => {
+    const rgb = { red: 0.1, green: 0.2, blue: 0.3 };
+
+    it('paints the newly inserted range with defaultColor right after insertText', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            text: 'hi',
+            defaultColor: rgb,
+        });
+        expect(requests).toHaveLength(2);
+        expect(requests[0]).toHaveProperty('insertText');
+        expect(requests[1]).toEqual({
+            updateTextStyle: {
+                range: { startIndex: 5, endIndex: 7 },
+                textStyle: { foregroundColor: { color: { rgbColor: rgb } } },
+                fields: 'foregroundColor',
+            },
+        });
+    });
+
+    it('emits no color request when defaultColor is absent', () => {
+        const requests = buildModifyTextRequests({ startIndex: 5, text: 'hi' });
+        expect(requests.every((r) => !r.updateTextStyle || r.updateTextStyle.fields !== 'foregroundColor')).toBe(true);
+    });
+
+    it('emits no color request for a style-only call (no new text)', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 1,
+            endIndex: 10,
+            style: { bold: true },
+            defaultColor: rgb,
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toHaveProperty('updateTextStyle');
+        expect(requests[0].updateTextStyle.fields).not.toBe('foregroundColor');
+    });
+
+    it('emits no color request for a delete-only call (empty string text)', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            endIndex: 10,
+            text: '',
+            defaultColor: rgb,
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toHaveProperty('deleteContentRange');
+    });
+
+    it('caller-supplied foregroundColor still wins: its request is emitted after the default-color paint', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            text: 'hi',
+            style: { foregroundColor: '#ff0000' },
+            defaultColor: rgb,
+        });
+        // insertText, default-color paint, then caller's style request last.
+        expect(requests).toHaveLength(3);
+        expect(requests[1].updateTextStyle.textStyle.foregroundColor.color.rgbColor).toEqual(rgb);
+        expect(requests[2].updateTextStyle.textStyle.foregroundColor.color.rgbColor).toEqual({ red: 1, green: 0, blue: 0 });
+    });
+
+    it('includes tabId on the default-color request when provided', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            text: 'hi',
+            tabId: 'tab-1',
+            defaultColor: rgb,
+        });
+        expect(requests[1].updateTextStyle.range.tabId).toBe('tab-1');
+    });
+
+    it('paints the replaced range too (delete + insert + default color)', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            endIndex: 8,
+            text: 'longer text',
+            defaultColor: rgb,
+        });
+        expect(requests[0]).toHaveProperty('deleteContentRange');
+        expect(requests[1]).toHaveProperty('insertText');
+        expect(requests[2].updateTextStyle.range).toEqual({ startIndex: 5, endIndex: 5 + 'longer text'.length });
+    });
+});

@@ -47,6 +47,15 @@ export function register(server) {
                 `${args.matchCase ? ' (case-sensitive)' : ''}` +
                 `${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
             try {
+                // No explicit default-color styling here (issue #14 audit):
+                // Docs API's ReplaceAllTextRequest inherits the text style of
+                // the range being replaced — it doesn't create style-less
+                // text the way a bare insertText does. Whatever explicit or
+                // inherited color the matched text already had (including a
+                // prior default-color paint from this server) carries over,
+                // so there is no "undefined color" gap to close for this
+                // path. See tests/findAndReplace.test.js for the regression
+                // guard on this (no extra style request emitted).
                 const request = {
                     replaceAllText: {
                         containsText: {

@@ -603,6 +603,9 @@
         "file": "tests/packageScripts.test.js"
       },
       {
+        "file": "tests/publicErrorBoundary.test.js"
+      },
+      {
         "file": "tests/readGoogleDocTabs.test.js"
       },
       {
@@ -785,7 +788,7 @@
       },
       {
         "file": "dist/tools/docs/insertTableWithData.js",
-        "line": 71,
+        "line": 81,
         "match": ".addTool({"
       },
       {
@@ -795,7 +798,7 @@
       },
       {
         "file": "dist/tools/docs/modifyText.js",
-        "line": 98,
+        "line": 113,
         "match": ".addTool({"
       },
       {
@@ -850,7 +853,7 @@
       },
       {
         "file": "dist/tools/drive/createDocument.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {

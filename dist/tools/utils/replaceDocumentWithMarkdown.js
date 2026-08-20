@@ -17,7 +17,8 @@ export function register(server) {
             "Use readDocument with format='markdown' first to get the current content, edit it, then call this tool to apply changes. " +
             "PREFERRED WORKFLOW for large edits: readDocument saves the content to a local working-copy file and returns its path — edit that file, then pass it here as filePath instead of inline markdown, to avoid truncation and get a reviewable diff before pushing. " +
             "For small single-location edits (one line or paragraph), use modifyText instead. " +
-            "To add content without rewriting, use appendMarkdown.",
+            "To add content without rewriting, use appendMarkdown. " +
+            "Inserted text carries the document's default text color explicitly, when the document defines one.",
         parameters: DocumentIdParameter.extend({
             markdown: z.string().optional().describe('Inline markdown content. Prefer filePath instead for content longer than ~2000 characters — use the working-copy path returned by readDocument, edit that file, then pass it here.'),
             filePath: z.string().optional().describe('Path to a local markdown file to use as content. Takes precedence over the markdown parameter. Use this for large documents to avoid truncation.'),

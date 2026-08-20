@@ -2,6 +2,7 @@ import { publicError, isPublicError, wrapOperationError } from '../../errors.js'
 import { z } from 'zod';
 import { getDriveClient, getDocsClient } from '../../clients.js';
 import { insertMarkdown, formatInsertResult } from '../../markdown-transformer/index.js';
+import { getDefaultTextColor, buildDefaultColorStyleRequest } from '../../googleDocsApiHelpers.js';
 export function register(server) {
     server.addTool({
         name: 'createDocument',
@@ -58,6 +59,35 @@ export function register(server) {
                                     ],
                                 },
                             });
+                            // Explicitly paint the freshly-inserted raw text with
+                            // the document's default foreground color (issue #14)
+                            // — raw insertText carries no style at all otherwise.
+                            // A failed color lookup/update doesn't undo the insert;
+                            // it's surfaced as a warning instead of silently
+                            // succeeding with unset color.
+                            try {
+                                const { color, error } = await getDefaultTextColor(docs, document.id);
+                                if (error) {
+                                    contentWarnings = [
+                                        ...(contentWarnings ?? []),
+                                        `Could not determine document default text color: ${error.message}`,
+                                    ];
+                                }
+                                const colorRequest = buildDefaultColorStyleRequest(1, 1 + args.initialContent.length, color, undefined);
+                                if (colorRequest) {
+                                    await docs.documents.batchUpdate({
+                                        documentId: document.id,
+                                        requestBody: { requests: [colorRequest] },
+                                    });
+                                }
+                            }
+                            catch (colorError) {
+                                log.warn(`Document created but failed to set default text color: ${colorError.message}`);
+                                contentWarnings = [
+                                    ...(contentWarnings ?? []),
+                                    `Could not apply default text color to initial content: ${colorError.message}`,
+                                ];
+                            }
                         }
                         else {
                             const result = await insertMarkdown(docs, document.id, args.initialContent, {
