@@ -525,6 +525,9 @@
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
       },
       {
+        "file": "tests/docsHandleLeaseFailure.test.js"
+      },
+      {
         "file": "tests/docsStructure.test.js"
       },
       {
