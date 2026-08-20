@@ -567,6 +567,9 @@
         "file": "tests/docsChangePrecision.test.js"
       },
       {
+        "file": "tests/docsCollateral.test.js"
+      },
+      {
         "file": "tests/docsConflictGuardPrecision.test.js"
       },
       {
@@ -658,6 +661,9 @@
       },
       {
         "file": "tests/modifyText.test.js"
+      },
+      {
+        "file": "tests/modifyTextNoOpLeaseRelease.test.js"
       },
       {
         "file": "tests/mutatingDocsToolsWriteControl.test.js"

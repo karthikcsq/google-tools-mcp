@@ -19,6 +19,7 @@ import { ReadHandleError } from './readHandles.js';
 import { getRequestContext } from './requestContext.js';
 import { getLastReadRevisionId, requireRereadBeforeMutation, trackMutation } from './readTracker.js';
 import { textSearchFields } from './googleDocsApiHelpers.js';
+import { logger } from './logger.js';
 import {
     cleanupHandleWorkspaces,
     computeStructuralFingerprint,
@@ -84,6 +85,29 @@ function expectationFor(documentId, tabId) {
 function asPublic(error) {
     if (error instanceof ReadHandleError) return publicError(error.message);
     return error;
+}
+
+// Every discardHandleWorkspace() call inside complete() below runs strictly
+// AFTER the Google write has already committed (and, for the predecessor,
+// after the store has already terminalized its handle). A cleanup failure at
+// that point is never allowed to read as "the write failed" -- it is logged
+// server-side (redacted by the logger) and reported to the caller as a
+// non-fatal warning instead of being left to propagate. The workspace is
+// deliberately left registered in ownedWorkspaces when this happens (nothing
+// upstream of the throw removes it), so a later cleanup/shutdown pass can
+// still find and retry it -- see dist/handleRuntime.js discardHandleWorkspace.
+async function safeDiscardWorkspace(workspaceId, { context: label }) {
+    try {
+        await discardHandleWorkspace(workspaceId);
+        return true;
+    } catch (error) {
+        logger.warn(
+            `[docsHandles] failed to discard handle workspace after a committed write (${label}); ` +
+            'it remains registered for a later cleanup pass to retry:',
+            error?.message || error,
+        );
+        return false;
+    }
 }
 
 /**
@@ -568,22 +592,51 @@ async function openV2Lease(documentId, { tabId, readHandle, expectedRevisionId }
                 // not apply here since the write already landed. Reap both
                 // explicitly instead of leaving either as a permanent orphan.
                 if (successorWorkspace) {
-                    await discardHandleWorkspace(successorWorkspace.workspace.workspaceId);
+                    await safeDiscardWorkspace(successorWorkspace.workspace.workspaceId, { context: 'never-registered successor' });
                 }
-                if (workspaceId) await discardHandleWorkspace(workspaceId);
+                if (workspaceId) await safeDiscardWorkspace(workspaceId, { context: 'predecessor, after completeSuccess failure' });
                 setResultWarning(
                     'Document write committed successfully, but the local read-handle bookkeeping could not ' +
                     'be finalized. Re-read the document before further edits.',
                 );
                 return;
             }
-            if (workspaceId) await discardHandleWorkspace(workspaceId);
+            let predecessorDiscarded = true;
+            if (workspaceId) {
+                predecessorDiscarded = await safeDiscardWorkspace(workspaceId, { context: 'predecessor, after successful completeSuccess' });
+            }
+            if (!predecessorDiscarded) {
+                setResultWarning(
+                    'Document write committed successfully, but a stale local workspace could not be removed ' +
+                    'and will be retried by cleanup.',
+                );
+            }
 
             if (successorWorkspace) {
                 noteWorkspaceExpiry(successorWorkspace.workspace.workspaceId, successor.expiresAt);
                 setResultHandle(successor.readHandle, successor.expiresAt);
                 if (context.transport === 'stdio') {
-                    store.setImplicit(successor.readHandle, { key: implicitKey(documentId, tabId) });
+                    try {
+                        store.setImplicit(successor.readHandle, { key: implicitKey(documentId, tabId) });
+                    } catch (error) {
+                        // The successor handle was already registered by
+                        // completeSuccess and already handed back via
+                        // setResultHandle above -- only this connection's
+                        // stdio convenience slot (used when a later call omits
+                        // readHandle) failed to update. Non-fatal: warn so the
+                        // caller knows to pass the handle explicitly next time
+                        // instead of silently resolving the stale predecessor.
+                        logger.warn(
+                            '[docsHandles] failed to update the stdio implicit read-handle slot after a ' +
+                            'committed write:',
+                            error?.message || error,
+                        );
+                        setResultWarning(
+                            'Document write committed successfully and issued a new read handle, but this ' +
+                            'connection\'s implicit handle could not be updated; pass readHandle explicitly ' +
+                            'on the next edit.',
+                        );
+                    }
                 }
             } else {
                 // completeSuccess still had to mint a successor record to keep

@@ -83,7 +83,9 @@ jest.unstable_mockModule('../dist/workspace.js', () => ({
 const { createV2HttpHandler, prepareMcpServerFactory, MCP_PROTOCOL_VERSION } = await import('../dist/mcpServer.js');
 const { register: registerReadDocument } = await import('../dist/tools/docs/readGoogleDoc.js');
 const { register: registerAppendText } = await import('../dist/tools/docs/appendToGoogleDoc.js');
-const { cleanupHandleWorkspaces, getHandleRuntimeStats, resetHandleRuntimeState } = await import('../dist/handleRuntime.js');
+const {
+    cleanupHandleWorkspaces, getHandleRuntimeStats, resetHandleRuntimeState, forceDiscardFailureForTesting,
+} = await import('../dist/handleRuntime.js');
 
 const V2_ROOT = path.join(WORKSPACE_ROOT, 'v2-handles');
 const HANDLES_DIR = path.join(V2_ROOT, 'handles');
@@ -336,6 +338,93 @@ describe('a committed write survives completeSuccess itself throwing', () => {
             const cleaned = await cleanupHandleWorkspaces({ all: true });
             expect(cleaned.removed).toHaveLength(0);
             expect(cleaned.retained).toHaveLength(0);
+
+            // A fresh read-then-write still works: the failure was scoped to
+            // one lease, not the runtime, and the injected failure was
+            // one-shot.
+            batchUpdate.mockClear();
+            const freshRead = await call(handler, 'readDocument', { documentId: DOC_ID, format: 'markdown' });
+            expect(freshRead.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            const freshWrite = await call(handler, 'appendText', {
+                documentId: DOC_ID, text: 'fresh mutation', readHandle: freshRead.readHandle,
+            });
+            expect(freshWrite.isError).toBeFalsy();
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
+        } finally {
+            await handler.close();
+        }
+    });
+});
+
+describe('a committed write survives the predecessor-workspace discard itself failing', () => {
+    // PR #109 review comment 5352058729: unlike the two suites above (a failed
+    // successor *creation*, and completeSuccess itself throwing), here
+    // everything the store cares about succeeds -- createHandleWorkspace builds
+    // the successor, store.completeSuccess terminalizes the predecessor and
+    // registers the successor -- and only the *cleanup* of the now-superseded
+    // predecessor workspace (discardHandleWorkspace) fails afterward. Every
+    // fs op inside that cleanup is already individually best-effort by design
+    // (see dist/handleRuntime.js removeWorkspaceFiles), so there is no real
+    // disk condition left to provoke -- forceDiscardFailureForTesting is the
+    // seam that lets this suite inject exactly that failure without weakening
+    // that internal best-effort behavior, to prove the call site in
+    // dist/docsHandles.js complete() -- not just removeWorkspaceFiles itself
+    // -- never lets a cleanup failure read as a write failure.
+    it('warns instead of throwing, still issues the successor, and leaves the stale workspace owned for retry', async () => {
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readDocument', { documentId: DOC_ID, format: 'markdown' });
+            expect(read.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            const [predecessorWorkspaceId] = await listHandleDirs();
+            expect(predecessorWorkspaceId).toBeTruthy();
+
+            // The Google write and the successor's own workspace creation both
+            // succeed; only discarding the now-superseded predecessor fails.
+            forceDiscardFailureForTesting(predecessorWorkspaceId);
+            const write = await call(handler, 'appendText', {
+                documentId: DOC_ID, text: 'committed anyway', readHandle: read.readHandle,
+            });
+
+            // The write committed -- this must not read as a tool failure --
+            // and a real, usable successor handle was still issued: discard
+            // cleanup is a separate concern from minting the next handle.
+            expect(write.isError).toBeFalsy();
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
+            expect(write.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(write.readHandle).not.toBe(read.readHandle);
+            const text = textOf(write);
+            expect(text).toMatch(/committed successfully/i);
+            expect(text).toMatch(/stale local workspace could not be removed/i);
+            expect(text).toMatch(/retried by cleanup/i);
+            expect(write.structuredContent?.warnings?.[0]).toMatch(/stale local workspace/i);
+
+            // The predecessor's handle is terminal (consumed by the write),
+            // not stuck reserved: cleanup failing to remove its *files* must
+            // not leave its *handle* replayable.
+            const replay = await call(handler, 'appendText', {
+                documentId: DOC_ID, text: 'replay', readHandle: read.readHandle,
+            });
+            expect(replay.isError).toBe(true);
+            expect(textOf(replay)).toMatch(/already been consumed/i);
+            expect(textOf(replay)).not.toMatch(/mutation in progress/i);
+
+            // The stale predecessor workspace directory is still on disk and
+            // still owned (registered in ownedWorkspaces) -- discard never ran
+            // to completion, so nothing deregistered it -- alongside the new
+            // successor's own workspace.
+            const dirsAfterFailedDiscard = await listHandleDirs();
+            expect(dirsAfterFailedDiscard).toContain(predecessorWorkspaceId);
+            expect(dirsAfterFailedDiscard).toHaveLength(2);
+            expect(getHandleRuntimeStats().workspaces).toBe(2);
+
+            // A later cleanup pass -- exactly what shutdown and every mint
+            // already run -- can still find and reclaim it: nothing about the
+            // failed discard made it unreachable.
+            const cleaned = await cleanupHandleWorkspaces({ all: true });
+            expect(cleaned.removed).toEqual(expect.arrayContaining([predecessorWorkspaceId]));
+            expect(cleaned.retained).toHaveLength(0);
+            expect(getHandleRuntimeStats().workspaces).toBe(0);
 
             // A fresh read-then-write still works: the failure was scoped to
             // one lease, not the runtime, and the injected failure was
