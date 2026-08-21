@@ -89,6 +89,47 @@ describe('listFolderContents recursive traversal', () => {
 
         expect(result).toMatchObject({ count: 1, truncated: true });
         expect(result.truncationReason).toMatch(/maxItems \(1\).*discovered folders not expanded/);
+        expect(result.entries).toEqual([expect.objectContaining({ id: 'a', path: 'Root/A', parentIds: ['root-id'] })]);
+    });
+
+    it('returns buffered pages when the API-call budget ends during a parent chunk', async () => {
+        let childPageCalls = 0;
+        const list = jest.fn(async ({ q, pageToken }) => {
+            if (q.includes("'root-id' in parents")) {
+                return { data: { files: Array.from({ length: 50 }, (_, index) => folder(`folder-${index}`, `Folder ${index}`, ['root-id'])) } };
+            }
+            childPageCalls += 1;
+            return { data: {
+                files: [file(`partial-${childPageCalls}`, `partial-${childPageCalls}.txt`, ['folder-0'])],
+                nextPageToken: `page-${childPageCalls + 1}`,
+            } };
+        });
+        fakeDrive = { files: { get: jest.fn(async () => ({ data: { id: 'root-id', name: 'Root' } })), list } };
+
+        const result = JSON.parse(await getTool().execute({ folderId: 'root', depth: 'all' }, { log: noopLog }));
+
+        expect(result).toMatchObject({ truncated: true, truncationReason: 'API call budget (50) exhausted', apiCalls: 50 });
+        expect(result.entries).toHaveLength(98);
+        expect(result.entries.find((entry) => entry.id === 'partial-48')).toMatchObject({
+            path: 'Root/Folder 0/partial-48.txt',
+            parentIds: ['folder-0'],
+        });
+        expect(result.entries.find((entry) => entry.id === 'partial-49')).toBeUndefined();
+    });
+
+    it('returns all entries fetched before the depth limit stops expansion', async () => {
+        const list = jest.fn(async ({ q }) => q.includes("'root-id' in parents")
+            ? ({ data: { files: [folder('a', 'A', ['root-id'])] } })
+            : ({ data: { files: [folder('b', 'B', ['a'])] } }));
+        fakeDrive = { files: { get: jest.fn(async () => ({ data: { id: 'root-id', name: 'Root' } })), list } };
+
+        const result = JSON.parse(await getTool().execute({ folderId: 'root', depth: 2 }, { log: noopLog }));
+
+        expect(result).toMatchObject({ count: 2, truncated: true, truncationReason: 'depth (2) reached; 1 discovered folders not expanded' });
+        expect(result.entries).toEqual([
+            expect.objectContaining({ id: 'a', path: 'Root/A', parentIds: ['root-id'] }),
+            expect.objectContaining({ id: 'b', path: 'Root/A/B', parentIds: ['a'] }),
+        ]);
     });
 
     it('reports API-budget truncation after bounding a deep traversal', async () => {

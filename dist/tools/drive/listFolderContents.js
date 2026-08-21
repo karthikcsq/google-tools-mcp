@@ -102,8 +102,16 @@ export function register(server) {
                     const query = `(${parentNodes.map((parent) => `'${escapeDriveQueryValue(parent.id)}' in parents`).join(' or ')}) and trashed=false`;
                     const files = [];
                     let pageToken;
+                    let budgetExhausted = false;
                     do {
-                        countApiCall();
+                        try {
+                            countApiCall();
+                        }
+                        catch (error) {
+                            if (error?.message !== 'API_CALL_BUDGET_EXHAUSTED') throw error;
+                            budgetExhausted = true;
+                            break;
+                        }
                         const response = await drive.files.list({
                             q: query, pageSize: RECURSIVE_PAGE_SIZE, pageToken, orderBy: 'folder,name',
                             fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,parents,shortcutDetails)',
@@ -112,20 +120,22 @@ export function register(server) {
                         files.push(...(response.data.files || []));
                         pageToken = response.data.nextPageToken || undefined;
                     } while (pageToken);
-                    return files;
+                    return { files, budgetExhausted };
                 };
                 const listWithIsolation = async (parentNodes) => {
                     try { return await listParentChunk(parentNodes); }
                     catch (error) {
-                        if (error?.message === 'API_CALL_BUDGET_EXHAUSTED') throw error;
                         if (getStatus(error) !== 403 && getStatus(error) !== 404) throw error;
                         if (parentNodes.length === 1) {
                             const parent = parentNodes[0];
                             unreadable.push({ id: parent.id, path: parent.path, reason: getStatus(error) === 404 ? 'Folder not found or no longer available.' : 'Permission denied or folder unavailable.' });
-                            return [];
+                            return { files: [], budgetExhausted: false };
                         }
                         const midpoint = Math.ceil(parentNodes.length / 2);
-                        return [...await listWithIsolation(parentNodes.slice(0, midpoint)), ...await listWithIsolation(parentNodes.slice(midpoint))];
+                        const first = await listWithIsolation(parentNodes.slice(0, midpoint));
+                        if (first.budgetExhausted) return first;
+                        const second = await listWithIsolation(parentNodes.slice(midpoint));
+                        return { files: [...first.files, ...second.files], budgetExhausted: second.budgetExhausted };
                     }
                 };
 
@@ -133,12 +143,10 @@ export function register(server) {
                 while (currentLevel.length > 0 && currentLevel[0].depth < maxDepth && !truncated) {
                     const nextLevel = [];
                     for (let index = 0; index < currentLevel.length && !truncated; index += PARENT_CHUNK_SIZE) {
-                        let files;
-                        try { files = await listWithIsolation(currentLevel.slice(index, index + PARENT_CHUNK_SIZE)); }
-                        catch (error) {
-                            if (error?.message === 'API_CALL_BUDGET_EXHAUSTED') { truncated = true; truncationReason = `API call budget (${API_CALL_BUDGET}) exhausted`; break; }
-                            throw error;
-                        }
+                        let chunkResult;
+                        try { chunkResult = await listWithIsolation(currentLevel.slice(index, index + PARENT_CHUNK_SIZE)); }
+                        catch (error) { throw error; }
+                        const { files, budgetExhausted } = chunkResult;
                         for (const file of files) {
                             if (file.mimeType !== FOLDER_MIME_TYPE && !includeFiles) continue;
                             const result = addEntry(file, currentLevel);
@@ -148,6 +156,10 @@ export function register(server) {
                                 break;
                             }
                             if (file.mimeType === FOLDER_MIME_TYPE && result.added && visitedFolders.add(file.id)) nextLevel.push({ id: file.id, path: result.entry.path, depth: currentLevel[0].depth + 1 });
+                        }
+                        if (!truncated && budgetExhausted) {
+                            truncated = true;
+                            truncationReason = `API call budget (${API_CALL_BUDGET}) exhausted`;
                         }
                     }
                     currentLevel = nextLevel;
