@@ -1,10 +1,10 @@
 // Centralized logger with LOG_LEVEL support.
 // All log output goes to stderr (stdout reserved for MCP protocol).
-// If GOOGLE_MCP_LOG_FILE is set, logs are also appended to that file.
+// Plain logs and structured tool-call records are both persisted by default.
 import * as fs from 'fs';
 import * as path from 'path';
 import { redactDiagnostic } from './errors.js';
-import { getDefaultLogPath } from './config.js';
+import { getDefaultLogPath, getDefaultJsonlPath } from './config.js';
 
 const LOG_LEVELS = {
     debug: 0,
@@ -31,25 +31,133 @@ function shouldLog(level) {
 
 // --- File logging ---
 let logStream = null;
+let structuredLogPath = null;
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+const disabledValues = new Set(['0', 'false', 'off', 'none']);
+let warnedPaths = new Set();
+
+function configuredPath(value, fallback) {
+    if (value === undefined || value === '' || value === '1') return fallback;
+    if (disabledValues.has(String(value).toLowerCase())) return null;
+    return value;
+}
+
+export function getLogFilePath() {
+    return configuredPath(process.env.GOOGLE_MCP_LOG_FILE, getDefaultLogPath());
+}
+
+export function getStructuredLogFilePath() {
+    const plainPath = getLogFilePath();
+    if (!plainPath) return null;
+    const configured = process.env.GOOGLE_MCP_JSONL_FILE;
+    if (configured === undefined || configured === '' || configured === '1') {
+        return process.env.GOOGLE_MCP_LOG_FILE && process.env.GOOGLE_MCP_LOG_FILE !== '1'
+            ? path.join(path.dirname(plainPath), 'server.jsonl')
+            : getDefaultJsonlPath();
+    }
+    if (disabledValues.has(String(configured).toLowerCase())) return null;
+    return configured;
+}
+
+function warnFileFailure(filePath) {
+    if (warnedPaths.has(filePath)) return;
+    warnedPaths.add(filePath);
+    process.stderr.write(`WARNING: Unable to write diagnostic log file ${filePath}.\n`);
+}
+
+function rotateAtOpen(filePath) {
+    try {
+        if (!fs.existsSync(filePath) || fs.statSync(filePath).size <= MAX_LOG_BYTES) return;
+        const rotatedPath = `${filePath}.1`;
+        try { fs.unlinkSync(rotatedPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+        fs.renameSync(filePath, rotatedPath);
+    } catch {
+        warnFileFailure(filePath);
+    }
+}
 
 function initLogFile() {
     if (logStream) return;
-    const logPath = process.env.GOOGLE_MCP_LOG_FILE === '1'
-        ? getDefaultLogPath()
-        : process.env.GOOGLE_MCP_LOG_FILE;
+    const logPath = getLogFilePath();
     if (!logPath) return;
     try {
         fs.mkdirSync(path.dirname(logPath), { recursive: true });
+        rotateAtOpen(logPath);
         const stream = fs.createWriteStream(logPath, { flags: 'a' });
         stream.on('error', () => {
-            // File logging is optional. Fail closed without writing a fallback
-            // diagnostic to stdout or risking an unhandled stream error.
             if (logStream === stream) logStream = null;
+            warnFileFailure(logPath);
         });
         logStream = stream;
     } catch {
-        // If we can't open the log file, continue without file logging
+        warnFileFailure(logPath);
     }
+}
+
+function initStructuredLogFile() {
+    if (structuredLogPath !== null) return structuredLogPath;
+    const filePath = getStructuredLogFilePath();
+    structuredLogPath = filePath || false;
+    if (!filePath) return null;
+    try {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        rotateAtOpen(filePath);
+        fs.closeSync(fs.openSync(filePath, 'a'));
+        return filePath;
+    } catch {
+        warnFileFailure(filePath);
+        structuredLogPath = false;
+        return null;
+    }
+}
+
+function argumentDescriptor(value) {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return `array:${value.length}`;
+    if (typeof value === 'string') return `string:${Buffer.byteLength(value, 'utf8')}`;
+    if (value && typeof value === 'object') {
+        try { return `object:${Object.keys(value).length}`; } catch { return 'object'; }
+    }
+    return typeof value;
+}
+
+export function getArgumentShape(args) {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return [argumentDescriptor(args)];
+    const shape = Object.create(null);
+    for (const key of Object.keys(args)) shape[key] = argumentDescriptor(args[key]);
+    return shape;
+}
+
+/** Persist one redacted, content-free record for an executed MCP tool call. */
+export function logToolCall(record) {
+    const filePath = initStructuredLogFile();
+    if (!filePath) return;
+    const safe = redactDiagnostic(record);
+    try {
+        fs.appendFileSync(filePath, `${JSON.stringify(safe)}\n`, 'utf8');
+        if (shouldLog('debug')) console.error(`${timestamp()} [DEBUG] ${JSON.stringify(safe)}`);
+    } catch {
+        warnFileFailure(filePath);
+    }
+}
+
+export function readRecentToolCalls(limit = 200) {
+    const filePath = getStructuredLogFilePath();
+    if (!filePath) return { filePath: null, records: [] };
+    try {
+        const lines = fs.readFileSync(filePath, 'utf8').trimEnd().split('\n').filter(Boolean).slice(-limit);
+        const records = lines.map((line) => JSON.parse(line)).filter((record) => record?.event === 'tool_call');
+        return { filePath, records };
+    } catch (error) {
+        return { filePath, records: [], error: error?.code || 'READ_FAILED' };
+    }
+}
+
+export function resetLoggerForTests() {
+    logStream?.destroy();
+    logStream = null;
+    structuredLogPath = null;
+    warnedPaths = new Set();
 }
 
 function timestamp() {

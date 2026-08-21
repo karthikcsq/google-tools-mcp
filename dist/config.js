@@ -42,6 +42,10 @@ export function getDefaultLogPath() {
     return path.join(configDir, 'server.log');
 }
 
+export function getDefaultJsonlPath() {
+    return path.join(configDir, 'server.jsonl');
+}
+
 function warn(message) {
     process.stderr.write(`WARNING: ${message}\n`);
 }

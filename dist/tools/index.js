@@ -9,9 +9,9 @@ import * as os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getTokenPath, SCOPES } from '../auth.js';
-import { getConfigDir, getDefaultLogPath, getLoadedConfigFiles } from '../config.js';
+import { getConfigDir, getLoadedConfigFiles } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
-import { logger } from '../logger.js';
+import { getLogFilePath, getStructuredLogFilePath, logger, readRecentToolCalls } from '../logger.js';
 import { getPublicErrorMessage, publicError } from '../errors.js';
 import { google } from 'googleapis';
 import { registerLegacyAliases } from './legacyAliases.js';
@@ -72,7 +72,7 @@ function openBrowser(url) {
 const ERROR_HINT =
     '\n\nIf this error is unexpected or unclear, you can:\n' +
     '  • Call the `troubleshoot` tool to run a health check (auth, API connectivity, recent logs).\n' +
-    '  • Call the `feedback` tool to file a bug report with diagnostics auto-attached.';
+    '  • Call the `feedback` tool to file a bug report with optional reviewed diagnostics.';
 
 // Tools that should NOT have the hint appended (would be circular/noisy).
 const HINT_EXCLUDED_TOOLS = new Set(['troubleshoot', 'feedback', 'help', 'logout']);
@@ -233,7 +233,7 @@ export async function registerAllTools(server) {
     for (const [name, { loader }] of Object.entries(CATEGORIES)) {
         await loader(wrappedServer);
     }
-    logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories at startup.`);
+    logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories in ${Math.round(process.uptime() * 1000)}ms.`);
 
     // Register backward-compatible snake_case aliases for the renamed/consolidated
     // tools. Opt-in: set GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true to register them.
@@ -245,14 +245,14 @@ export async function registerAllTools(server) {
         description:
             'Show documentation for google-tools-mcp: setup instructions, available tool categories, environment variables, and troubleshooting. ' +
             'Call this when you need guidance on how to use the Google Workspace tools. ' +
-            'Also available: `troubleshoot` (run health check when tools fail) and `feedback` (submit bug reports/feature requests with diagnostics auto-attached).',
+            'Also available: `troubleshoot` (run health check when tools fail) and `feedback` (submit bug reports/feature requests with optional reviewed diagnostics).',
         parameters: z.object({}),
         execute: async () => {
             const __dirname = path.dirname(fileURLToPath(import.meta.url));
             const readmePath = path.resolve(__dirname, '..', '..', 'README.md');
             const diagnosticsSection = '\n\n## Diagnostics & Feedback\n\n' +
                 '- **`troubleshoot`** — Run a health check when tools fail (checks auth, API connectivity, config, recent logs).\n' +
-                '- **`feedback`** — Submit a bug report or feature request with diagnostics auto-attached (files via GitHub CLI or browser).\n' +
+                '- **`feedback`** — Submit a bug report or feature request with diagnostics only after explicit opt-in and review.\n' +
                 '- **`help`** — Show this documentation.\n';
             try {
                 const readme = await fs.readFile(readmePath, 'utf-8');
@@ -373,16 +373,30 @@ export async function registerAllTools(server) {
                 tokenPath,
                 credentialSource: process.env.GOOGLE_CLIENT_ID ? 'environment' : 'file',
                 scopes: SCOPES,
-                logFile: process.env.GOOGLE_MCP_LOG_FILE || '(not set)',
+                logFile: getLogFilePath() || '(disabled)',
+                structuredLogFile: getStructuredLogFilePath() || '(disabled)',
                 transport: process.env.GOOGLE_MCP_TRANSPORT || 'stdio',
                 port: process.env.GOOGLE_MCP_PORT || '3939',
                 loadedConfigFiles: getLoadedConfigFiles(),
             };
 
-            // --- Recent logs ---
-            const logFilePath = process.env.GOOGLE_MCP_LOG_FILE === '1'
-                ? getDefaultLogPath()
-                : process.env.GOOGLE_MCP_LOG_FILE;
+            // --- Privacy-safe recent activity ---
+            const recent = readRecentToolCalls();
+            if (recent.records.length > 0) {
+                const toolCalls = {};
+                const errorsByCode = {};
+                const failures = [];
+                for (const record of recent.records) {
+                    toolCalls[record.tool] = (toolCalls[record.tool] || 0) + 1;
+                    if (record.outcome !== 'ok') {
+                        errorsByCode[record.errCode] = (errorsByCode[record.errCode] || 0) + 1;
+                        failures.push({ tool: record.tool, reqId: record.reqId, errCode: record.errCode, errMsg: record.errMsg });
+                    }
+                }
+                report.recentLogs = { source: recent.filePath, toolCalls, errorsByCode, lastFailures: failures.slice(-5) };
+            } else {
+            // --- Legacy plain-log fallback ---
+            const logFilePath = getLogFilePath();
             if (logFilePath) {
                 try {
                     const logContent = await fs.readFile(logFilePath, 'utf8');
@@ -393,6 +407,8 @@ export async function registerAllTools(server) {
                 }
             } else {
                 report.recentLogs = '(file logging not enabled — set GOOGLE_MCP_LOG_FILE to enable)';
+            }
+
             }
 
             // --- Environment ---
@@ -419,11 +435,13 @@ export async function registerAllTools(server) {
     server.addTool({
         name: 'feedback',
         description:
-            'Submit feedback or a bug report for google-tools-mcp. Automatically collects diagnostic info, then files the issue via the GitHub CLI (`gh`) if available, or falls back to opening a pre-filled GitHub issue URL in the user\'s browser.',
+            'Draft feedback or a bug report for google-tools-mcp. Review the generated draft, then set confirmPublicPost to true to publish it. Recent activity requires explicit includeDiagnostics opt-in.',
         parameters: z.object({
             type: z.enum(['bug', 'feature']).describe('Type of feedback'),
             title: z.string().describe('Short summary'),
             description: z.string().describe('Detailed description of the issue or feature request'),
+            includeDiagnostics: z.boolean().optional().default(false).describe('Include a privacy-safe recent activity summary. Review it before public submission.'),
+            confirmPublicPost: z.boolean().optional().default(false).describe('Set true only after reviewing the generated draft to allow public submission.'),
         }),
         execute: async (args) => {
             // Collect diagnostics
@@ -465,6 +483,11 @@ export async function registerAllTools(server) {
                 `- **Scopes:** ${enabledScopes.join(', ')}`,
             ].join('\n');
 
+            const recent = args.includeDiagnostics ? readRecentToolCalls() : null;
+            const recentDiagnostics = recent?.records?.length
+                ? `\n\n## Recent Activity (review before submitting)\n\n${JSON.stringify(recent.records.slice(-20), null, 2)}`
+                : '';
+
             const body = [
                 `## Description`,
                 ``,
@@ -473,12 +496,20 @@ export async function registerAllTools(server) {
                 `<details>`,
                 `<summary>Diagnostic Info</summary>`,
                 ``,
-                diagnostics,
+                diagnostics + recentDiagnostics,
                 ``,
                 `</details>`,
             ].join('\n');
 
             const label = args.type === 'bug' ? 'bug' : 'enhancement';
+
+            if (!args.confirmPublicPost) {
+                return JSON.stringify({
+                    method: 'review-required',
+                    markdown: body,
+                    note: 'Review this draft. Call feedback again with confirmPublicPost: true to publish it publicly.',
+                }, null, 2);
+            }
 
             // Try gh CLI first
             const ghResult = await tryGhCli(args.title, body, label);

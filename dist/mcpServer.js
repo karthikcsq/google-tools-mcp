@@ -6,9 +6,9 @@ import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { serveStdio, StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { registerAllTools } from './tools/index.js';
-import { logger as defaultLogger } from './logger.js';
+import { getArgumentShape, logger as defaultLogger, logToolCall } from './logger.js';
 import { checkHttpAuth, extractBearerToken, isOriginAllowed } from './httpAuth.js';
-import { getPublicErrorMessage, registerSecret, redactDiagnostic } from './errors.js';
+import { getPublicErrorMessage, isPublicError, registerSecret, redactDiagnostic } from './errors.js';
 import { createHttpRequestContext, createStdioConnectionContext, fingerprintCredential, runWithRequestContext, closeStdioConnection } from './requestContext.js';
 import { applyResultAnnotations, runWithResultAnnotations, shutdownReadHandleRuntime } from './handleRuntime.js';
 import { randomBytes } from 'node:crypto';
@@ -34,6 +34,7 @@ const SUBSCRIPTION_ID_META_KEY = 'io.modelcontextprotocol/subscriptionId';
 const SERVER_INFO_META_KEY = 'io.modelcontextprotocol/serverInfo';
 
 let runtimeEpochCounter = 0;
+let toolRequestCounter = 0;
 /**
  * Mint a fresh read-handle invalidation epoch for each runtime start.
  *
@@ -65,6 +66,14 @@ function toolFailure(error, toolName, logger) {
     return { content: [{ type: 'text', text: GENERIC_TOOL_FAILURE }], isError: true };
 }
 
+function classifyToolError(error) {
+    if (isPublicError(error)) return { outcome: 'user_error', errCode: 'USER_ERROR', errMsg: getPublicErrorMessage(error) };
+    const status = Number.isInteger(error?.status) ? error.status : undefined;
+    const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_:-]{0,79}$/.test(error.code)
+        ? error.code : status ? `HTTP_${status}` : 'INTERNAL_ERROR';
+    return { outcome: 'error', errCode: code, errMsg: 'The tool could not complete safely.' };
+}
+
 function makeServer(definitions, { logger = defaultLogger, serverInfo = DEFAULT_SERVER_INFO, requestContext = null } = {}) {
     const server = new McpServer(serverInfo, {
         capabilities: { tools: { listChanged: false } },
@@ -73,6 +82,8 @@ function makeServer(definitions, { logger = defaultLogger, serverInfo = DEFAULT_
     });
     for (const definition of definitions) {
         server.registerTool(definition.name, { description: definition.description, inputSchema: definition.parameters }, async (args) => {
+            const startedAt = Date.now();
+            const reqId = ++toolRequestCounter;
             try {
                 // Tools reach the request context ambiently through
                 // dist/requestContext.js rather than through a changed
@@ -85,8 +96,13 @@ function makeServer(definitions, { logger = defaultLogger, serverInfo = DEFAULT_
                 const execute = () => runWithResultAnnotations(async () => (
                     applyResultAnnotations(normalizeResult(await definition.execute(args, { log: logger })))
                 ));
-                return await (requestContext ? runWithRequestContext(requestContext, execute) : execute());
+                const result = await (requestContext ? runWithRequestContext(requestContext, execute) : execute());
+                logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: definition.name, reqId,
+                    durationMs: Date.now() - startedAt, outcome: 'ok', errCode: null, errMsg: null, argShape: getArgumentShape(args) });
+                return result;
             } catch (error) {
+                logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: definition.name, reqId,
+                    durationMs: Date.now() - startedAt, ...classifyToolError(error), argShape: getArgumentShape(args) });
                 return toolFailure(error, definition.name, logger);
             }
         });

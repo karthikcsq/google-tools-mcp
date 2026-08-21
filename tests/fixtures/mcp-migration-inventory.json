@@ -10,6 +10,9 @@
         "file": "dist/auth.js"
       },
       {
+        "file": "dist/clientAdapters.js"
+      },
+      {
         "file": "dist/clients.js"
       },
       {
@@ -68,6 +71,9 @@
       },
       {
         "file": "dist/setup.js"
+      },
+      {
+        "file": "dist/setupInspect.js"
       },
       {
         "file": "dist/tools/calendar/getBusy.js"
@@ -651,6 +657,9 @@
         "file": "tests/setupFastLaunch.test.js"
       },
       {
+        "file": "tests/setupIdempotency.test.js"
+      },
+      {
         "file": "tests/setupUpdateCommand.test.js"
       },
       {
@@ -1180,7 +1189,7 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 419,
+        "line": 435,
         "match": ".addTool({"
       },
       {

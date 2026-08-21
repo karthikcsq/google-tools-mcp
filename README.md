@@ -283,7 +283,9 @@ Launching directly (`node dist/index.js`, or the global-install path below) is f
 - **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl`: the `claude-cli-nodejs` cache root and per-server log folder are corroborated by an independent user report ([anthropics/claude-code#18869](https://github.com/anthropics/claude-code/issues/18869)), though not confirmed with this exact server name
 - **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir, and unconfirmed; if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
 
-Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. google-tools-mcp itself also logs its own startup time on the server's first ready line (e.g. `MCP Server running using stdio in 1123ms`), so if the server logs a fast startup but the client still reports a near-30000ms connection time, the delay is happening before the server process even starts, i.e. in `npx`, not in the server.
+Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. Claude Code captures the pre-handshake category line, such as `Loaded all 12 categories in 1123ms.`, which measures server startup before the connection completes. The later ready line remains useful when you run the server directly. If startup is fast but the client still reports a near-30000ms connection time, the delay is before the server process starts, commonly in `npx`.
+
+For per-tool failures, see the [diagnostics runbook](docs/troubleshooting-runbook.md). It documents the redacted JSONL records written by default and how `troubleshoot` summarizes them.
 
 **Fix:** Install the package globally and point your MCP client directly at it instead of using `npx`:
 
@@ -468,7 +470,8 @@ the default user-profile ACL is sufficient.
 | `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` | No | Comma-separated extra `Origin` values to accept (loopback origins are always allowed). Requests with a foreign browser `Origin` are otherwise rejected |
 | `GOOGLE_MCP_HTTP_NO_AUTH` | No | Set to `1` to disable the bearer-token requirement. Only safe when you fully trust every process on the machine |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
-| `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
+| `GOOGLE_MCP_LOG_FILE` | No | Plain log path. Defaults to `~/.config/google-tools-mcp/server.log`; set `0`, `false`, or `off` to disable, or set a custom path |
+| `GOOGLE_MCP_JSONL_FILE` | No | Structured tool-call JSONL path. Defaults to `~/.config/google-tools-mcp/server.jsonl` (or alongside a custom plain log); set `0`, `false`, or `off` to disable |
 | `GOOGLE_MCP_ENABLE_LEGACY_ALIASES` | No | Set to `true` to register the deprecated snake_case tool aliases (off by default; see [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase)) |
 | `GOOGLE_MCP_WORKSPACE_DIR` | No | Overrides where local working copies of Google Docs are saved (see [Local working copies](#local-working-copies)). Defaults to a per-user directory under the OS temp dir |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
