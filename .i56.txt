@@ -1,0 +1,33 @@
+## Core problem
+
+The suite is green (33 suites, 561 passing / 2 skipped), but several load-bearing runtime behaviors sit outside it, and one dead test file ships to npm without ever executing.
+
+This is the canonical issue for #56, #100, and #101.
+
+## Coverage gaps to close
+
+### `createDocument`
+
+- [ ] Cover root vs. `parentFolderId`.
+- [ ] Cover empty, raw, and markdown `initialContent`.
+- [ ] Assert returned `id`, `name`, URL, fidelity warnings, and API errors.
+- [ ] Add a create-then-write regression test so the read-tracker gap from #94 cannot recur.
+
+### Drive permissions
+
+- [ ] Assert `listPermissions`, `addPermission`, `removePermission`, and `updatePermission` are registered.
+- [ ] Cover exact field mapping and user/group/domain/anyone types.
+- [ ] Verify role/type values are not broadened, the exact permission ID is targeted, shared-drive flags are carried through, and API failures are not reported as success.
+- [ ] Explicitly cover ownership-transfer behavior.
+
+### Dead/unexecuted test and package hygiene
+
+- [ ] Diff and remove `dist/tools/docs/modifyText.test.js`.
+- [ ] Port any unique assertions into `tests/modifyText.test.js`.
+- [ ] Add executing regression coverage for literal `\\n` / `\\t` normalization from #9.
+- [ ] Make CI fail if a `*.test.js` appears under `dist/`, and exclude such files from the published package as defense in depth.
+- [ ] Audit the packed `dist/` payload for other non-runtime artifacts.
+
+## Acceptance
+
+Each listed test runs under the normal Jest configuration, the package tarball contains runtime files only, and removing any protected behavior makes CI fail.
