@@ -41,6 +41,7 @@ export function register(server) {
                 const document = response.data;
                 // Add initial content if provided
                 let contentWarnings;
+                let contentWarningNote;
                 if (args.initialContent) {
                     try {
                         const docs = await getDocsClient();
@@ -76,6 +77,11 @@ export function register(server) {
                     }
                     catch (contentError) {
                         log.warn(`Document created but failed to add initial content: ${contentError.message}`);
+                        // The document itself exists, so preserve that success while
+                        // making the partial result explicit without exposing an
+                        // arbitrary caught API error to the caller.
+                        contentWarnings = ['Document created but initial content failed.'];
+                        contentWarningNote = 'The document was created, but its initial content could not be added.';
                     }
                 }
                 return JSON.stringify({
@@ -84,7 +90,7 @@ export function register(server) {
                     url: document.webViewLink,
                     ...(contentWarnings && {
                         warnings: contentWarnings,
-                        warningNote: `${contentWarnings.length} item${contentWarnings.length === 1 ? '' : 's'} of initialContent could not be converted and ${contentWarnings.length === 1 ? 'was' : 'were'} dropped — see warnings.`,
+                        warningNote: contentWarningNote ?? `${contentWarnings.length} item${contentWarnings.length === 1 ? '' : 's'} of initialContent could not be converted and ${contentWarnings.length === 1 ? 'was' : 'were'} dropped — see warnings.`,
                     }),
                 }, null, 2);
             }

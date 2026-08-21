@@ -2,9 +2,9 @@
 /**
  * Deterministic baseline for the fastmcp-to-SDK migration.
  *
- * This deliberately inventories Git-tracked source files rather than walking
- * the filesystem, so node_modules, build artifacts, editor files, and local
- * test output cannot change the report. The default tool count is loaded
+ * This deliberately inventories versioned and non-ignored working source
+ * files rather than walking the filesystem, so node_modules, build artifacts,
+ * editor files, and local test output cannot change the report. The default tool count is loaded
  * through the production registerAllTools path with legacy aliases disabled.
  *
  * Usage:
@@ -41,13 +41,22 @@ function trackedSourceFiles(repositoryRoot) {
     const gitRoot = asRepositoryPath(repositoryRoot);
     const output = execFileSync(
         'git',
-        ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--', 'dist/**', 'tests/**'],
+        // Include intentional, non-ignored additions so a snapshot can be
+        // regenerated before its accompanying tests are committed. Filter
+        // deleted index entries below for the same reason.
+        ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--cached', '--others', '--exclude-from=.gitignore', '--', 'dist/**', 'tests/**'],
         { cwd: repositoryRoot, encoding: 'utf8' },
     );
+    const deleted = new Set(execFileSync(
+        'git',
+        ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--deleted', '--', 'dist/**', 'tests/**'],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+    ).split(/\r?\n/).filter(Boolean));
 
     const files = output
         .split(/\r?\n/)
         .filter(Boolean)
+        .filter((file) => !deleted.has(file))
         .filter((file) => SOURCE_EXTENSIONS.has(path.extname(file)))
         .sort();
 
@@ -149,8 +158,8 @@ export async function collectMigrationInventory({ repositoryRoot = REPOSITORY_RO
     return {
         schemaVersion: 1,
         inventoryScope: {
-            runtime: 'Git-tracked dist/**/*.js and dist/**/*.mjs files',
-            tests: 'Git-tracked tests/**/*.js and tests/**/*.mjs files',
+            runtime: 'Versioned or non-ignored working dist/**/*.js and dist/**/*.mjs files',
+            tests: 'Versioned or non-ignored working tests/**/*.js and tests/**/*.mjs files',
         },
         files: {
             runtime: inventoryFileEntries(files.runtime),

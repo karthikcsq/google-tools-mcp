@@ -83,14 +83,29 @@ describe('Tool Registration', () => {
         it('registers expected drive tools', () => {
             const expectedTools = [
                 'listDriveFiles',
+                'searchDocuments',
                 'getFileInfo',
                 'createFolder',
-                'deleteFile',
+                'listFolderContents',
+                'getFolderInfo',
                 'moveFile',
                 'copyFile',
                 'renameFile',
+                'deleteFile',
+                'createDocument',
+                'createDocumentFromTemplate',
+                'listSharedDrives',
+                'listSharedWithMe',
                 'downloadFile',
+                'getFilePath',
                 'uploadFile',
+                'listPermissions',
+                'addPermission',
+                'removePermission',
+                'updatePermission',
+                'listRevisions',
+                'getRevision',
+                'updateRevision',
             ];
             for (const name of expectedTools) {
                 expect(tools.has(name)).toBe(true);

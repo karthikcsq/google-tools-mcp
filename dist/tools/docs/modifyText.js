@@ -94,6 +94,15 @@ export function buildModifyTextRequests(opts) {
     }
     return requests;
 }
+
+// Convert escaped newlines and tabs passed by JSON/tool clients into the
+// characters the Docs API expects (issue #9). Exported so the regression
+// tests exercise the shipped implementation rather than a copied regex.
+export function normalizeEscapes(text) {
+    return text
+        ?.replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t');
+}
 export function register(server) {
     server.addTool({
         name: 'modifyText',
@@ -169,9 +178,7 @@ export function register(server) {
                     startIndex = 1;
                 // Normalize escape sequences so literal \n / \t in the input
                 // are converted to real newline / tab characters (issue #9).
-                const normalizedText = args.text
-                    ?.replace(/\\n/g, '\n')
-                    .replace(/\\t/g, '\t');
+                const normalizedText = normalizeEscapes(args.text);
                 const requests = buildModifyTextRequests({
                     startIndex,
                     endIndex,
