@@ -349,9 +349,17 @@ async function fetchBody(docs, documentId, tabId, fields) {
 }
 
 async function fetchBodyEnd(docs, documentId, tabId) {
-    const { content } = await fetchBody(docs, documentId, tabId, tabId ? 'tabs' : 'body(content(endIndex))');
+    // The end measurement is valid only for the revision the insert produced.
+    // A read itself cannot carry WriteControl, so fetch revisionId alongside the
+    // end and compare it to the chain before deriving any shifted delete range.
+    const { content, revisionId } = await fetchBody(
+        docs,
+        documentId,
+        tabId,
+        tabId ? 'revisionId,tabs' : 'revisionId,body(content(endIndex))',
+    );
     if (!content || content.length === 0) throw publicError('No content found in document/tab.');
-    return content[content.length - 1].endIndex;
+    return { endIndex: content[content.length - 1].endIndex, revisionId };
 }
 
 // --- schema -----------------------------------------------------------------
@@ -626,8 +634,14 @@ export function register(server) {
                 //    requests: createParagraphBullets consumes the leading tabs
                 //    that encode list nesting, so the document grows by less
                 //    than the inserted text.
-                const bodyEndAfterInsert = await fetchBodyEnd(docs, args.documentId, tabId);
-                const insertedLength = bodyEndAfterInsert - bodyEndBeforeInsert;
+                const measurement = await fetchBodyEnd(docs, args.documentId, tabId);
+                const insertedRevisionId = writeControlChain.current?.requiredRevisionId;
+                if (!insertedRevisionId || measurement.revisionId !== insertedRevisionId) {
+                    throw publicError('The new markdown was inserted, but the document changed before its new range could be verified. ' +
+                        'No delete was attempted, so the old content was left untouched. Re-read the document and inspect the current ' +
+                        'content before finishing the replacement.');
+                }
+                const insertedLength = measurement.endIndex - bodyEndBeforeInsert;
                 if (insertedLength < 0) {
                     throw publicError('The document shrank unexpectedly during the insert; aborting before deleting the old content. ' +
                         'Re-read the document and inspect it before retrying.');

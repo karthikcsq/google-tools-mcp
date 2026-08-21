@@ -93,31 +93,43 @@ const LISTS = {
  * `documents.batchUpdate` records every request and advances a simulated body
  * end so the post-insert measurement is meaningful.
  */
-function makeGoogle(body, { lists = LISTS, revisionId = 'rev-read', tabId = null, failDelete = false } = {}) {
+function makeGoogle(body, {
+    lists = LISTS,
+    revisionId = 'rev-read',
+    tabId = null,
+    failDelete = false,
+    concurrentChangeBeforeMeasurement = false,
+    concurrentGrowth = 0,
+} = {}) {
     const batches = [];
     let growth = 0;
+    let currentRevisionId = revisionId;
     const bodyEnd = () => body.content[body.content.length - 1].endIndex + growth;
 
-    const bodyWithGrowth = () => ({
+    const bodyWithGrowth = (totalGrowth = growth) => ({
         content: body.content.map((element, i) => (
             i === body.content.length - 1
-                ? { ...element, endIndex: element.endIndex + growth }
+                ? { ...element, endIndex: element.endIndex + totalGrowth }
                 : element
         )),
     });
 
     const documentsGet = jest.fn(async ({ fields, includeTabsContent }) => {
         if (fields === 'namedStyles') return { data: { namedStyles: { styles: [] } } };
-        const payloadBody = fields?.includes('endIndex)') ? bodyWithGrowth() : body;
+        const concurrentMeasurement = concurrentChangeBeforeMeasurement && batches.length > 0 && fields?.includes('endIndex)');
+        const payloadBody = fields?.includes('endIndex)')
+            ? bodyWithGrowth(growth + (concurrentMeasurement ? concurrentGrowth : 0))
+            : body;
+        const responseRevisionId = concurrentMeasurement ? 'rev-concurrent' : currentRevisionId;
         if (includeTabsContent) {
             return {
                 data: {
-                    revisionId,
+                    revisionId: responseRevisionId,
                     tabs: [{ tabProperties: { tabId: tabId ?? 'tab-1' }, documentTab: { body: payloadBody, lists } }],
                 },
             };
         }
-        return { data: { revisionId, body: payloadBody, lists } };
+        return { data: { revisionId: responseRevisionId, body: payloadBody, lists } };
     });
 
     const batchUpdate = jest.fn(async ({ requestBody }) => {
@@ -138,7 +150,8 @@ function makeGoogle(body, { lists = LISTS, revisionId = 'rev-read', tabId = null
                 growth -= countTabsInserted(batches, startIndex, endIndex);
             }
         }
-        return { data: { writeControl: { requiredRevisionId: `rev-${batches.length}` } } };
+        currentRevisionId = `rev-${batches.length}`;
+        return { data: { writeControl: { requiredRevisionId: currentRevisionId } } };
     });
 
     fakeDocs = { documents: { get: documentsGet, batchUpdate } };
@@ -685,6 +698,21 @@ describe('replaceRangeWithMarkdown — dryRun and partial-failure reporting', ()
         // The reported leftover range is the one the tool actually asked to delete.
         const attempted = requestsOf(batches, 'deleteContentRange')[0].deleteContentRange.range;
         expect(attempted.endIndex - attempted.startIndex).toBe(bounds[4].start - bounds[1].end);
+    });
+
+    it('does not delete a computed range when a concurrent edit changes the measurement revision', async () => {
+        const { batches } = makeGoogle(buildBody(SECTIONS), {
+            concurrentChangeBeforeMeasurement: true,
+            concurrentGrowth: 9,
+        });
+        const documentId = `range-concurrent-measurement-${Date.now()}`;
+        trackRead(documentId, null, '# doc', 'rev-read');
+
+        await expect(getTool().execute({
+            documentId, target: { afterHeading: 'Roadmap' }, markdown: '- rewritten\n',
+        }, { log: noopLog })).rejects.toThrow(/changed before its new range could be verified[\s\S]*No delete was attempted/);
+
+        expect(requestsOf(batches, 'deleteContentRange')).toHaveLength(0);
     });
 });
 

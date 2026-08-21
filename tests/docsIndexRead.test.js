@@ -147,6 +147,20 @@ function tabbedDoc() {
     };
 }
 
+function inlineTypesDoc() {
+    const types = ['footnoteReference', 'columnBreak', 'equation', 'richLink', 'person', 'autoText'];
+    return {
+        revisionId: 'rev-inline-types',
+        body: {
+            content: types.map((type, index) => ({
+                startIndex: index + 1,
+                endIndex: index + 2,
+                paragraph: { elements: [{ startIndex: index + 1, endIndex: index + 2, [type]: {} }] },
+            })),
+        },
+    };
+}
+
 beforeEach(() => {
     documentsGet.mockReset();
     mintDocsReadHandle.mockClear();
@@ -244,6 +258,15 @@ describe('readDocument format=index: output shape', () => {
         const json = await readDocument({ documentId: 'doc-1', format: 'json' });
         expect(index.length).toBeLessThan(json.length);
     });
+
+    it('indexes every documented inline element type the index mask requests', async () => {
+        documentsGet.mockResolvedValue({ data: inlineTypesDoc() });
+        const payload = JSON.parse(await readDocument({ documentId: 'doc-inline-types', format: 'index' }));
+
+        expect(payload.elements.map((element) => element.type)).toEqual([
+            'footnoteReference', 'columnBreak', 'equation', 'richLink', 'person', 'autoText',
+        ]);
+    });
 });
 
 describe('readDocument format=index: field masks', () => {
@@ -260,6 +283,9 @@ describe('readDocument format=index: field masks', () => {
         expect(request.fields).toContain('namedStyleType');
         expect(request.fields).toContain('nestingLevel');
         expect(request.fields).toContain('revisionId');
+        for (const field of ['footnoteReference', 'columnBreak', 'equation', 'richLink', 'person', 'autoText']) {
+            expect(request.fields).toContain(field);
+        }
     });
 
     it('requests the narrow tab mask, never "*", for a tab-scoped read', async () => {
@@ -272,6 +298,9 @@ describe('readDocument format=index: field masks', () => {
         expect(request.includeTabsContent).toBe(true);
         expect(request.fields).toContain('tabProperties(tabId)');
         expect(request.fields).toContain('revisionId');
+        for (const field of ['footnoteReference', 'columnBreak', 'equation', 'richLink', 'person', 'autoText']) {
+            expect(request.fields).toContain(field);
+        }
     });
 
     it('returns tab-local indices and labels every element with its tab', async () => {

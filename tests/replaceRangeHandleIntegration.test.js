@@ -53,6 +53,7 @@ let batchUpdate;
 
 function setUpGoogleMocks() {
     let growth = 0;
+    let currentRevisionId = REVISION;
     const content = () => {
         const elements = [];
         let index = 1;
@@ -71,7 +72,7 @@ function setUpGoogleMocks() {
         documents: {
             get: jest.fn(async ({ fields }) => {
                 if (fields === 'namedStyles') return { data: { namedStyles: { styles: [] } } };
-                return { data: { revisionId: REVISION, body: { content: content() }, lists: {} } };
+                return { data: { revisionId: currentRevisionId, body: { content: content() }, lists: {} } };
             }),
             batchUpdate: jest.fn(async ({ requestBody }) => {
                 for (const request of requestBody.requests) {
@@ -80,7 +81,8 @@ function setUpGoogleMocks() {
                         growth -= request.deleteContentRange.range.endIndex - request.deleteContentRange.range.startIndex;
                     }
                 }
-                return { data: { writeControl: { requiredRevisionId: 'rev-after-write' } } };
+                currentRevisionId = 'rev-after-write';
+                return { data: { writeControl: { requiredRevisionId: currentRevisionId } } };
             }),
         },
     };

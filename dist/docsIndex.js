@@ -40,7 +40,8 @@ export const DEFAULT_INDEX_MAX_RESPONSE_CHARS = 100000;
 const INDEX_BODY_SUBTREE =
     'content(startIndex,endIndex,' +
     'paragraph(paragraphStyle(namedStyleType),bullet(listId,nestingLevel),' +
-    'elements(startIndex,endIndex,textRun(content),inlineObjectElement(inlineObjectId),horizontalRule,pageBreak)),' +
+    'elements(startIndex,endIndex,textRun(content),inlineObjectElement(inlineObjectId),horizontalRule,pageBreak,' +
+    'footnoteReference,columnBreak,equation,richLink,person,autoText)),' +
     'table(rows,columns,tableRows(startIndex,endIndex,' +
     'tableCells(startIndex,endIndex,content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content))))))),' +
     'sectionBreak,tableOfContents)';
