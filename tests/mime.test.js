@@ -316,6 +316,46 @@ describe('header folding', () => {
         expect(folded).toBe(`Subject: ${'A'.repeat(65)}\r\n${' '.repeat(5)}${'B'.repeat(10)}`);
         expect(unfold(folded)).toBe(`Subject: ${value}`);
     });
+
+    it('keeps a long whitespace run with its following token out of a blank physical line', async () => {
+        const subject = `abc${' '.repeat(100)}def`;
+        const folded = foldHeader('Subject', subject);
+        const raw = await constructRawMessage(null, { to: ['a@b.com'], subject, body: 'body' });
+        const { headerBlock, body } = splitMessage(raw);
+
+        expect(folded.split('\r\n')).not.toContain('');
+        expect(unfold(folded)).toBe(`Subject: ${subject}`);
+        expect(unfold(logicalHeader(headerBlock, 'Subject'))).toBe(`Subject: ${subject}`);
+        expect(headerBlock).toContain('Content-Type: text/plain; charset="UTF-8"');
+        expect(headerBlock).toContain('Content-Transfer-Encoding: quoted-printable');
+        expect(headerBlock).toContain('MIME-Version: 1.0');
+        expect(body).toBe('body');
+    });
+
+    it('keeps adversarial whitespace and encoded unbreakable values fold-safe', () => {
+        const values = [
+            ' leading whitespace',
+            'trailing whitespace ',
+            ...[1, 2, 78, 100, 999].map((count) => `left${' '.repeat(count)}right`),
+            'left\t\tright',
+            '\t'.repeat(100),
+            ' '.repeat(999),
+            'A'.repeat(1200),
+            'A'.repeat(SOFT_LINE_LIMIT - octets('Subject: ')),
+        ];
+
+        for (const value of values) {
+            const encoded = encodeHeaderValue(value);
+            const folded = foldHeader('Subject', encoded);
+
+            for (const line of folded.split('\r\n')) {
+                expect(line).not.toBe('');
+                expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
+            }
+            expect(unfold(folded)).toBe(`Subject: ${encoded}`);
+            expect(decodeEncodedWords(unfold(folded))).toBe(`Subject: ${value}`);
+        }
+    });
 });
 
 // ---------------------------------------------------------------------------

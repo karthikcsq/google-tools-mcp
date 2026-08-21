@@ -156,7 +156,9 @@ const getThreadHeaders = (thread) => {
 // get the same RFC 5322 folding as To/Cc/Bcc/Subject above.
 const foldThreadHeader = (header) => {
     const separator = header.indexOf(':');
-    return foldHeader(header.slice(0, separator), header.slice(separator + 2));
+    const fieldName = header.slice(0, separator);
+    const value = header.slice(separator + 2);
+    return foldHeader(fieldName, fieldName.toLowerCase() === 'subject' ? encodeHeaderValue(value) : value);
 };
 
 export const isHtmlBody = (text) => /<\/?[a-z][\s\S]*?>/i.test(text);

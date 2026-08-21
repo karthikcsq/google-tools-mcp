@@ -70,9 +70,28 @@ export const foldHeader = (name, value) => {
             // Fold BEFORE existing whitespace, never by dropping it. RFC 5322
             // unfolding removes CRLF but retains WSP, so this preserves every
             // byte of a caller's whitespace run.
-            if (line !== prefix && byteLen(line) + byteLen(segment) > SOFT_LINE_LIMIT) {
+            if (line !== prefix
+                && byteLen(segment) <= SOFT_LINE_LIMIT
+                && byteLen(line) + byteLen(segment) > SOFT_LINE_LIMIT) {
                 lines.push(line);
                 line = segment;
+            } else if (byteLen(line) + byteLen(segment) > SOFT_LINE_LIMIT) {
+                // A whitespace run may itself be wider than a physical line.
+                // Split it only at its own existing WSP bytes. This is still a
+                // legal fold and means the next token never has to move an
+                // all-whitespace line into an empty physical line.
+                let remaining = segment;
+                while (remaining) {
+                    const capacity = SOFT_LINE_LIMIT - byteLen(line);
+                    if (capacity === 0) {
+                        lines.push(line);
+                        line = '';
+                        continue;
+                    }
+                    const chunk = remaining.slice(0, capacity);
+                    line += chunk;
+                    remaining = remaining.slice(chunk.length);
+                }
             } else {
                 line += segment;
             }
@@ -85,8 +104,17 @@ export const foldHeader = (name, value) => {
                 // The word does not fit after whitespace that did. Move that
                 // same whitespace to the continuation rather than replacing
                 // it with one generated space.
-                lines.push(line.slice(0, -whitespace.length));
-                line = whitespace;
+                const beforeWhitespace = line.slice(0, -whitespace.length);
+                if (beforeWhitespace) {
+                    lines.push(beforeWhitespace);
+                    line = whitespace;
+                } else if (byteLen(line) + byteLen(segment) > SOFT_LINE_LIMIT) {
+                    // The line is entirely an existing whitespace run. Keep
+                    // one byte with the token so its continuation is nonempty,
+                    // and emit the rest as its own legal whitespace line.
+                    lines.push(line.slice(0, -1));
+                    line = line.slice(-1);
+                }
             } else {
                 lines.push(line);
                 line = ' ';
@@ -506,7 +534,7 @@ const BOUNDARY_PREFIX = '----=_Part_';
  */
 export const makeBoundary = (contents) => {
     const parts = (Array.isArray(contents) ? contents : [contents]).map((entry) => String(entry ?? ''));
-    const digest = createHash('sha256').update(parts.join(' '), 'utf8').digest('hex').slice(0, 32);
+    const digest = createHash('sha256').update(parts.join('\x00'), 'utf8').digest('hex').slice(0, 32);
     for (let attempt = 0; ; attempt += 1) {
         const candidate = `${BOUNDARY_PREFIX}${digest}${attempt ? `_${attempt}` : ''}`;
         if (!parts.some((entry) => entry.includes(candidate))) return candidate;

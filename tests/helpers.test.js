@@ -52,6 +52,59 @@ describe('header folding', () => {
         expect(foldHeader('Subject', 'Short subject')).toBe('Subject: Short subject');
     });
 
+    it('folds a 1000-character thread Subject within the RFC 5322 hard line limit', async () => {
+        const gmail = {
+            users: {
+                threads: {
+                    get: async () => ({
+                        data: {
+                            messages: [{
+                                payload: {
+                                    headers: [{ name: 'Subject', value: 'A'.repeat(1000) }],
+                                },
+                            }],
+                        },
+                    }),
+                },
+            },
+        };
+        const raw = await constructRawMessage(gmail, { threadId: 'thread-1', body: 'Reply' });
+        const headerBlock = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
+        const subjectLines = headerBlock.split('\r\n').filter(line => line === 'Subject:' || line.startsWith('Subject:') || line.startsWith(' '));
+
+        expect(subjectLines.length).toBeGreaterThan(1);
+        expect(subjectLines.every(line => Buffer.byteLength(line, 'utf8') <= 998)).toBe(true);
+    });
+
+    it('preserves literal message identifiers in thread In-Reply-To and References headers', async () => {
+        const messageId = '<reply@example.com>';
+        const previousId = '<previous@example.com>';
+        const gmail = {
+            users: {
+                threads: {
+                    get: async () => ({
+                        data: {
+                            messages: [{
+                                payload: {
+                                    headers: [
+                                        { name: 'Message-ID', value: messageId },
+                                        { name: 'References', value: previousId },
+                                    ],
+                                },
+                            }],
+                        },
+                    }),
+                },
+            },
+        };
+        const raw = await constructRawMessage(gmail, { threadId: 'thread-1', body: 'Reply' });
+        const headerBlock = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
+
+        expect(headerBlock).toContain(`In-Reply-To: ${messageId}`);
+        expect(headerBlock).toContain(`References: ${previousId} ${messageId}`);
+        expect(headerBlock).not.toContain('=3C');
+    });
+
     it('neutralizes embedded line breaks, including a lone CR', () => {
         expect(foldHeader('Subject', 'Hello\rBcc: evil@x.com')).toBe('Subject: Hello Bcc: evil@x.com');
         expect(foldHeader('Subject', 'Hello\r\n  world\nagain')).toBe('Subject: Hello world again');
