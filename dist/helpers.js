@@ -150,17 +150,6 @@ const getThreadHeaders = (thread) => {
     return headers;
 };
 
-// Legacy soft-line-break wrapper. It is NOT quoted-printable (it escapes
-// nothing and emits bare LF), which is exactly the mismatch issue #73 fixed:
-// every live builder now uses qpEncodeBody from dist/mime.js instead. Kept
-// exported only because the dead duplicate modules issue #74 deletes still
-// import it.
-export const wrapTextBody = (text) => text.split('\n').map(line => {
-    if (line.length <= 76) return line;
-    const chunks = line.match(/.{1,76}/g) || [];
-    return chunks.join('=\n');
-}).join('\n');
-
 // getThreadHeaders returns pre-joined "Name: value" strings; split on the
 // first colon (header field-names are always ASCII and never contain one)
 // and re-fold the value so threading headers (Subject/In-Reply-To/References)
@@ -497,4 +486,18 @@ export const formatMessageMetadata = (message) => {
         subject: get('subject'),
         date: get('date'),
     };
+};
+
+// Shared clean/metadata/full dispatch used by every Gmail message and thread
+// tool that returns a message (getMessage, listMessages, batchGetMessages,
+// getThread, listThreads, batchGetThreads). `format` selects the shape;
+// `clean` and `metadata` return a new object, `full` (the default fallthrough)
+// mutates message.payload in place via processMessagePart and returns the
+// same message reference — callers that need a fresh object for 'full' should
+// not rely on referential identity of the input.
+export const formatMessageForOutput = (message, params) => {
+    if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
+    if (params.format === 'metadata') return formatMessageMetadata(message);
+    if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml, params.maxBodyChars);
+    return message;
 };

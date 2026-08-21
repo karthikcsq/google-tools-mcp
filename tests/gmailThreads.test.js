@@ -119,6 +119,66 @@ describe('Gmail thread output controls', () => {
         expect(result.messages).toEqual([]);
     });
 
+    it('maxMessages: 0 returns all messages in getThread (0 = unlimited, matching maxBodyChars)', async () => {
+        getThread.mockResolvedValueOnce(threeMessageThread());
+
+        const result = JSON.parse(await getThreadTool.execute({
+            id: 'thread-1',
+            format: 'metadata',
+            maxMessages: 0,
+        }));
+
+        expect(result.messages.map(message => message.id)).toEqual([
+            'message-1',
+            'message-2',
+            'message-3',
+        ]);
+    });
+
+    it('maxMessages: 0 returns all messages per thread in listThreads', async () => {
+        listThreads.mockResolvedValueOnce({ data: { threads: [{ id: 'thread-1' }] } });
+        getThread.mockResolvedValueOnce(threeMessageThread());
+
+        const result = JSON.parse(await listThreadsTool.execute({
+            format: 'metadata',
+            maxMessages: 0,
+        }));
+
+        expect(result.threads[0].messages.map(m => m.id)).toEqual([
+            'message-1',
+            'message-2',
+            'message-3',
+        ]);
+    });
+
+    it('maxMessages: 0 returns all messages per thread in batchGetThreads', async () => {
+        getThread.mockResolvedValueOnce(threeMessageThread());
+
+        const result = JSON.parse(await batchGetThreadsTool.execute({
+            ids: ['thread-1'],
+            format: 'metadata',
+            maxMessages: 0,
+        }));
+
+        expect(result[0].messages.map(m => m.id)).toEqual([
+            'message-1',
+            'message-2',
+            'message-3',
+        ]);
+    });
+
+    it('rejects a negative maxMessages at the schema level for getThread, listThreads, and batchGetThreads', () => {
+        expect(() => getThreadTool.parameters.parse({ id: 't1', maxMessages: -1 })).toThrow();
+        expect(() => listThreadsTool.parameters.parse({ maxMessages: -1 })).toThrow();
+        expect(() => batchGetThreadsTool.parameters.parse({ ids: ['t1'], maxMessages: -1 })).toThrow();
+    });
+
+    it('accepts maxMessages: 0 at the schema level for getThread, listThreads, and batchGetThreads', () => {
+        expect(() => getThreadTool.parameters.parse({ id: 't1', maxMessages: 0 })).not.toThrow();
+        expect(() => listThreadsTool.parameters.parse({ maxMessages: 0 })).not.toThrow();
+        expect(() => batchGetThreadsTool.parameters.parse({ ids: ['t1'], maxMessages: 0 })).not.toThrow();
+    });
+
     it('applies maxMessages per thread in listThreads', async () => {
         listThreads.mockResolvedValueOnce({ data: { threads: [{ id: 'thread-1' }] } });
         getThread.mockResolvedValueOnce(threeMessageThread());

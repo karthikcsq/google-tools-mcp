@@ -4,7 +4,6 @@ import {
     processMessagePart,
     findHeader,
     formatEmailList,
-    wrapTextBody,
     foldHeader,
     isHtmlBody,
     constructRawMessage,
@@ -12,6 +11,8 @@ import {
     getNestedHistory,
     stripQuotedHistory,
     formatMessageClean,
+    formatMessageMetadata,
+    formatMessageForOutput,
     capArrayByResponseBudget,
     capToResponseBudget,
     makeOmissionStub,
@@ -224,32 +225,6 @@ describe('formatEmailList', () => {
     it('returns empty array for null/undefined', () => {
         expect(formatEmailList(null)).toEqual([]);
         expect(formatEmailList(undefined)).toEqual([]);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// wrapTextBody
-// ---------------------------------------------------------------------------
-describe('wrapTextBody', () => {
-    it('does not wrap lines <= 76 chars', () => {
-        const short = 'Hello, world!';
-        expect(wrapTextBody(short)).toBe(short);
-    });
-
-    it('wraps long lines at 76-char boundaries', () => {
-        const long = 'A'.repeat(200);
-        const wrapped = wrapTextBody(long);
-        // Should contain soft line breaks
-        expect(wrapped).toContain('=\n');
-        // First chunk should be 76 chars
-        const firstChunk = wrapped.split('=\n')[0];
-        expect(firstChunk.length).toBe(76);
-    });
-
-    it('preserves existing newlines', () => {
-        const input = 'line1\nline2\nline3';
-        const result = wrapTextBody(input);
-        expect(result.split('\n').length).toBe(3);
     });
 });
 
@@ -862,5 +837,63 @@ describe('getNestedHistory', () => {
     it('returns empty for non-text parts with no sub-parts', () => {
         const part = { mimeType: 'application/octet-stream' };
         expect(getNestedHistory(part)).toBe('');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// formatMessageForOutput — the shared clean/metadata/full dispatch used by
+// getMessage, listMessages, batchGetMessages, getThread, listThreads, and
+// batchGetThreads (issue #74). Pure function: given a message and the tool
+// params object, it must reproduce exactly what each of those six call sites
+// used to inline separately.
+// ---------------------------------------------------------------------------
+describe('formatMessageForOutput', () => {
+    const fixtureMessage = () => ({
+        id: 'msg-1',
+        threadId: 'thread-1',
+        labelIds: ['INBOX'],
+        snippet: 'hello',
+        payload: {
+            mimeType: 'text/plain',
+            headers: [
+                { name: 'From', value: 'a@example.com' },
+                { name: 'To', value: 'b@example.com' },
+                { name: 'Subject', value: 'Hi' },
+                { name: 'Date', value: 'Mon, 1 Jul 2024 09:00:00 +0000' },
+            ],
+            body: { data: Buffer.from('Hello world').toString('base64') },
+        },
+    });
+
+    it("dispatches to formatMessageClean for format: 'clean'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { format: 'clean', maxBodyChars: 3000, includeQuoted: false });
+        expect(result).toEqual(formatMessageClean(fixtureMessage(), 3000, false));
+    });
+
+    it("dispatches to formatMessageMetadata for format: 'metadata'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { format: 'metadata' });
+        expect(result).toEqual(formatMessageMetadata(fixtureMessage()));
+    });
+
+    it("falls through to processMessagePart (mutating payload in place) for format: 'full'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { format: 'full', includeBodyHtml: false, maxBodyChars: 3000 });
+        expect(result).toBe(msg); // same reference: full mode mutates and returns the input
+        expect(result.payload.body.data).toBe('Hello world');
+    });
+
+    it("treats an undefined/omitted format the same as 'full'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { maxBodyChars: 3000 });
+        expect(result).toBe(msg);
+        expect(result.payload.body.data).toBe('Hello world');
+    });
+
+    it('handles a message with no payload without throwing', () => {
+        const msg = { id: 'no-payload' };
+        expect(() => formatMessageForOutput(msg, { format: 'full' })).not.toThrow();
+        expect(formatMessageForOutput(msg, { format: 'full' })).toBe(msg);
     });
 });

@@ -115,6 +115,12 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   `createHttpAuthenticate` hook. One `checkHttpAuth` middleware now runs ahead
   of routing and covers every method and path.
 - The `server.on('disconnect')` session-cleanup handlers.
+- `dist/tools/drafts.js`, `labels.js`, `messages.js`, `settings.js`,
+  `threads.js` — pre-consolidation Gmail tool forks left over from the
+  `dist/tools/gmail/*` consolidation. Never imported (`dist/tools/index.js`
+  always loaded Gmail tools via explicit `./gmail/*.js` paths); nobody could
+  have been depending on a deep import of these paths, since none of the
+  five ever registered a tool the server actually exposed. (#74)
 
 
 ## 2.0.0

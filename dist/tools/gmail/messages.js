@@ -1,7 +1,7 @@
 // Gmail Message tools
 import { z } from 'zod';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, formatMessageClean, formatMessageMetadata } from '../../helpers.js';
+import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments, findHeader, formatEmailList, getNestedHistory, getPlainTextBody, isHtmlBody, formatMessageForOutput } from '../../helpers.js';
 import { assembleMultipart, assembleSinglePart, encodeAddressList, encodeHeaderValue, foldHeader, toBase64Url } from '../../mime.js';
 
 export function register(server) {
@@ -240,10 +240,7 @@ export function register(server) {
         execute: async (params) => {
             const gmail = await getGmailClient();
             const { data } = await gmail.users.messages.get({ userId: 'me', id: params.id, format: 'full' });
-            if (params.format === 'clean') return JSON.stringify(formatMessageClean(data, params.maxBodyChars, params.includeQuoted));
-            if (params.format === 'metadata') return JSON.stringify(formatMessageMetadata(data));
-            if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml, params.maxBodyChars);
-            return JSON.stringify(data);
+            return JSON.stringify(formatMessageForOutput(data, params));
         },
     });
 
@@ -276,10 +273,7 @@ export function register(server) {
                     data.messages.map(async ({ id }) => {
                         try {
                             const { data: msg } = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
-                            if (params.format === 'clean') return formatMessageClean(msg, params.maxBodyChars, params.includeQuoted);
-                            if (params.format === 'metadata') return formatMessageMetadata(msg);
-                            if (msg.payload) msg.payload = processMessagePart(msg.payload, params.includeBodyHtml, params.maxBodyChars);
-                            return msg;
+                            return formatMessageForOutput(msg, params);
                         } catch (e) {
                             return { id, error: e.message || 'Failed to retrieve message' };
                         }
@@ -365,10 +359,7 @@ export function register(server) {
                 params.ids.map(async (id) => {
                     try {
                         const { data } = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
-                        if (params.format === 'clean') return formatMessageClean(data, params.maxBodyChars, params.includeQuoted);
-                        if (params.format === 'metadata') return formatMessageMetadata(data);
-                        if (data.payload) data.payload = processMessagePart(data.payload, params.includeBodyHtml, params.maxBodyChars);
-                        return data;
+                        return formatMessageForOutput(data, params);
                     } catch (error) {
                         return { id, error: error.message || 'Failed to retrieve message' };
                     }
