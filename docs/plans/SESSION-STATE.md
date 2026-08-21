@@ -21,7 +21,19 @@ If two pieces would conflict or depend on each other, they go in the same PR.
 
 - Orchestrator model: delegate implementation, review everything myself, never take
   "done" at face value, commit and report myself.
-- **No Codex subagents** (out of usage). Sonnet by default, Opus for large/hairy work.
+- **Delegate to Codex models ONLY** (changed 2026-08-20). Claude subagents are no longer used
+  for implementation. Routing:
+  - `gpt-5.6-terra` — default worker. Scoped tasks with a clear file set and gates to run.
+  - `gpt-5.6-luna` — easier, shorter, unambiguous tasks and quick fixes, where the brief can
+    say exactly what to do.
+  - `gpt-5.6-sol` — large, hairy, complex work, or when an alternative perspective is needed.
+  Invocation that works on this machine (Bash tool, NOT PowerShell; `-a` does not exist in
+  this build, use `-s`):
+  ```
+  codex exec --skip-git-repo-check -C "<worktree>" -s workspace-write -m gpt-5.6-terra     -o "<outfile>.md" "<prompt>" < /dev/null
+  ```
+  `< /dev/null` is mandatory or it hangs forever. `-s read-only` for review/recon.
+  Long runs go through the Bash tool's `run_in_background`.
 - Cross-review rule: Fable cannot review its own work. Reviews go to a different agent.
 - When review comments, ideas, or new context arrive mid-work: **log to the task list
   first**, finish the current piece, then act. Append later context to the same task.
