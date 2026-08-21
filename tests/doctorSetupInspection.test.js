@@ -2,7 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createDoctorDesiredEntryResolver, formatDoctorReport } from '../dist/doctor.js';
+import { createDoctorDesiredEntryResolver, formatDoctorReport, resolveDoctorTransport } from '../dist/doctor.js';
 import { loadEnvFile } from '../dist/config.js';
 import { registerSecret } from '../dist/errors.js';
 import { inspectSetup } from '../dist/setupInspect.js';
@@ -12,6 +12,19 @@ const desired = { command: 'node', args: ['server.js'], env: { CODEX_MCP_PROTOCO
 const adapter = (name, current) => ({ name, async detect() { return true; }, async get() { return current; } });
 
 describe('doctor report and setup inspection', () => {
+    it('uses the HTTP transport persisted by setup for a fresh doctor invocation without a transport environment variable', async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-doctor-transport-'));
+        try {
+            const envPath = path.join(root, '.env');
+            await fs.writeFile(envPath, 'GOOGLE_MCP_TRANSPORT=http\n');
+            const persisted = Object.fromEntries((await fs.readFile(envPath, 'utf8')).trim().split('\n').map(line => line.split('=')));
+            expect(await resolveDoctorTransport({ env: persisted, getHttpStatus: async () => ({ healthy: false }) })).toBe('http');
+        } finally { await fs.rm(root, { recursive: true, force: true }); }
+    });
+
+    it('uses a healthy managed HTTP service when no transport was persisted', async () => {
+        expect(await resolveDoctorTransport({ env: {}, getHttpStatus: async () => ({ healthy: true }) })).toBe('http');
+    });
     it('redacts entry Authorization values, unknown raw output, and registered secrets in JSON and human output', () => {
         const unregister = registerSecret('registered-doctor-secret');
         try {

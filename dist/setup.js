@@ -664,10 +664,16 @@ export async function mergeCredentialEnv(envPath, values, { readFile = fs.readFi
     } finally { await unlink(temporary).catch(() => {}); }
 }
 
+export async function persistTransportSelection(transport, { configDir = getConfigDir() } = {}) {
+    if (transport !== 'http') return;
+    await mergeCredentialEnv(path.join(configDir, '.env'), { GOOGLE_MCP_TRANSPORT: 'http' });
+}
+
 export async function configureTransport(launch, {
     select = p.select,
     ensureToken = ensureHttpToken,
     startService = startHttpService,
+    persistTransport = () => persistTransportSelection('http'),
     env = process.env,
 } = {}) {
     const answer = await select({
@@ -689,6 +695,8 @@ export async function configureTransport(launch, {
     const config = resolveHttpServiceConfig(env);
     const service = await startService({ launch, env });
     if (!service.healthy) throw new Error('Shared HTTP lifecycle did not become healthy; client configuration was not changed.');
+    await persistTransport();
+    env.GOOGLE_MCP_TRANSPORT = 'http';
     return Object.freeze({ transport: 'http', url: service.state.url || config.url, token: tokenInfo.token,
         tokenSource: tokenInfo.source, serviceStatus: service.status });
 }

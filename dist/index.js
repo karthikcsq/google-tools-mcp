@@ -22,7 +22,7 @@ import {
     startHttpService, stopHttpService,
 } from './httpLifecycle.js';
 import { ensureHttpToken, publishHttpState, removeHttpState, removeHttpStateSync } from './httpState.js';
-import { createDoctorDesiredEntryResolver, formatDoctorReport } from './doctor.js';
+import { createDoctorDesiredEntryResolver, formatDoctorReport, resolveDoctorTransport } from './doctor.js';
 
 // Read our own published version straight from package.json rather than
 // hardcoding it. `files: ["dist"]` in package.json only restricts what npm
@@ -117,9 +117,9 @@ if (process.argv[2] === 'doctor') {
     const { inspectSetup } = await import('./setupInspect.js');
     try {
         const launch = { command: process.execPath, args: [entrypointPath] };
-        const doctorTransport = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase();
-        const httpConfigForDoctor = ['http', 'httpstream'].includes(doctorTransport) ? resolveHttpServiceConfig(process.env) : null;
-        const transport = ['http', 'httpstream'].includes(doctorTransport)
+        const doctorTransport = await resolveDoctorTransport({ env: process.env, getHttpStatus: getHttpServiceStatus });
+        const httpConfigForDoctor = doctorTransport === 'http' ? resolveHttpServiceConfig(process.env) : null;
+        const transport = doctorTransport === 'http'
             ? { transport: 'http', url: httpConfigForDoctor.url }
             : { transport: 'stdio' };
         const desiredEntries = await createDoctorDesiredEntryResolver({ launch, transport, env: process.env });

@@ -83,14 +83,27 @@ function rotateIfAlreadyOversized(filePath) {
     }
 }
 
+function ensurePrivateDirectory(directory) {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(directory, 0o700); } catch (error) { if (process.platform !== 'win32') throw error; }
+}
+
+function openPrivateLogFile(filePath) {
+    const descriptor = fs.openSync(filePath, 'a', 0o600);
+    try { fs.chmodSync(filePath, 0o600); } catch (error) {
+        if (process.platform !== 'win32') throw error;
+    }
+    fs.closeSync(descriptor);
+}
+
 function initLogFile() {
     if (logStream) return;
     const logPath = getLogFilePath();
     if (!logPath) return;
     try {
-        fs.mkdirSync(path.dirname(logPath), { recursive: true });
+        ensurePrivateDirectory(path.dirname(logPath));
         rotateIfAlreadyOversized(logPath);
-        fs.closeSync(fs.openSync(logPath, 'a'));
+        openPrivateLogFile(logPath);
         plainBytes = fs.statSync(logPath).size;
         logStream = { path: logPath };
     } catch {
@@ -104,10 +117,10 @@ function initStructuredLogFile() {
     structuredLogPath = filePath || false;
     if (!filePath) return null;
     try {
-        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        ensurePrivateDirectory(path.dirname(filePath));
         rotateIfAlreadyOversized(filePath);
         structuredBytes = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-        fs.closeSync(fs.openSync(filePath, 'a'));
+        openPrivateLogFile(filePath);
         return filePath;
     } catch {
         warnFileFailure(filePath);

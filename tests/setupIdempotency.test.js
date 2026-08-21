@@ -7,7 +7,7 @@ import {
 } from '../dist/clientAdapters.js';
 import { checkLaunchTarget, inspectToken } from '../dist/setupInspect.js';
 import { persistTokenCredentials, SCOPES } from '../dist/auth.js';
-import { backupClientEntry, backupEnvFile, configureTransport, mergeCredentialEnv, registerClients, runSetup } from '../dist/setup.js';
+import { backupClientEntry, backupEnvFile, configureTransport, mergeCredentialEnv, persistTransportSelection, registerClients, runSetup } from '../dist/setup.js';
 
 const desired = { command: 'node', args: ['/installed/google-tools-mcp/dist/index.js'] };
 
@@ -59,14 +59,23 @@ describe('setup client reconciliation', () => {
             select: async () => 'http',
             ensureToken: async () => { events.push('token'); return { token, source: 'file' }; },
             startService: async () => { events.push('service'); return { healthy: true, status: 'started', state: { url: 'http://127.0.0.1:3939/mcp' } }; },
+            persistTransport: async () => { events.push('persist'); },
             env: {},
         });
-        expect(events).toEqual(['token', 'service']);
+        expect(events).toEqual(['token', 'service', 'persist']);
         expect(result).toMatchObject({ transport: 'http', token, serviceStatus: 'started' });
         await expect(configureTransport({ command: 'node', args: ['index.js'] }, {
             select: async () => 'http', ensureToken: async () => ({ token, source: 'file' }),
             startService: async () => { throw new Error('dead endpoint'); }, env: {},
         })).rejects.toThrow(/dead endpoint/);
+    });
+
+    it('persists an HTTP setup selection for a fresh process', async () => {
+        const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-http-selection-'));
+        try {
+            await persistTransportSelection('http', { configDir });
+            expect(await fs.readFile(path.join(configDir, '.env'), 'utf8')).toBe('GOOGLE_MCP_TRANSPORT=http\n');
+        } finally { await fs.rm(configDir, { recursive: true, force: true }); }
     });
 
     it('adds a missing entry', async () => {
@@ -78,6 +87,15 @@ describe('setup client reconciliation', () => {
     it('leaves an identical full entry alone', async () => {
         const client = adapter({ ...desired, env: { PROFILE: 'work' } });
         await expect(reconcileClientEntry(client, { ...desired, env: { PROFILE: 'work' } })).resolves.toMatchObject({ status: 'unchanged' });
+        expect(client.calls).toEqual([]);
+    });
+
+    it('treats nested object key order as equal and skips repair', async () => {
+        const actual = { command: 'node', args: ['server.js'], env: { B: '2', A: '1' }, headers: { Z: 'last', A: 'first' } };
+        const expected = { headers: { A: 'first', Z: 'last' }, env: { A: '1', B: '2' }, args: ['server.js'], command: 'node' };
+        const client = adapter(actual);
+        expect(entriesEqual(actual, expected)).toBe(true);
+        await expect(reconcileClientEntry(client, expected)).resolves.toMatchObject({ ok: true, status: 'unchanged' });
         expect(client.calls).toEqual([]);
     });
 

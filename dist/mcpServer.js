@@ -67,7 +67,10 @@ function toolFailure(error, toolName, logger) {
 }
 
 function classifyToolError(error) {
-    if (isPublicError(error)) return { outcome: 'user_error', errCode: 'USER_ERROR', errMsg: getPublicErrorMessage(error) };
+    // Public errors can deliberately include caller-provided identifiers or
+    // text. Keep the JSONL diagnostic useful without turning it into a copy of
+    // the caller-visible response, which is persisted by default.
+    if (isPublicError(error)) return { outcome: 'user_error', errCode: 'USER_ERROR', errMsg: 'caller-visible error' };
     const status = Number.isInteger(error?.status) ? error.status : undefined;
     const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_:-]{0,79}$/.test(error.code)
         ? error.code : status ? `HTTP_${status}` : 'INTERNAL_ERROR';

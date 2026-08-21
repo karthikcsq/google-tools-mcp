@@ -4,6 +4,14 @@ import { buildClientEntry } from './clientAdapters.js';
 import { getConfigDir, getLoadedConfigKeys } from './config.js';
 import { redactDiagnostic } from './errors.js';
 
+export async function resolveDoctorTransport({ env = process.env, getHttpStatus } = {}) {
+    const configured = String(env.GOOGLE_MCP_TRANSPORT || '').trim().toLowerCase();
+    if (configured === 'http' || configured === 'httpstream') return 'http';
+    if (configured) return 'stdio';
+    const status = await getHttpStatus?.();
+    return status?.healthy ? 'http' : 'stdio';
+}
+
 export async function readPersistedHttpToken({ configDir = getConfigDir(), lstat = fs.lstat, readFile = fs.readFile } = {}) {
     const tokenPath = path.join(configDir, 'http-token');
     try {

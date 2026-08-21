@@ -24,7 +24,7 @@ function request(name, args) {
 }
 
 describe('structured diagnostics', () => {
-    it('writes one redacted record per success and classified failure without argument values', async () => {
+    it('keeps caller-supplied public-error text out of JSONL while retaining the classified failure', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-jsonl-'));
         process.env.GOOGLE_MCP_LOG_FILE = join(directory, 'server.log');
         process.env.GOOGLE_MCP_JSONL_FILE = join(directory, 'server.jsonl');
@@ -32,7 +32,7 @@ describe('structured diagnostics', () => {
         const release = registerSecret(secret);
         const factory = await prepareMcpServerFactory({ registerTools: async (server) => {
             server.addTool({ name: 'ok', parameters: z.object({ body: z.string() }), execute: async () => 'ok' });
-            server.addTool({ name: 'user', parameters: z.object({}), execute: async () => { throw publicError(`fix token=${secret}`); } });
+            server.addTool({ name: 'user', parameters: z.object({}), execute: async () => { throw publicError(`fix requested text=diagnostic-caller-content-7f8e9d`); } });
             server.addTool({ name: 'broken', parameters: z.object({}), execute: async () => { throw new Error(`private ${secret}`); } });
         } });
         const handler = createV2HttpHandler(factory, { auth: { token: 'diagnostic-test-token' } });
@@ -46,6 +46,8 @@ describe('structured diagnostics', () => {
             expect(records.map((record) => record.reqId)).toEqual([...records.map((record) => record.reqId)].sort((a, b) => a - b));
             expect(records[0].argShape).toEqual({ body: `string:${Buffer.byteLength(`content ${secret}`, 'utf8')}` });
             expect(JSON.stringify(records)).not.toContain(secret);
+            expect(JSON.stringify(records)).not.toContain('diagnostic-caller-content-7f8e9d');
+            expect(records[1]).toMatchObject({ tool: 'user', outcome: 'user_error', errCode: 'USER_ERROR', errMsg: 'caller-visible error' });
             expect(new Set(Object.keys(records[0]))).toEqual(new Set(['ts', 'event', 'tool', 'reqId', 'durationMs', 'outcome', 'errCode', 'errMsg', 'argShape']));
         } finally { release(); await handler.close(); await rm(directory, { recursive: true, force: true }); }
     });
@@ -91,5 +93,24 @@ describe('structured diagnostics', () => {
         expect(await readFile(jsonlPath, 'utf8')).toContain('"tool":"after"');
         errorSpy.mockRestore();
         await rm(directory, { recursive: true, force: true });
+    });
+
+    it('creates diagnostic directories and files private by default', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'google-tools-mcp-private-'));
+        const directory = join(root, 'diagnostics');
+        const plainPath = join(directory, 'server.log');
+        const jsonlPath = join(directory, 'server.jsonl');
+        process.env.GOOGLE_MCP_LOG_FILE = plainPath;
+        process.env.GOOGLE_MCP_JSONL_FILE = jsonlPath;
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            logger.info('create private plain log');
+            logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'private', reqId: 1, durationMs: 0, outcome: 'ok', errCode: null, errMsg: null, argShape: {} });
+            if (process.platform !== 'win32') {
+                expect((await stat(directory)).mode & 0o777).toBe(0o700);
+                expect((await stat(plainPath)).mode & 0o777).toBe(0o600);
+                expect((await stat(jsonlPath)).mode & 0o777).toBe(0o600);
+            }
+        } finally { errorSpy.mockRestore(); await rm(root, { recursive: true, force: true }); }
     });
 });
