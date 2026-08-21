@@ -9,6 +9,8 @@ import { exec, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { getConfigDir } from './config.js';
+import { createClientAdapters, reconcileClientEntry } from './clientAdapters.js';
+import { checkCredentials, inspectToken } from './setupInspect.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -46,6 +48,7 @@ const AUDIENCE_URL =
 // wizard actually tells the user about it instead of just asserting a
 // hardcoded string.
 export const UPDATE_COMMAND = 'npm install -g google-tools-mcp@latest';
+let backupSequence = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -236,7 +239,7 @@ async function enableApisProgrammatically(authClient, projectNumber) {
 // ---------------------------------------------------------------------------
 // Setup flow
 // ---------------------------------------------------------------------------
-export async function runSetup() {
+export async function runFirstInstallSetup() {
     console.clear();
 
     p.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
@@ -397,9 +400,11 @@ export async function runSetup() {
     await fs.mkdir(configDir, { recursive: true });
     const envPath = path.join(configDir, '.env');
     const envContent = `GOOGLE_CLIENT_ID=${clientId}\nGOOGLE_CLIENT_SECRET=${clientSecret}\n`;
+    const envBackup = await backupEnvFile(envPath);
     await fs.writeFile(envPath, envContent);
     const displayPath = envPath.replace(os.homedir(), '~');
     p.log.success(`Credentials saved to ${chalk.dim(displayPath)}`);
+    if (envBackup) p.log.message(chalk.dim(`Previous credentials backed up to ${envBackup.replace(os.homedir(), '~')}`));
 
     // ── Step 4: Authenticate ─────────────────────────────────────────────
     p.log.step(chalk.cyan.bold('Step 4') + chalk.dim(' · ') + 'Authenticate with Google');
@@ -549,61 +554,9 @@ export async function runSetup() {
         ) + chalk.cyan(UPDATE_COMMAND) + chalk.dim(' to update, or re-run this wizard.'));
     }
 
-    const hasCodex = hasCli('codex');
-    const hasClaude = hasCli('claude');
-    if (hasCodex) {
-        const install = await p.confirm({
-            message: 'Add to Codex as an MCP server?',
-            active: 'yes',
-            inactive: 'no',
-            initialValue: true,
-        });
-        if (p.isCancel(install)) cancelled();
+    const registered = await registerClients(launch);
 
-        const codexAddCmd = `codex mcp add google -- ${launch.shellDisplay}`;
-        if (install) {
-            const s = p.spinner();
-            s.start('Adding to Codex...');
-            try {
-                await runCommand(codexAddCmd);
-                s.stop('Added to Codex!');
-            } catch (err) {
-                s.stop('Failed to add automatically');
-                p.log.warn(`Error: ${err.message}`);
-                p.log.message(`Run manually:\n${chalk.cyan(codexAddCmd)}`);
-            }
-        } else {
-            p.log.message(`To add later:\n${chalk.cyan(codexAddCmd)}`);
-        }
-    }
-
-    if (hasClaude) {
-        const install = await p.confirm({
-            message: 'Add to Claude Code as a user-scope MCP server?',
-            active: 'yes',
-            inactive: 'no',
-            initialValue: true,
-        });
-        if (p.isCancel(install)) cancelled();
-
-        const claudeAddCmd = `claude mcp add -s user google -- ${launch.shellDisplay}`;
-        if (install) {
-            const s = p.spinner();
-            s.start('Adding to Claude Code...');
-            try {
-                await runCommand(claudeAddCmd);
-                s.stop('Added to Claude Code!');
-            } catch (err) {
-                s.stop('Failed to add automatically');
-                p.log.warn(`Error: ${err.message}`);
-                p.log.message(`Run manually:\n${chalk.cyan(claudeAddCmd)}`);
-            }
-        } else {
-            p.log.message(`To add later:\n${chalk.cyan(claudeAddCmd)}`);
-        }
-    }
-
-    if (!hasCodex && !hasClaude) {
+    if (!registered.detected) {
         const jsonSnippet = JSON.stringify({
             mcpServers: { google: { command: launch.command, args: launch.args } },
         });
@@ -634,4 +587,95 @@ export async function runSetup() {
     ].join('\n'));
 
     p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' You\'re ready to use google-tools-mcp.'));
+}
+
+function redactEntry(value) {
+    if (Array.isArray(value)) return value.map(redactEntry);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /token|secret|password|authorization/i.test(key) ? '[REDACTED]' : redactEntry(item)]));
+    return value;
+}
+
+export async function backupClientEntry(adapter, entry, { configDir = getConfigDir(), appendFile = fs.appendFile, mkdir = fs.mkdir } = {}) {
+    await mkdir(configDir, { recursive: true });
+    await appendFile(path.join(configDir, 'client-config-backups.log'), `${JSON.stringify({ timestamp: new Date().toISOString(), client: adapter.name, entry: redactEntry(entry) })}\n`);
+}
+
+export async function backupEnvFile(envPath, { copyFile = fs.copyFile, readdir = fs.readdir, unlink = fs.unlink } = {}) {
+    try { await fs.access(envPath); } catch { return null; }
+    const backup = `${envPath}.bak.${Date.now()}-${backupSequence++}`;
+    await copyFile(envPath, backup);
+    const backups = (await readdir(path.dirname(envPath))).filter(name => name.startsWith(`${path.basename(envPath)}.bak.`)).sort().reverse();
+    await Promise.all(backups.slice(2).map(name => unlink(path.join(path.dirname(envPath), name))));
+    return backup;
+}
+
+async function registerClients(launch) {
+    const adapters = createClientAdapters();
+    let detected = false;
+    for (const adapter of adapters) {
+        if (!await adapter.detect()) continue;
+        detected = true;
+        const result = await reconcileClientEntry(adapter, { command: launch.command, args: launch.args }, {
+            confirm: async ({ action, current }) => {
+                if (action === 'replace') {
+                    p.log.message(`${adapter.name} current entry:\n${chalk.dim(current.raw || JSON.stringify(current.entry))}\nRecommended:\n${chalk.cyan(adapter.addCommand({ command: launch.command, args: launch.args }))}`);
+                }
+                const answer = await p.confirm({ message: action === 'replace' ? `Repair the ${adapter.name} google MCP entry?` : `Add to ${adapter.name} as an MCP server?`, initialValue: true });
+                if (p.isCancel(answer)) cancelled();
+                return answer;
+            },
+            backup: current => backupClientEntry(adapter, current.entry),
+        });
+        if (!result.ok) {
+            p.log.error(`${adapter.name} configuration failed. Setup stopped without claiming completion.`);
+            p.log.message(`Manual recovery command:\n${chalk.cyan(result.manualCommand)}`);
+            throw new Error(`${adapter.name} MCP registration ${result.status}`);
+        }
+        const message = { added: 'Added', replaced: 'Repaired', unchanged: 'Already correct, skipped', declined: 'Left unchanged' }[result.status];
+        p.log.success(`${adapter.name}: ${message}.`);
+    }
+    return { detected };
+}
+
+async function existingLaunchTarget() {
+    if (!hasCli('npm')) return null;
+    try {
+        const root = (await runCommand('npm root -g')).trim();
+        const indexPath = resolveGlobalIndexPath(root);
+        await fs.access(indexPath);
+        return buildLaunchCommand({ ok: true, indexPath });
+    } catch { return null; }
+}
+
+// Returning users do not revisit cloud-project or credential prompts.  The
+// token check deliberately has no persistence side effects; only an explicit
+// reauth or failed refresh reaches the browser flow.
+export async function runSetup({ reauth = false } = {}) {
+    const credentials = await checkCredentials();
+    if (!credentials.configured) return runFirstInstallSetup();
+
+    console.clear();
+    p.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
+    const token = await inspectToken();
+    p.log.message(token.status === 'valid' && !reauth
+        ? 'Existing OAuth credentials and token are valid. Skipping project setup and OAuth.'
+        : `Existing credentials found; token is ${token.status}${reauth ? ' and --reauth was requested' : ''}.`);
+    if (reauth || token.status !== 'valid') {
+        p.log.step('Authenticate with Google');
+        const { runAuthFlow } = await import('./auth.js');
+        await runAuthFlow();
+        p.log.success('Authenticated with Google.');
+    }
+    let launch = await existingLaunchTarget();
+    if (!launch) {
+        const result = await installGlobalFastLaunch();
+        let runningIndexPath = resolveRunningIndexPath();
+        try { await fs.access(runningIndexPath); } catch { runningIndexPath = null; }
+        launch = buildLaunchCommand(result, { runningIndexPath });
+        if (!launch) throw new Error('Could not find or install a usable MCP launch command.');
+    } else {
+        p.log.success('Existing global launch target is valid. Skipping npm install.');
+    }
+    await registerClients(launch);
+    p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' Existing configuration was preserved or repaired.'));
 }

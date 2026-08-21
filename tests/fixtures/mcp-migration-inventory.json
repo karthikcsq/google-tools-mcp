@@ -13,6 +13,9 @@
         "file": "dist/clients.js"
       },
       {
+        "file": "dist/config.js"
+      },
+      {
         "file": "dist/docsHandles.js"
       },
       {
@@ -523,6 +526,9 @@
     "tests": [
       {
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
+      },
+      {
+        "file": "tests/config.test.js"
       },
       {
         "file": "tests/docsHandleLeaseFailure.test.js"

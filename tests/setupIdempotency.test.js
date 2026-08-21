@@ -1,0 +1,117 @@
+import { describe, expect, it } from '@jest/globals';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import { reconcileClientEntry, entriesEqual, parseClientEntry } from '../dist/clientAdapters.js';
+import { checkLaunchTarget, inspectToken } from '../dist/setupInspect.js';
+import { SCOPES } from '../dist/auth.js';
+import { backupClientEntry, backupEnvFile } from '../dist/setup.js';
+
+const desired = { command: 'node', args: ['/installed/google-tools-mcp/dist/index.js'] };
+
+function adapter(entry, failures = {}) {
+    const calls = [];
+    return {
+        name: 'Fake', calls,
+        get: async () => entry === undefined ? { status: 'missing' } : { status: 'found', entry, raw: JSON.stringify(entry) },
+        add: async value => { calls.push(['add', value]); if (failures.add && calls.filter(([name]) => name === 'add').length === 1) throw new Error('add failed'); if (failures.rollback) throw new Error('rollback failed'); },
+        remove: async () => { calls.push(['remove']); if (failures.remove) throw new Error('remove failed'); },
+        addCommand: value => `fake add ${JSON.stringify(value)}`,
+        removeCommand: 'fake remove',
+    };
+}
+
+describe('setup client reconciliation', () => {
+    it('adds a missing entry', async () => {
+        const client = adapter();
+        await expect(reconcileClientEntry(client, desired)).resolves.toMatchObject({ ok: true, status: 'added' });
+        expect(client.calls).toEqual([['add', desired]]);
+    });
+
+    it('leaves an identical full entry alone', async () => {
+        const client = adapter({ ...desired, env: { PROFILE: 'work' } });
+        await expect(reconcileClientEntry(client, { ...desired, env: { PROFILE: 'work' } })).resolves.toMatchObject({ status: 'unchanged' });
+        expect(client.calls).toEqual([]);
+    });
+
+    it('replaces a different entry after confirmation', async () => {
+        const client = adapter({ command: 'npx', args: ['-y', 'google-tools-mcp@latest'] });
+        const result = await reconcileClientEntry(client, desired, { confirm: async () => true });
+        expect(result).toMatchObject({ ok: true, status: 'replaced' });
+        expect(client.calls).toEqual([['remove'], ['add', desired]]);
+    });
+
+    it('leaves a different entry untouched when repair is declined', async () => {
+        const client = adapter({ command: 'old-node', args: ['server.js'] });
+        await expect(reconcileClientEntry(client, desired, { confirm: async () => false })).resolves.toMatchObject({ ok: true, status: 'declined' });
+        expect(client.calls).toEqual([]);
+    });
+
+    it('reports remove failure instead of declaring success', async () => {
+        const client = adapter({ command: 'old-node', args: [] }, { remove: true });
+        await expect(reconcileClientEntry(client, desired)).resolves.toMatchObject({ ok: false, status: 'remove-failed' });
+    });
+
+    it('rolls back the captured old entry when replacement add fails', async () => {
+        const old = { command: 'old-node', args: ['server.js'] };
+        const client = adapter(old, { add: true });
+        await expect(reconcileClientEntry(client, desired)).resolves.toMatchObject({ ok: false, status: 'add-failed-rolled-back' });
+        expect(client.calls).toEqual([['remove'], ['add', desired], ['add', old]]);
+    });
+
+    it('prints a restoration command when rollback fails', async () => {
+        const client = adapter({ command: 'old-node', args: [] }, { add: true, rollback: true });
+        await expect(reconcileClientEntry(client, desired)).resolves.toMatchObject({ ok: false, status: 'rollback-failed', manualCommand: expect.stringContaining('old-node') });
+    });
+
+    it('treats env and unknown transport fields as meaningful differences', () => {
+        expect(entriesEqual({ ...desired, env: { A: '1' } }, desired)).toBe(false);
+        expect(entriesEqual({ ...desired, headers: { Authorization: 'Bearer x' } }, desired)).toBe(false);
+    });
+});
+
+describe('setup inspection', () => {
+    it('inspects a valid token without rewriting it', async () => {
+        const original = JSON.stringify({ refresh_token: 'refresh', scopes: SCOPES });
+        class OAuth2 { setCredentials() {} async refreshAccessToken() { return { credentials: {} }; } }
+        const result = await inspectToken({ tokenPath: 'token.json', readFile: async () => original, OAuth2, credentialsLoader: async () => ({ client_id: 'id', client_secret: 'secret' }) });
+        expect(result.status).toBe('valid');
+        expect(original).toContain('refresh');
+    });
+
+    it('reports refresh failure and scope mismatch without calling a mutating auth flow', async () => {
+        const token = JSON.stringify({ refresh_token: 'refresh', scopes: SCOPES });
+        class OAuth2 { setCredentials() {} async refreshAccessToken() { throw new Error('revoked'); } }
+        await expect(inspectToken({ tokenPath: 'token.json', readFile: async () => token, OAuth2, credentialsLoader: async () => ({}) })).resolves.toMatchObject({ status: 'refresh-failed' });
+        await expect(inspectToken({ tokenPath: 'token.json', readFile: async () => JSON.stringify({ refresh_token: 'x', scopes: [] }) })).resolves.toMatchObject({ status: 'scope-mismatch' });
+    });
+
+    it('flags moving npx targets and missing absolute paths', async () => {
+        expect(checkLaunchTarget({ command: 'npx', args: ['-y', 'google-tools-mcp@latest'] })).toMatchObject({ healthy: false });
+        await expect(checkLaunchTarget({ command: 'node', args: ['/missing/index.js'] }, { exists: async () => false })).resolves.toMatchObject({ healthy: false, problem: expect.stringContaining('missing') });
+    });
+
+    it('parses JSON client output and preserves unparseable output for review', () => {
+        expect(parseClientEntry('{"name":"google","command":"node","args":["x"]}')).toMatchObject({ status: 'found', entry: { command: 'node', args: ['x'] } });
+        expect(parseClientEntry('unrecognized cli output')).toMatchObject({ status: 'unknown', raw: 'unrecognized cli output' });
+    });
+});
+
+describe('setup backups', () => {
+    it('keeps two recoverable credential backups and redacts client secrets', async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-setup-backup-'));
+        try {
+            const envPath = path.join(root, '.env');
+            await fs.writeFile(envPath, 'GOOGLE_CLIENT_SECRET=old');
+            await backupEnvFile(envPath);
+            await backupEnvFile(envPath);
+            await backupEnvFile(envPath);
+            const backups = (await fs.readdir(root)).filter(name => name.startsWith('.env.bak.'));
+            expect(backups).toHaveLength(2);
+            await backupClientEntry({ name: 'Fake' }, { command: 'node', env: { API_TOKEN: 'secret-value' } }, { configDir: root });
+            const log = await fs.readFile(path.join(root, 'client-config-backups.log'), 'utf8');
+            expect(log).toContain('[REDACTED]');
+            expect(log).not.toContain('secret-value');
+        } finally { await fs.rm(root, { recursive: true, force: true }); }
+    });
+});

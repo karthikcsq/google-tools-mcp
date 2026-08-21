@@ -15,6 +15,7 @@ import { getConfigDir, loadConfigFiles } from './config.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRootDir = path.resolve(__dirname, '..');
+const cwd = process.cwd();
 const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
 
 // ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ const SCOPES = [
 // ---------------------------------------------------------------------------
 // Client secrets resolution
 // ---------------------------------------------------------------------------
-async function loadClientSecrets() {
+export async function loadClientSecrets() {
     loadConfigFiles();
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };

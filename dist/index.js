@@ -8,6 +8,7 @@
 //   google-tools-mcp          Start the MCP server (default)
 //   google-tools-mcp auth     Run the interactive OAuth flow
 //   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
+//   google-tools-mcp doctor   Inspect setup without changing files or tokens
 import './config.js';
 import { createRequire } from 'module';
 import { logger } from './logger.js';
@@ -28,11 +29,32 @@ const { version: packageVersion } = require('../package.json');
 if (process.argv[2] === 'setup') {
     const { runSetup } = await import('./setup.js');
     try {
-        await runSetup();
+        await runSetup({ reauth: process.argv.slice(3).includes('--reauth') });
         process.exit(0);
     } catch (error) {
         console.error('\nSetup failed:', error.message || error);
         process.exit(1);
+    }
+}
+
+// --- Doctor subcommand ---
+if (process.argv[2] === 'doctor') {
+    const json = process.argv.slice(3).includes('--json');
+    const { createClientAdapters } = await import('./clientAdapters.js');
+    const { inspectSetup } = await import('./setupInspect.js');
+    try {
+        const report = await inspectSetup({ adapters: createClientAdapters() });
+        if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        else {
+            console.log(report.healthy ? 'Setup is healthy.' : 'Setup problems found:');
+            for (const problem of report.problems) console.log(`- ${problem}`);
+            for (const client of report.clients) console.log(`- ${client.client}: ${client.status}`);
+        }
+        process.exit(report.healthy ? 0 : 1);
+    } catch {
+        if (json) process.stdout.write(`${JSON.stringify({ healthy: false, inspectionError: true })}\n`);
+        else console.error('Could not inspect setup.');
+        process.exit(2);
     }
 }
 
