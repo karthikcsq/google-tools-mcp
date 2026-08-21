@@ -122,6 +122,16 @@ describe('RFC 2047 encoded-words', () => {
         expect(encodeHeaderValue('Quarterly report (Q3) - draft #2')).toBe('Quarterly report (Q3) - draft #2');
     });
 
+    it('encodes an overlong whitespace-free ASCII subject into foldable words without changing its decoded value', () => {
+        const subject = 'A'.repeat(1000);
+        const encoded = encodeHeaderValue(subject);
+        const folded = foldHeader('Subject', encoded);
+
+        expect(encoded).toMatch(/^=\?UTF-8\?B\?/);
+        for (const line of folded.split('\r\n')) expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
+        expect(decodeEncodedWords(unfold(folded))).toBe(`Subject: ${subject}`);
+    });
+
     it('leaves an already-encoded caller value alone (it is pure ASCII)', () => {
         const preEncoded = '=?UTF-8?B?5pel?=';
         expect(encodeHeaderValue(preEncoded)).toBe(preEncoded);
@@ -271,8 +281,40 @@ describe('mimeType validation', () => {
     });
 
     it('accepts base64url and whitespace-wrapped base64, normalizing both', () => {
-        expect(normalizeBase64('a-b_c=')).toBe('a+b/c=');
+        expect(normalizeBase64('--__')).toBe('++//');
         expect(normalizeBase64('QUJD\r\nREVG')).toBe('QUJDREVG');
+    });
+
+    it('restores omitted base64url padding and preserves the original attachment bytes', () => {
+        for (const bytes of [Buffer.from([1]), Buffer.from([1, 2])]) {
+            const unpadded = bytes.toString('base64url');
+            const normalized = normalizeBase64(unpadded);
+            expect(normalized).toBe(bytes.toString('base64'));
+            expect(Buffer.from(normalized, 'base64').equals(bytes)).toBe(true);
+        }
+    });
+
+    it('rejects impossible base64 quantum lengths without exposing caller data', () => {
+        for (const invalid of ['A', 'A=']) {
+            let thrown;
+            try { normalizeBase64(invalid); } catch (error) { thrown = error; }
+            expect(isPublicError(thrown)).toBe(true);
+            expect(getPublicErrorMessage(thrown)).not.toContain(invalid);
+        }
+    });
+
+    it('leaves valid already-padded base64 byte-identical', () => {
+        expect(normalizeBase64('AQI=')).toBe('AQI=');
+    });
+});
+
+describe('header folding', () => {
+    it('preserves a multi-space run exactly when folding before it', () => {
+        const value = `${'A'.repeat(65)}${' '.repeat(5)}${'B'.repeat(10)}`;
+        const folded = foldHeader('Subject', value);
+
+        expect(folded).toBe(`Subject: ${'A'.repeat(65)}\r\n${' '.repeat(5)}${'B'.repeat(10)}`);
+        expect(unfold(folded)).toBe(`Subject: ${value}`);
     });
 });
 

@@ -167,15 +167,24 @@ describe('Gmail thread output controls', () => {
         ]);
     });
 
-    it('rejects a negative maxMessages at the schema level for getThread, listThreads, and batchGetThreads', () => {
-        expect(() => getThreadTool.parameters.parse({ id: 't1', maxMessages: -1 })).toThrow();
-        expect(() => listThreadsTool.parameters.parse({ maxMessages: -1 })).toThrow();
-        expect(() => batchGetThreadsTool.parameters.parse({ ids: ['t1'], maxMessages: -1 })).toThrow();
-    });
+    it('keeps negative and zero maxMessages unlimited, and floors fractional values', async () => {
+        for (const toolCase of [
+            { tool: getThreadTool, params: { id: 'thread-1' }, result: output => output.messages },
+            { tool: listThreadsTool, params: { format: 'metadata' }, result: output => output.threads[0].messages, list: true },
+            { tool: batchGetThreadsTool, params: { ids: ['thread-1'], format: 'metadata' }, result: output => output[0].messages },
+        ]) {
+            for (const maxMessages of [-1, 0, 2.7]) {
+                if (toolCase.list) listThreads.mockResolvedValueOnce({ data: { threads: [{ id: 'thread-1' }] } });
+                getThread.mockResolvedValueOnce(threeMessageThread());
+                const output = JSON.parse(await toolCase.tool.execute({ ...toolCase.params, maxMessages }));
+                expect(toolCase.result(output).map(message => message.id)).toEqual(
+                    maxMessages > 0 ? ['message-2', 'message-3'] : ['message-1', 'message-2', 'message-3']
+                );
+            }
+        }
 
-    it('accepts maxMessages: 0 at the schema level for getThread, listThreads, and batchGetThreads', () => {
-        expect(() => getThreadTool.parameters.parse({ id: 't1', maxMessages: 0 })).not.toThrow();
-        expect(() => listThreadsTool.parameters.parse({ maxMessages: 0 })).not.toThrow();
+        expect(() => getThreadTool.parameters.parse({ id: 't1', maxMessages: -1 })).not.toThrow();
+        expect(() => listThreadsTool.parameters.parse({ maxMessages: 2.7 })).not.toThrow();
         expect(() => batchGetThreadsTool.parameters.parse({ ids: ['t1'], maxMessages: 0 })).not.toThrow();
     });
 

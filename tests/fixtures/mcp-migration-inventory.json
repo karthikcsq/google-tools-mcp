@@ -543,6 +543,9 @@
         "file": "tests/gmailConsolidation.test.js"
       },
       {
+        "file": "tests/gmailDispatchExtraction.test.js"
+      },
+      {
         "file": "tests/gmailThreads.test.js"
       },
       {
@@ -595,6 +598,9 @@
       },
       {
         "file": "tests/oauthCallbackPort.test.js"
+      },
+      {
+        "file": "tests/packageContents.test.js"
       },
       {
         "file": "tests/packageScripts.test.js"

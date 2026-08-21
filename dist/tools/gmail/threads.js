@@ -74,8 +74,8 @@ const capThreadMessages = (thread, maxResponseChars) => {
 };
 
 // Shared by getThread/listThreads/batchGetThreads: applies the "latest N"
-// maxMessages slice (0 = unlimited, matching maxBodyChars' convention;
-// negatives are rejected at the schema level via .int().min(0)), dispatches
+// maxMessages slice (0 and negatives = unlimited; fractional values are
+// floored for compatibility), dispatches
 // each remaining message through the shared
 // clean/metadata/full formatter, then caps the whole thread against
 // maxResponseChars. messageIds filtering (getThread-only) happens before this
@@ -83,7 +83,7 @@ const capThreadMessages = (thread, maxResponseChars) => {
 // messages (e.g. an error stub already substituted in its place).
 const applyThreadMessageFormatting = (thread, params) => {
     if (!thread.messages) return thread;
-    if (params.maxMessages > 0) thread.messages = thread.messages.slice(-params.maxMessages);
+    if (params.maxMessages > 0) thread.messages = thread.messages.slice(-Math.floor(params.maxMessages));
     thread.messages = thread.messages.map(message => formatMessageForOutput(message, params));
     return capThreadMessages(thread, params.maxResponseChars);
 };
@@ -99,7 +99,7 @@ export function register(server) {
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: skip quote detection entirely and always return the full body, including any quoted reply history. Default false. Use this if quotedHistoryAmbiguous keeps showing up and you'd rather have the full text every time than a per-message flag."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
             messageIds: z.array(z.string()).optional().describe("Only include messages with these IDs in the thread response. An empty array is treated as no filter."),
-            maxMessages: z.number().int().min(0).optional().describe("Only include the latest N messages of the thread (applied after messageIds). Omit for all. 0 = unlimited. Use 1-2 for the usual 'just the latest reply' case."),
+            maxMessages: z.number().optional().describe("Only include the latest N messages of the thread (applied after messageIds). Omit for all. 0 or a negative value means unlimited. Fractional values are floored. Use 1-2 for the usual 'just the latest reply' case."),
             maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across all messages combined (unlike maxBodyChars, which only caps each message independently). When exceeded, the oldest messages are dropped (keeping the latest) and the response reports responseTruncated/totalMessages/includedMessages/truncationNote. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
@@ -126,7 +126,7 @@ export function register(server) {
             maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: skip quote detection entirely and always return the full body, including any quoted reply history. Default false. Use this if quotedHistoryAmbiguous keeps showing up and you'd rather have the full text every time than a per-message flag."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
-            maxMessages: z.number().int().min(0).optional().describe("Only include the latest N messages per thread. Omit for all. 0 = unlimited."),
+            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all. 0 or a negative value means unlimited. Fractional values are floored."),
             maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across every thread this call fetches combined (unlike maxBodyChars, which only caps each message independently, and applies per-thread besides). When exceeded, whole threads are dropped from the end of the list first; each retained thread is also capped individually. Reports responseTruncated/totalThreads/includedThreads/truncationNote at the top level, and the same per-thread when an individual thread's messages were cut. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
@@ -182,7 +182,7 @@ export function register(server) {
             maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: skip quote detection entirely and always return the full body, including any quoted reply history. Default false. Use this if quotedHistoryAmbiguous keeps showing up and you'd rather have the full text every time than a per-message flag."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
-            maxMessages: z.number().int().min(0).optional().describe("Only include the latest N messages per thread. Omit for all. 0 = unlimited."),
+            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all. 0 or a negative value means unlimited. Fractional values are floored."),
             maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across every requested thread combined (unlike maxBodyChars, which only caps each message independently, and applies per-thread besides). When exceeded, whole threads are dropped from the end of the ids list first; each retained thread is also capped individually. Truncation is reported on the last returned thread via batchResponseTruncated/totalThreadsRequested/includedThreads/truncationNote, and per-thread when an individual thread's messages were cut. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {

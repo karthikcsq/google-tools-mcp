@@ -64,22 +64,40 @@ export const foldHeader = (name, value) => {
 
     const lines = [];
     let line = prefix;
-    const tokens = normalizedValue.match(/\S+(?:[ \t]+|$)/g) || [];
-    for (const token of tokens) {
-        const minBytes = line === prefix ? prefix.length : 1;
-        if (byteLen(line) > minBytes && byteLen(line) + byteLen(token) > SOFT_LINE_LIMIT) {
-            lines.push(line.trimEnd());
-            line = ' ';
+    const segments = normalizedValue.match(/\S+|[ \t]+/g) || [];
+    for (const segment of segments) {
+        if (/^[ \t]+$/.test(segment)) {
+            // Fold BEFORE existing whitespace, never by dropping it. RFC 5322
+            // unfolding removes CRLF but retains WSP, so this preserves every
+            // byte of a caller's whitespace run.
+            if (line !== prefix && byteLen(line) + byteLen(segment) > SOFT_LINE_LIMIT) {
+                lines.push(line);
+                line = segment;
+            } else {
+                line += segment;
+            }
+            continue;
         }
-        // Tokens are only ever joined at existing whitespace (see the regex
-        // above), which is the one place FWS is unconditionally legal. A
-        // single token that is itself over-length (a long message-id, an
-        // address, an encoded-word, or a wordless CJK/emoji run) is never
-        // split internally - it just becomes a long line, folded away from
-        // its neighbors on the next token boundary.
-        line += token;
+
+        if (line !== prefix && byteLen(line) + byteLen(segment) > SOFT_LINE_LIMIT) {
+            const whitespace = line.match(/[ \t]+$/)?.[0];
+            if (whitespace) {
+                // The word does not fit after whitespace that did. Move that
+                // same whitespace to the continuation rather than replacing
+                // it with one generated space.
+                lines.push(line.slice(0, -whitespace.length));
+                line = whitespace;
+            } else {
+                lines.push(line);
+                line = ' ';
+            }
+        }
+        // A single word that is itself over-length is never split here. Values
+        // composed from unstructured user text are encoded into fixed-size RFC
+        // 2047 words by encodeHeaderValue before reaching this last stage.
+        line += segment;
     }
-    lines.push(line.trimEnd());
+    lines.push(line);
     return lines.join('\r\n');
 };
 
@@ -153,7 +171,12 @@ export const encodeEncodedWords = (text) => {
  */
 export const encodeHeaderValue = (value) => {
     const text = String(value ?? '');
-    return needsEncoding(text) ? encodeEncodedWords(text) : text;
+    // Subject is the only current caller. Its nine-octet field prefix means a
+    // literal word longer than 989 octets would violate RFC 5322's 998-octet
+    // physical-line limit because foldHeader cannot split a word safely.
+    const hasUnfoldableLongRun = (text.match(/\S+/g) || [])
+        .some((run) => byteLen(run) > HARD_LINE_LIMIT - byteLen('Subject: '));
+    return needsEncoding(text) || hasUnfoldableLongRun ? encodeEncodedWords(text) : text;
 };
 
 /**
@@ -242,7 +265,17 @@ export const normalizeBase64 = (data) => {
     if (!BASE64_PATTERN.test(cleaned)) {
         throw publicError('Invalid attachment base64Data. It must be base64 or base64url encoded content.');
     }
-    return cleaned;
+    const padding = cleaned.match(/=+$/)?.[0] || '';
+    const payload = cleaned.slice(0, cleaned.length - padding.length);
+    const remainder = payload.length % 4;
+    // A base64 quantum can contain 0, 2, 3, or 4 data characters, never one.
+    // Existing padding must agree with the final quantum; otherwise it is not
+    // valid base64 even if its alphabet is valid.
+    if (remainder === 1 || padding.length > 2
+        || (padding.length && !((remainder === 2 && padding.length === 2) || (remainder === 3 && padding.length === 1)))) {
+        throw publicError('Invalid attachment base64Data. It must be base64 or base64url encoded content.');
+    }
+    return padding ? cleaned : `${payload}${'='.repeat((4 - remainder) % 4)}`;
 };
 
 // ---------------------------------------------------------------------------
