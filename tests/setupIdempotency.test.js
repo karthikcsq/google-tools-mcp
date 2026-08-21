@@ -2,10 +2,12 @@ import { describe, expect, it } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { reconcileClientEntry, entriesEqual, parseClientEntry } from '../dist/clientAdapters.js';
+import {
+    buildClientEntry, createClientAdapters, reconcileClientEntry, entriesEqual, parseClientEntry,
+} from '../dist/clientAdapters.js';
 import { checkLaunchTarget, inspectToken } from '../dist/setupInspect.js';
 import { SCOPES } from '../dist/auth.js';
-import { backupClientEntry, backupEnvFile } from '../dist/setup.js';
+import { backupClientEntry, backupEnvFile, configureTransport } from '../dist/setup.js';
 
 const desired = { command: 'node', args: ['/installed/google-tools-mcp/dist/index.js'] };
 
@@ -22,6 +24,51 @@ function adapter(entry, failures = {}) {
 }
 
 describe('setup client reconciliation', () => {
+    it('writes the modern protocol env block into generated Codex stdio registration', () => {
+        const launch = { command: 'node', args: ['/installed/index.js'] };
+        const entry = buildClientEntry('Codex', { transport: 'stdio', launch });
+        const codex = createClientAdapters({ run: async () => '' })[0];
+        expect(entry).toEqual({
+            command: 'node', args: ['/installed/index.js'],
+            env: { CODEX_MCP_PROTOCOL_VERSION: '2026-07-28' },
+        });
+        expect(codex.addCommand(entry)).toBe(
+            'codex mcp add google --env CODEX_MCP_PROTOCOL_VERSION=2026-07-28 -- node /installed/index.js',
+        );
+    });
+
+    it('generates the native and different Claude Code and Codex HTTP shapes', () => {
+        const url = 'http://127.0.0.1:3939/mcp';
+        const token = 'private-token';
+        const [codex, claude] = createClientAdapters({ run: async () => '' });
+        const codexEntry = buildClientEntry('Codex', { transport: 'http', url, token });
+        const claudeEntry = buildClientEntry('Claude Code', { transport: 'http', url, token });
+        expect(codexEntry).toEqual({ url, bearer_token_env_var: 'GOOGLE_MCP_HTTP_TOKEN' });
+        expect(codex.addCommand(codexEntry)).toBe(
+            `codex mcp add google --url ${url} --bearer-token-env-var GOOGLE_MCP_HTTP_TOKEN`,
+        );
+        expect(claudeEntry).toEqual({ type: 'http', url, headers: { Authorization: `Bearer ${token}` } });
+        expect(claude.addCommand(claudeEntry)).toContain('--transport http');
+        expect(claude.addCommand(claudeEntry, { redact: true })).not.toContain(token);
+    });
+
+    it('establishes a healthy lifecycle before returning any shared registration material', async () => {
+        const token = 'stable-token';
+        const events = [];
+        const result = await configureTransport({ command: 'node', args: ['index.js'] }, {
+            select: async () => 'http',
+            ensureToken: async () => { events.push('token'); return { token, source: 'file' }; },
+            startService: async () => { events.push('service'); return { healthy: true, status: 'started', state: { url: 'http://127.0.0.1:3939/mcp' } }; },
+            env: {},
+        });
+        expect(events).toEqual(['token', 'service']);
+        expect(result).toMatchObject({ transport: 'http', token, serviceStatus: 'started' });
+        await expect(configureTransport({ command: 'node', args: ['index.js'] }, {
+            select: async () => 'http', ensureToken: async () => ({ token, source: 'file' }),
+            startService: async () => { throw new Error('dead endpoint'); }, env: {},
+        })).rejects.toThrow(/dead endpoint/);
+    });
+
     it('adds a missing entry', async () => {
         const client = adapter();
         await expect(reconcileClientEntry(client, desired)).resolves.toMatchObject({ ok: true, status: 'added' });
@@ -108,10 +155,14 @@ describe('setup backups', () => {
             await backupEnvFile(envPath);
             const backups = (await fs.readdir(root)).filter(name => name.startsWith('.env.bak.'));
             expect(backups).toHaveLength(2);
-            await backupClientEntry({ name: 'Fake' }, { command: 'node', env: { API_TOKEN: 'secret-value' } }, { configDir: root });
+            await backupClientEntry({ name: 'Fake' }, {
+                command: 'node', env: { API_TOKEN: 'secret-value' },
+                headers: { Authorization: 'Bearer http-secret-value' },
+            }, { configDir: root });
             const log = await fs.readFile(path.join(root, 'client-config-backups.log'), 'utf8');
             expect(log).toContain('[REDACTED]');
             expect(log).not.toContain('secret-value');
+            expect(log).not.toContain('http-secret-value');
         } finally { await fs.rm(root, { recursive: true, force: true }); }
     });
 });

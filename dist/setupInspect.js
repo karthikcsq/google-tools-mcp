@@ -6,6 +6,7 @@ import { google } from 'googleapis';
 import { getConfigDir, getConfigFiles } from './config.js';
 import { getTokenPath, loadClientSecrets, SCOPES } from './auth.js';
 import { entriesEqual } from './clientAdapters.js';
+import { getHttpServiceStatus } from './httpLifecycle.js';
 
 export async function checkCredentials({ load = loadClientSecrets } = {}) {
     try { await load(); return { configured: true }; }
@@ -61,7 +62,7 @@ export async function checkGlobalInstall({ run, access = fs.access } = {}) {
     }
 }
 
-export async function inspectSetup({ adapters = [], desiredEntry = null } = {}) {
+export async function inspectSetup({ adapters = [], desiredEntry = null, inspectHttp = getHttpServiceStatus } = {}) {
     const credentials = await checkCredentials();
     const token = await inspectToken();
     const clients = [];
@@ -74,10 +75,13 @@ export async function inspectSetup({ adapters = [], desiredEntry = null } = {}) 
                 matchesRecommended: desiredEntry ? entriesEqual(current.entry, desiredEntry) : undefined });
         } else clients.push({ client: adapter.name, status: current.status, raw: current.raw });
     }
+    const usesHttp = clients.some(client => client.entry?.url);
+    const http = usesHttp ? await inspectHttp() : null;
     const problems = [
         ...(credentials.configured ? [] : ['OAuth credentials are not configured']),
         ...(token.status === 'valid' ? [] : [`OAuth token: ${token.status}`]),
         ...clients.filter(client => client.status === 'problem' || client.status === 'unknown').map(client => `${client.client}: ${client.problem || 'could not inspect entry'}`),
+        ...(http && !http.healthy ? [`Shared HTTP service: ${http.diagnostic}`] : []),
     ];
-    return { healthy: problems.length === 0, credentials, token, clients, config: configLocations(), problems };
+    return { healthy: problems.length === 0, credentials, token, clients, http, config: configLocations(), problems };
 }

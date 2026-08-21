@@ -537,6 +537,9 @@
         "file": "tests/config.test.js"
       },
       {
+        "file": "tests/diagnosticsLogging.test.js"
+      },
+      {
         "file": "tests/docsHandleLeaseFailure.test.js"
       },
       {

@@ -465,8 +465,8 @@ the default user-profile ACL is sufficient.
 | `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients) and [docs/http-mode.md](docs/http-mode.md)) |
 | `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
 | `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
-| `GOOGLE_MCP_HTTP_TOKEN` | No | Bearer token required by HTTP clients. If unset in HTTP mode, a one-time token is generated and printed to stderr at startup. Set a fixed value to keep it stable across restarts |
-| `GOOGLE_MCP_HTTP_HOST` | No | Bind address for HTTP transport (default `127.0.0.1`, loopback only). Change only if you deliberately need remote access |
+| `GOOGLE_MCP_HTTP_TOKEN` | No | Overrides the private persistent HTTP token. Normally generated once at `<configDir>/http-token` and reused across restarts; never printed |
+| `GOOGLE_MCP_HTTP_HOST` | No | Bind address for HTTP transport (default `127.0.0.1`). Only loopback hosts are accepted until supported TLS deployment exists |
 | `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` | No | Comma-separated extra `Origin` values to accept (loopback origins are always allowed). Requests with a foreign browser `Origin` are otherwise rejected |
 | `GOOGLE_MCP_HTTP_NO_AUTH` | No | Set to `1` to disable the bearer-token requirement. Only safe when you fully trust every process on the machine |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
@@ -490,28 +490,28 @@ By default the server uses **stdio** transport: each MCP client spawns its own
 `google-tools-mcp` process. If you run several clients at once (e.g. many editor
 or agent sessions), that's one Node process per session, each holding memory.
 
-Set `GOOGLE_MCP_TRANSPORT=http` to instead run a **single long-lived server**
-that every client shares over a loopback URL — one process regardless of how
-many clients connect:
+Run setup and choose **One shared loopback server**, or manage it directly with
+the supported lifecycle commands:
 
 ```bash
-# start one shared server (keep it running; e.g. a login item or service)
-GOOGLE_MCP_TRANSPORT=http GOOGLE_MCP_PORT=3939 GOOGLE_MCP_HTTP_TOKEN=your-secret google-tools-mcp
+google-tools-mcp start
+google-tools-mcp status
+google-tools-mcp restart
+google-tools-mcp stop
 ```
 
-Then point each client at the URL, sending the token as a bearer header:
+`start` attaches when the configured profile already has a healthy managed
+instance. `serve` is the foreground command for login items and service
+managers. State is published atomically to `<configDir>/http-server.json`; the
+stable 0600 bearer token lives at `<configDir>/http-token`. An occupied foreign
+port fails with a `GOOGLE_MCP_PORT` remedy instead of silently changing URLs.
 
-```json
-{
-  "mcpServers": {
-    "google": {
-      "type": "http",
-      "url": "http://127.0.0.1:3939/mcp",
-      "headers": { "Authorization": "Bearer your-secret" }
-    }
-  }
-}
-```
+Setup writes the different native client shapes: Claude Code gets an HTTP URL
+and authorization header, while Codex gets the URL plus
+`--bearer-token-env-var GOOGLE_MCP_HTTP_TOKEN`. Setup probes authenticated MCP
+discovery before changing either entry, so it never reports success over a dead
+server. See [the operations reference](docs/http-mode.md) for native manual
+registration and start-at-login examples.
 
 ### Breaking change in 3.0.0: HTTP is stateless
 
@@ -554,31 +554,27 @@ processes or by web pages on your machine:
   `Authorization: Bearer <token>`. One middleware runs ahead of routing, so the
   MCP endpoint, `/healthz`, and the `404` for every other path are all gated
   identically — an unauthenticated caller can't even probe which paths exist.
-  Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a random one-time token is
-  generated and printed to stderr at startup (printed directly, so it still
-  appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`). Requests without a
-  valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables this — only on a
-  fully trusted machine.)
+  A random token is generated once in the private config directory and reused;
+  it is never printed or logged. `GOOGLE_MCP_HTTP_TOKEN` overrides that file.
+  Requests without a valid token get `401`.
 - **Loopback only.** Binds to `127.0.0.1` by default, so the port isn't reachable
-  from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need
-  to. Startup refuses to run (and exits non-zero) if `GOOGLE_MCP_HTTP_NO_AUTH=1` is
-  combined with a non-loopback host such as `0.0.0.0` or `::` — that combination
-  would be a remotely reachable, completely unauthenticated server — and refuses an
-  empty or whitespace-only host as well.
+  from the network. Non-loopback hosts are refused in every token mode until a
+  supported TLS deployment boundary exists. Empty or whitespace-only hosts are
+  refused too.
 - **Origin checked.** Requests carrying a non-loopback browser `Origin` are
   rejected (DNS-rebinding protection). Add trusted origins via
   `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` if needed.
 
 Notes:
-- The shared server does **not** start or stop with your clients — you manage
-  its lifecycle (start it at login / run it as a service).
+- Use `google-tools-mcp serve` in a login item or user service. Cross-platform
+  examples and failure recovery are in [docs/http-mode.md](docs/http-mode.md).
 - Read-before-edit state is scoped to a single HTTP request and dies with it, so
   clients can't satisfy or clobber each other's guard state. They still share one
   process and one OAuth/token state, so a crash or token expiry affects everyone.
 - One process serves one configured Google profile and one effective service
   principal. Multiple profiles or horizontal scale are out of scope for this
   release.
-- Auth (`google-tools-mcp auth` / `setup`) is unchanged and still uses stdio.
+- stdio remains the setup default; shared HTTP is explicit opt-in.
 
 ## Migrating from gdrive-tools-mcp / gmail-tools-mcp
 

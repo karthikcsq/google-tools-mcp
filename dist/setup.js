@@ -9,8 +9,10 @@ import { exec, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { getConfigDir } from './config.js';
-import { createClientAdapters, reconcileClientEntry } from './clientAdapters.js';
+import { buildClientEntry, createClientAdapters, reconcileClientEntry } from './clientAdapters.js';
 import { checkCredentials, inspectToken } from './setupInspect.js';
+import { HTTP_OPERATIONS_DOC_URL, resolveHttpServiceConfig, startHttpService } from './httpLifecycle.js';
+import { ensureHttpToken } from './httpState.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -554,20 +556,26 @@ export async function runFirstInstallSetup() {
         ) + chalk.cyan(UPDATE_COMMAND) + chalk.dim(' to update, or re-run this wizard.'));
     }
 
-    const registered = await registerClients(launch);
+    const transport = await configureTransport(launch);
+    const registered = await registerClients(launch, transport);
 
     if (!registered.detected) {
-        const jsonSnippet = JSON.stringify({
-            mcpServers: { google: { command: launch.command, args: launch.args } },
-        });
+        const jsonSnippet = transport.transport === 'stdio'
+            ? JSON.stringify({ mcpServers: { google: { command: launch.command, args: launch.args } } })
+            : JSON.stringify({ mcpServers: { google: { type: 'http', url: transport.url,
+                headers: { Authorization: 'Bearer <read from the private http-token file>' } } } });
         p.log.message([
             'Add to your MCP client:',
             '',
             chalk.dim('Codex:'),
-            chalk.cyan(`  codex mcp add google -- ${launch.shellDisplay}`),
+            chalk.cyan(transport.transport === 'stdio'
+                ? `  codex mcp add google --env CODEX_MCP_PROTOCOL_VERSION=2026-07-28 -- ${launch.shellDisplay}`
+                : `  codex mcp add google --url ${transport.url} --bearer-token-env-var GOOGLE_MCP_HTTP_TOKEN`),
             '',
             chalk.dim('Claude Code:'),
-            chalk.cyan(`  claude mcp add -s user google -- ${launch.shellDisplay}`),
+            chalk.cyan(transport.transport === 'stdio'
+                ? `  claude mcp add -s user google -- ${launch.shellDisplay}`
+                : `  Re-run setup with Claude Code installed; the bearer token is never printed.`),
             '',
             chalk.dim('Other clients') + chalk.dim(' (.mcp.json):'),
             chalk.cyan(`  ${jsonSnippet}`),
@@ -582,8 +590,8 @@ export async function runFirstInstallSetup() {
         chalk.dim('Upgrading and using GOOGLE_MCP_TRANSPORT=http?'),
         chalk.dim('  HTTP is now stateless (MCP 2026-07-28). Removed: /sse, /messages,'),
         chalk.dim('  /ping, DELETE session termination, and the Mcp-Session-Id header.'),
-        chalk.dim('  Point clients at the plain POST endpoint; see docs/http-mode.md.'),
-        chalk.dim('  stdio setups (this one) need no changes.'),
+        chalk.dim(`  Point clients at the plain POST endpoint; see ${HTTP_OPERATIONS_DOC_URL}.`),
+        chalk.dim(`  Configured transport: ${transport.transport}.`),
     ].join('\n'));
 
     p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' You\'re ready to use google-tools-mcp.'));
@@ -609,16 +617,47 @@ export async function backupEnvFile(envPath, { copyFile = fs.copyFile, readdir =
     return backup;
 }
 
-async function registerClients(launch) {
-    const adapters = createClientAdapters();
+export async function configureTransport(launch, {
+    select = p.select,
+    ensureToken = ensureHttpToken,
+    startService = startHttpService,
+    env = process.env,
+} = {}) {
+    const answer = await select({
+        message: 'How should MCP clients connect?',
+        options: [
+            { value: 'stdio', label: 'One process per client', hint: 'simpler, current default' },
+            { value: 'http', label: 'One shared loopback server', hint: 'faster startup, managed lifecycle' },
+        ],
+        initialValue: 'stdio',
+    });
+    if (p.isCancel(answer)) cancelled();
+    if (answer !== 'http') return Object.freeze({ transport: 'stdio' });
+
+    // Establish the server before writing either client entry. If startup,
+    // authentication, or discovery fails, setup stops with every client still
+    // pointed at its previous configuration.
+    const tokenInfo = await ensureToken();
+    env.GOOGLE_MCP_HTTP_TOKEN = tokenInfo.token;
+    const config = resolveHttpServiceConfig(env);
+    const service = await startService({ launch, env });
+    if (!service.healthy) throw new Error('Shared HTTP lifecycle did not become healthy; client configuration was not changed.');
+    return Object.freeze({ transport: 'http', url: service.state.url || config.url, token: tokenInfo.token,
+        tokenSource: tokenInfo.source, serviceStatus: service.status });
+}
+
+export async function registerClients(launch, transport = { transport: 'stdio' }, {
+    adapters = createClientAdapters(),
+} = {}) {
     let detected = false;
     for (const adapter of adapters) {
         if (!await adapter.detect()) continue;
         detected = true;
-        const result = await reconcileClientEntry(adapter, { command: launch.command, args: launch.args }, {
+        const desired = buildClientEntry(adapter.name, { ...transport, launch });
+        const result = await reconcileClientEntry(adapter, desired, {
             confirm: async ({ action, current }) => {
                 if (action === 'replace') {
-                    p.log.message(`${adapter.name} current entry:\n${chalk.dim(current.raw || JSON.stringify(current.entry))}\nRecommended:\n${chalk.cyan(adapter.addCommand({ command: launch.command, args: launch.args }))}`);
+                    p.log.message(`${adapter.name} current entry:\n${chalk.dim(JSON.stringify(redactEntry(current.entry)))}\nRecommended:\n${chalk.cyan(adapter.addCommand(desired, { redact: true }))}`);
                 }
                 const answer = await p.confirm({ message: action === 'replace' ? `Repair the ${adapter.name} google MCP entry?` : `Add to ${adapter.name} as an MCP server?`, initialValue: true });
                 if (p.isCancel(answer)) cancelled();
@@ -676,6 +715,7 @@ export async function runSetup({ reauth = false } = {}) {
     } else {
         p.log.success('Existing global launch target is valid. Skipping npm install.');
     }
-    await registerClients(launch);
+    const transport = await configureTransport(launch);
+    await registerClients(launch, transport);
     p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' Existing configuration was preserved or repaired.'));
 }
