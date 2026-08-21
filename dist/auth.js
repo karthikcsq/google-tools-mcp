@@ -10,6 +10,7 @@ import * as http from 'http';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
+import { getConfigDir, loadConfigFiles } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,14 +20,6 @@ const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
-function getConfigDir() {
-    const xdg = process.env.XDG_CONFIG_HOME;
-    const base = xdg || path.join(os.homedir(), '.config');
-    const baseDir = path.join(base, 'google-tools-mcp');
-    const profile = process.env.GOOGLE_MCP_PROFILE;
-    return profile ? path.join(baseDir, profile) : baseDir;
-}
-
 function getTokenPath() {
     return path.join(getConfigDir(), 'token.json');
 }
@@ -62,44 +55,14 @@ const SCOPES = [
 ];
 
 // ---------------------------------------------------------------------------
-// .env file loader
-// ---------------------------------------------------------------------------
-async function loadEnvFile(filePath) {
-    try {
-        const content = await fs.readFile(filePath, 'utf8');
-        for (const line of content.split('\n')) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-            const eqIdx = trimmed.indexOf('=');
-            if (eqIdx === -1) continue;
-            const key = trimmed.slice(0, eqIdx).trim();
-            let value = trimmed.slice(eqIdx + 1).trim();
-            if ((value.startsWith('"') && value.endsWith('"')) ||
-                (value.startsWith("'") && value.endsWith("'"))) {
-                value = value.slice(1, -1);
-            }
-            if (!process.env[key]) {
-                process.env[key] = value;
-            }
-        }
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Client secrets resolution
 // ---------------------------------------------------------------------------
 async function loadClientSecrets() {
+    loadConfigFiles();
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
     }
     const configDir = getConfigDir();
-    const cwd = process.cwd();
-    await loadEnvFile(path.join(configDir, '.env'));
-    await loadEnvFile(path.join(cwd, '.env'));
-    await loadEnvFile(path.join(projectRootDir, '.env'));
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         logger.info('Loaded client credentials from .env file.');
         return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };

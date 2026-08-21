@@ -8,6 +8,7 @@ import * as os from 'os';
 import { exec, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
+import { getConfigDir } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -60,14 +61,6 @@ function openBrowser(url) {
         cmd = `xdg-open "${url}"`;
     }
     exec(cmd, () => {});
-}
-
-function getConfigDir() {
-    const xdg = process.env.XDG_CONFIG_HOME;
-    const base = xdg || path.join(os.homedir(), '.config');
-    const baseDir = path.join(base, 'google-tools-mcp');
-    const profile = process.env.GOOGLE_MCP_PROFILE;
-    return profile ? path.join(baseDir, profile) : baseDir;
 }
 
 function hasCli(name) {

@@ -427,6 +427,31 @@ If the document contains content markdown can't represent (images, footnotes, a 
 
 These files live in a per-user directory under the OS temp dir (`google-tools-mcp-<user>`), created with restrictive permissions and checked on every write so a planted symlink is refused rather than followed. Set `GOOGLE_MCP_WORKSPACE_DIR` to use a different directory instead.
 
+## Configuration
+
+On startup, configuration is loaded from these locations in order. A value is
+used from the first source that defines it:
+
+| Priority | Source |
+|---|---|
+| 1 | Real process environment, including an explicitly empty value |
+| 2 | User config: `~/.config/google-tools-mcp/.env` (or `$XDG_CONFIG_HOME/google-tools-mcp/.env`) |
+| 3 | `.env` in the server's current working directory |
+| 4 | `.env` at the installed package root |
+
+`GOOGLE_MCP_PROFILE` selects the user config directory and must be set in the
+real process environment. It is ignored if placed in a `.env` file, with a
+startup warning. Missing config files are normal; an unreadable config file
+produces a warning naming its path.
+
+This user-scoped file is particularly useful on Windows. MCP clients launched
+over stdio may not inherit a Windows user environment variable set after the
+client was started, while they can still read this file. Environment variables
+present in the spawned server always take precedence.
+
+Keep `.env` readable only by your user: use `chmod 600` on POSIX. On Windows,
+the default user-profile ACL is sufficient.
+
 ## Environment Variables
 
 | Variable | Required | Description |

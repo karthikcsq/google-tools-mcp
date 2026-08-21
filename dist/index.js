@@ -8,9 +8,10 @@
 //   google-tools-mcp          Start the MCP server (default)
 //   google-tools-mcp auth     Run the interactive OAuth flow
 //   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
+import './config.js';
 import { createRequire } from 'module';
 import { logger } from './logger.js';
-import { getConfigDir } from './auth.js';
+import { getConfigDir } from './config.js';
 import { checkForUpdate } from './updateCheck.js';
 import { resolveHttpAuthConfig, assertSafeHttpBinding, generateToken } from './httpAuth.js';
 import { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntimeLifecycle } from './mcpServer.js';

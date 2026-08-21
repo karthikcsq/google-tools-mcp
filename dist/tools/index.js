@@ -8,7 +8,8 @@ import { fileURLToPath } from 'url';
 import * as os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
+import { getTokenPath, SCOPES } from '../auth.js';
+import { getConfigDir, getDefaultLogPath, getLoadedConfigFiles } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
 import { getPublicErrorMessage, publicError } from '../errors.js';
@@ -373,11 +374,14 @@ export async function registerAllTools(server) {
                 credentialSource: process.env.GOOGLE_CLIENT_ID ? 'environment' : 'file',
                 scopes: SCOPES,
                 logFile: process.env.GOOGLE_MCP_LOG_FILE || '(not set)',
+                transport: process.env.GOOGLE_MCP_TRANSPORT || 'stdio',
+                port: process.env.GOOGLE_MCP_PORT || '3939',
+                loadedConfigFiles: getLoadedConfigFiles(),
             };
 
             // --- Recent logs ---
             const logFilePath = process.env.GOOGLE_MCP_LOG_FILE === '1'
-                ? path.join(configDir, 'server.log')
+                ? getDefaultLogPath()
                 : process.env.GOOGLE_MCP_LOG_FILE;
             if (logFilePath) {
                 try {

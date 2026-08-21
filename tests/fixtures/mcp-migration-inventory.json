@@ -1159,22 +1159,22 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 242,
+        "line": 243,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 266,
+        "line": 267,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 287,
+        "line": 288,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 415,
+        "line": 419,
         "match": ".addTool({"
       },
       {

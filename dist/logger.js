@@ -3,8 +3,8 @@
 // If GOOGLE_MCP_LOG_FILE is set, logs are also appended to that file.
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { redactDiagnostic } from './errors.js';
+import { getDefaultLogPath } from './config.js';
 
 const LOG_LEVELS = {
     debug: 0,
@@ -20,25 +20,17 @@ function resolveLevel() {
     }
     return 'info';
 }
-let currentLevel = resolveLevel();
+let currentLevel = null;
 export function refreshLogLevel() {
     currentLevel = resolveLevel();
 }
 function shouldLog(level) {
+    if (currentLevel === null) currentLevel = resolveLevel();
     return LOG_LEVELS[level] >= LOG_LEVELS[currentLevel];
 }
 
 // --- File logging ---
 let logStream = null;
-
-function getDefaultLogPath() {
-    const xdg = process.env.XDG_CONFIG_HOME;
-    const base = xdg || path.join(os.homedir(), '.config');
-    const baseDir = path.join(base, 'google-tools-mcp');
-    const profile = process.env.GOOGLE_MCP_PROFILE;
-    const dir = profile ? path.join(baseDir, profile) : baseDir;
-    return path.join(dir, 'server.log');
-}
 
 function initLogFile() {
     if (logStream) return;
@@ -59,7 +51,6 @@ function initLogFile() {
         // If we can't open the log file, continue without file logging
     }
 }
-initLogFile();
 
 function timestamp() {
     return new Date().toISOString();
@@ -82,6 +73,7 @@ function formatArgs(args) {
 
 function log(level, args) {
     if (!shouldLog(level)) return;
+    initLogFile();
     const tag = level.toUpperCase();
     const ts = timestamp();
     const msg = formatArgs(args);
