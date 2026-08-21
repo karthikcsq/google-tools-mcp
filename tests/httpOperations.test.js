@@ -54,7 +54,7 @@ describe('shared HTTP lifecycle operations', () => {
             const url = String(input);
             requests.push({ url, init });
             if (url.endsWith('/healthz')) {
-                return new Response(JSON.stringify({ status: 'ok', identity: { name: 'spoofed-health' } }), {
+                return new Response(JSON.stringify({ status: 'ok', pid: process.pid, identity: { name: 'spoofed-health' } }), {
                     status: 200, headers: { 'content-type': 'application/json' },
                 });
             }
@@ -104,10 +104,54 @@ describe('shared HTTP lifecycle operations', () => {
                 configDir,
                 env: { GOOGLE_MCP_PORT: String(port), GOOGLE_MCP_PROFILE: 'personal' },
                 spawnImpl: jest.fn(),
-            })).rejects.toThrow(/profile work/);
+            })).rejects.toThrow(/profile: running work/);
         } finally {
             await runtime.close();
             await fs.rm(configDir, { recursive: true, force: true });
+        }
+    });
+
+    it.each([
+        ['host', 'localhost', /host: running 127\.0\.0\.1/],
+        ['port', '3940', /port: running/],
+        ['endpoint', '/other', /endpoint: running \/mcp/],
+        ['profile', 'personal', /profile: running work/],
+    ])('refuses attach when %s differs and does not spawn', async (field, value, expected) => {
+        const configDir = await tempConfig();
+        const { runtime, port } = await testRuntime(configDir, field === 'profile' ? 'work' : 'default');
+        const env = { GOOGLE_MCP_PORT: String(field === 'port' ? value : port), ...(field === 'host' ? { GOOGLE_MCP_HTTP_HOST: value } : {}), ...(field === 'endpoint' ? { GOOGLE_MCP_ENDPOINT: value } : {}), ...(field === 'profile' ? { GOOGLE_MCP_PROFILE: value } : {}) };
+        const spawnImpl = jest.fn();
+        try { await expect(startHttpService({ configDir, env, spawnImpl })).rejects.toThrow(expected); expect(spawnImpl).not.toHaveBeenCalled(); }
+        finally { await runtime.close(); await fs.rm(configDir, { recursive: true, force: true }); }
+    });
+
+    it('refuses attach when the expected version differs', async () => {
+        const configDir = await tempConfig(); const { runtime, port } = await testRuntime(configDir);
+        const spawnImpl = jest.fn();
+        try { await expect(startHttpService({ configDir, env: { GOOGLE_MCP_PORT: String(port) }, expectedVersion: 'different-version', spawnImpl })).rejects.toThrow(/version: running/); expect(spawnImpl).not.toHaveBeenCalled(); }
+        finally { await runtime.close(); await fs.rm(configDir, { recursive: true, force: true }); }
+    });
+
+    it('direct serve refuses to attach a healthy service with different resolved configuration', async () => {
+        const xdgRoot = await tempConfig();
+        const configDir = path.join(xdgRoot, 'google-tools-mcp');
+        await fs.mkdir(configDir, { recursive: true });
+        const { runtime, port } = await testRuntime(configDir);
+        const env = {
+            ...process.env, CI: 'true', XDG_CONFIG_HOME: xdgRoot,
+            GOOGLE_MCP_TRANSPORT: undefined, GOOGLE_MCP_PORT: String(port),
+            GOOGLE_MCP_HTTP_HOST: 'localhost', GOOGLE_MCP_HTTP_TOKEN: undefined,
+        };
+        try {
+            await expect(execFileAsync(process.execPath, [ENTRYPOINT, 'serve'], { env, timeout: 40_000 }))
+                .rejects.toMatchObject({
+                    code: 1,
+                    stdout: '',
+                    stderr: expect.stringMatching(/does not match requested configuration.*host: running 127\.0\.0\.1.*Stop\/restart it explicitly/is),
+                });
+        } finally {
+            await runtime.close();
+            await fs.rm(xdgRoot, { recursive: true, force: true });
         }
     });
 
@@ -173,6 +217,16 @@ describe('shared HTTP lifecycle operations', () => {
                 kill: () => { const error = new Error('gone'); error.code = 'ESRCH'; throw error; },
             });
             expect(result.status).toBe('stale-state-removed');
+        } finally { await fs.rm(configDir, { recursive: true, force: true }); }
+    });
+
+    it('never signals a live foreign or unauthenticated pid', async () => {
+        const configDir = await tempConfig();
+        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: '2.0.0', startedAt: new Date().toISOString() }, { configDir });
+        const kill = jest.fn((pid, signal) => { if (signal === 0) return true; });
+        const fetchImpl = async () => new Response('', { status: 401 });
+        try { await expect(stopHttpService({ configDir, kill, fetchImpl, env: {} })).resolves.toMatchObject({ status: 'foreign-or-unverified' });
+            expect(kill).not.toHaveBeenCalledWith(process.pid, 'SIGTERM');
         } finally { await fs.rm(configDir, { recursive: true, force: true }); }
     });
 });

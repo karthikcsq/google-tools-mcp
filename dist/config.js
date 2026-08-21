@@ -24,6 +24,8 @@ const configFiles = [...new Set([
     path.join(projectRootDir, '.env'),
 ])];
 const loadedConfigFiles = [];
+const configWarnings = [];
+const loadedConfigKeys = new Set();
 let filesLoaded = false;
 
 export function getConfigDir() {
@@ -37,6 +39,8 @@ export function getConfigFiles() {
 export function getLoadedConfigFiles() {
     return [...loadedConfigFiles];
 }
+export function getConfigWarnings() { return [...configWarnings]; }
+export function getLoadedConfigKeys() { return [...loadedConfigKeys]; }
 
 export function getDefaultLogPath() {
     return path.join(configDir, 'server.log');
@@ -47,6 +51,7 @@ export function getDefaultJsonlPath() {
 }
 
 function warn(message) {
+    configWarnings.push(message);
     process.stderr.write(`WARNING: ${message}\n`);
 }
 
@@ -61,12 +66,16 @@ export function loadEnvFile(filePath) {
         return false;
     }
 
-    for (const line of content.split('\n')) {
+    for (const [lineIndex, line] of content.split('\n').entries()) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) continue;
         const eqIdx = trimmed.indexOf('=');
-        if (eqIdx === -1) continue;
-        const key = trimmed.slice(0, eqIdx).trim();
+        const keyCandidate = eqIdx === -1 ? '' : trimmed.slice(0, eqIdx).trim();
+        if (eqIdx === -1 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyCandidate)) {
+            warn(`Malformed config line ${filePath}:${lineIndex + 1}; expected KEY=VALUE.`);
+            continue;
+        }
+        const key = keyCandidate;
         let value = trimmed.slice(eqIdx + 1).trim();
         if ((value.startsWith('"') && value.endsWith('"')) ||
             (value.startsWith("'") && value.endsWith("'"))) {
@@ -80,6 +89,7 @@ export function loadEnvFile(filePath) {
         // always wins over config files.
         if (process.env[key] === undefined) {
             process.env[key] = value;
+            loadedConfigKeys.add(key);
         }
     }
     return true;

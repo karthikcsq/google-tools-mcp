@@ -139,7 +139,7 @@ describe('official SDK v2 facade', () => {
             expect(forbidden.status).toBe(403);
             expect(await forbidden.json()).toEqual({ error: 'Forbidden: request Origin is not allowed' });
             const response = await handler.fetch(new Request('http://localhost/healthz', { headers: { authorization: `Bearer ${TOKEN}` } }));
-            expect(await response.json()).toEqual({ status: 'ok' });
+                expect(await response.json()).toEqual({ status: 'ok', pid: process.pid });
             // Documented removal behavior for the session era's routes: /sse,
             // its /messages companion, mcp-proxy's /ping, and the DELETE that
             // terminated a session are all 404 now - after the same auth gate,

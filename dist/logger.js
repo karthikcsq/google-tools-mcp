@@ -33,8 +33,12 @@ function shouldLog(level) {
 let logStream = null;
 let structuredLogPath = null;
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
+let rotationLimit = MAX_LOG_BYTES;
+export function setLogRotationThresholdForTests(value = MAX_LOG_BYTES) { rotationLimit = value; }
 const disabledValues = new Set(['0', 'false', 'off', 'none']);
 let warnedPaths = new Set();
+let plainBytes = 0;
+let structuredBytes = 0;
 
 function configuredPath(value, fallback) {
     if (value === undefined || value === '' || value === '1') return fallback;
@@ -65,12 +69,15 @@ function warnFileFailure(filePath) {
     process.stderr.write(`WARNING: Unable to write diagnostic log file ${filePath}.\n`);
 }
 
-function rotateAtOpen(filePath) {
+function rotateNow(filePath) {
+    const rotatedPath = `${filePath}.1`;
+    try { fs.unlinkSync(rotatedPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    fs.renameSync(filePath, rotatedPath);
+}
+function rotateIfAlreadyOversized(filePath) {
     try {
         if (!fs.existsSync(filePath) || fs.statSync(filePath).size <= MAX_LOG_BYTES) return;
-        const rotatedPath = `${filePath}.1`;
-        try { fs.unlinkSync(rotatedPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
-        fs.renameSync(filePath, rotatedPath);
+        rotateNow(filePath);
     } catch {
         warnFileFailure(filePath);
     }
@@ -82,13 +89,10 @@ function initLogFile() {
     if (!logPath) return;
     try {
         fs.mkdirSync(path.dirname(logPath), { recursive: true });
-        rotateAtOpen(logPath);
-        const stream = fs.createWriteStream(logPath, { flags: 'a' });
-        stream.on('error', () => {
-            if (logStream === stream) logStream = null;
-            warnFileFailure(logPath);
-        });
-        logStream = stream;
+        rotateIfAlreadyOversized(logPath);
+        fs.closeSync(fs.openSync(logPath, 'a'));
+        plainBytes = fs.statSync(logPath).size;
+        logStream = { path: logPath };
     } catch {
         warnFileFailure(logPath);
     }
@@ -101,7 +105,8 @@ function initStructuredLogFile() {
     if (!filePath) return null;
     try {
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        rotateAtOpen(filePath);
+        rotateIfAlreadyOversized(filePath);
+        structuredBytes = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
         fs.closeSync(fs.openSync(filePath, 'a'));
         return filePath;
     } catch {
@@ -134,7 +139,15 @@ export function logToolCall(record) {
     if (!filePath) return;
     const safe = redactDiagnostic(record);
     try {
-        fs.appendFileSync(filePath, `${JSON.stringify(safe)}\n`, 'utf8');
+        const line = `${JSON.stringify(safe)}\n`;
+        if (structuredBytes + Buffer.byteLength(line) >= rotationLimit) {
+            structuredBytes = fs.statSync(filePath).size;
+        }
+        if (structuredBytes + Buffer.byteLength(line) > rotationLimit) {
+            rotateNow(filePath); structuredBytes = 0;
+        }
+        fs.appendFileSync(filePath, line, 'utf8');
+        structuredBytes += Buffer.byteLength(line);
         if (shouldLog('debug')) console.error(`${timestamp()} [DEBUG] ${JSON.stringify(safe)}`);
     } catch {
         warnFileFailure(filePath);
@@ -154,10 +167,11 @@ export function readRecentToolCalls(limit = 200) {
 }
 
 export function resetLoggerForTests() {
-    logStream?.destroy();
+    logStream?.destroy?.();
     logStream = null;
     structuredLogPath = null;
     warnedPaths = new Set();
+    plainBytes = 0; structuredBytes = 0;
 }
 
 function timestamp() {
@@ -188,7 +202,15 @@ function log(level, args) {
     console.error(`${ts} [${tag}] ${msg}`);
     if (logStream) {
         try {
-            logStream.write(`${ts} [${tag}] ${msg}\n`);
+            const bytes = Buffer.byteLength(`${ts} [${tag}] ${msg}\n`);
+            if (plainBytes + bytes >= rotationLimit) {
+                plainBytes = fs.statSync(getLogFilePath()).size;
+            }
+            if (plainBytes + bytes > rotationLimit) {
+                logStream = null; rotateNow(getLogFilePath()); initLogFile();
+            }
+            plainBytes += bytes;
+            fs.appendFileSync(getLogFilePath(), `${ts} [${tag}] ${msg}\n`, 'utf8');
         } catch {
             logStream = null;
         }

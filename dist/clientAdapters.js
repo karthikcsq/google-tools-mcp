@@ -25,7 +25,7 @@ export function launchDisplay(entry) {
 export function normalizeClientEntry(entry) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
     const source = entry.config && typeof entry.config === 'object' ? entry.config : entry;
-    const { name, serverName, ...rest } = source;
+    const { name, serverName, token, ...rest } = source;
     if (!rest.command && !rest.url) return null;
     return rest;
 }
@@ -55,11 +55,12 @@ function adapter(name, commands, run = defaultRun) {
         },
         async get() {
             try { return parseClientEntry(await run(commands.get)); }
-            catch (error) { return parseClientEntry(error.message); }
+            catch (error) { return { status: 'unknown', raw: String(error?.message || error || 'Client inspection failed.') }; }
         },
         add(entry) { return run(commands.add(entry, { redact: false })); },
         remove() { return run(commands.remove); },
         addCommand(entry, options = {}) { return commands.add(entry, options); },
+        getCommand: commands.get,
         removeCommand: commands.remove,
     };
 }
@@ -105,25 +106,43 @@ export function buildClientEntry(clientName, { transport = 'stdio', launch, url,
     };
 }
 
-export async function reconcileClientEntry(adapter, desired, { confirm = async () => true, backup = async () => {} } = {}) {
+function replacementCommand(adapter, entry, options = {}) {
+    return `${adapter.removeCommand}\n${adapter.addCommand(entry, options)}`;
+}
+
+export async function reconcileClientEntry(adapter, desired, { confirm = async () => true, backup = async () => {}, token = '' } = {}) {
     const current = await adapter.get();
+    if (current.status === 'unknown') return { ok: false, status: 'unknown', current, manualCommand: adapter.getCommand || 'Re-run setup after the client entry can be inspected.' };
+    if (current.status === 'found' && entriesEqual(current.entry, desired)) return { ok: true, status: 'unchanged', current };
+    if (adapter.name === 'Codex' && desired.url) {
+        const safeToken = String(token || '').replace(/"/g, '`"');
+        const persist = process.platform === 'win32'
+            ? `setx GOOGLE_MCP_HTTP_TOKEN "${safeToken}"`
+            : `export GOOGLE_MCP_HTTP_TOKEN='${String(token || '').replace(/'/g, "'\\''")}'`;
+        const registration = [
+            ...(current.status === 'found' ? [adapter.removeCommand] : []),
+            adapter.addCommand(desired),
+        ].join('\n');
+        return { ok: false, status: 'unsupported-http-auth', current,
+            explanation: 'Codex HTTP registrations can name a bearer-token environment variable, but cannot store that variable value in the registration.',
+            manualCommand: `${persist}\n${registration}` };
+    }
     if (current.status === 'missing') {
-        if (!await confirm({ action: 'add', adapter, desired })) return { ok: true, status: 'declined' };
+        if (!await confirm({ action: 'add', adapter, desired })) return { ok: false, status: 'declined', manualCommand: adapter.addCommand(desired, { redact: true }) };
         try { await adapter.add(desired); return { ok: true, status: 'added' }; }
         catch (error) { return { ok: false, status: 'add-failed', manualCommand: adapter.addCommand(desired, { redact: true }), error }; }
     }
-    if (current.status === 'found' && entriesEqual(current.entry, desired)) return { ok: true, status: 'unchanged', current };
-    if (!await confirm({ action: 'replace', adapter, current, desired })) return { ok: true, status: 'declined', current };
+    if (!await confirm({ action: 'replace', adapter, current, desired })) return { ok: false, status: 'declined', current, manualCommand: replacementCommand(adapter, desired, { redact: true }) };
     await backup(current);
     try { await adapter.remove(); }
-    catch (error) { return { ok: false, status: 'remove-failed', current, manualCommand: adapter.removeCommand, error }; }
+    catch (error) { return { ok: false, status: 'remove-failed', current, manualCommand: replacementCommand(adapter, desired, { redact: true }), error }; }
     try { await adapter.add(desired); return { ok: true, status: 'replaced', current }; }
     catch (error) {
         try {
             await adapter.add(current.entry);
-            return { ok: false, status: 'add-failed-rolled-back', current, manualCommand: adapter.addCommand(desired, { redact: true }), error };
+            return { ok: false, status: 'add-failed-rolled-back', current, manualCommand: replacementCommand(adapter, desired, { redact: true }), error };
         } catch (rollbackError) {
-            return { ok: false, status: 'rollback-failed', current, manualCommand: adapter.addCommand(current.entry, { redact: true }), error, rollbackError };
+            return { ok: false, status: 'rollback-failed', current, manualCommand: replacementCommand(adapter, desired, { redact: true }), error, rollbackError };
         }
     }
 }

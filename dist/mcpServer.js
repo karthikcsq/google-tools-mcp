@@ -339,7 +339,7 @@ export function createV2HttpHandler(factory, {
             logger?.warn?.(result.reason);
             return respond(json(result.status, { error: result.message }));
         }
-        if (path === '/healthz' && request.method === 'GET') return respond(json(200, { status: 'ok' }));
+        if (path === '/healthz' && request.method === 'GET') return respond(json(200, { status: 'ok', pid: process.pid }));
         if (path !== endpoint) return respond(json(404, { error: 'Not found' }));
         if (closed) return respond(json(503, { error: 'Service unavailable' }));
         const requestInfo = await classifyModernRequest(request);

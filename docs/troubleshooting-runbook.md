@@ -6,9 +6,9 @@ and `~/.config/google-tools-mcp/server.jsonl` (under `XDG_CONFIG_HOME` when set)
 `GOOGLE_MCP_LOG_FILE` changes or disables the plain file. `GOOGLE_MCP_JSONL_FILE`
 changes or disables JSONL. Set either to `0`, `false`, or `off` to disable it.
 
-At process startup, each file is rotated only if it is already larger than 5 MB:
-the previous file becomes `.1`, replacing any older `.1`; the new process then
-appends to a fresh file. A running process never rotates mid-write.
+At process startup, each file is rotated if it is already larger than 5 MB. During
+runtime, the same threshold is checked before writes and the previous file becomes
+`.1`, replacing any older `.1`; subsequent writes continue in a fresh primary file.
 
 ## JSONL format
 

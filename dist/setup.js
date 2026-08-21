@@ -399,11 +399,10 @@ export async function runFirstInstallSetup() {
 
     // ── Save credentials ─────────────────────────────────────────────────
     const configDir = getConfigDir();
-    await fs.mkdir(configDir, { recursive: true });
+    await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
     const envPath = path.join(configDir, '.env');
-    const envContent = `GOOGLE_CLIENT_ID=${clientId}\nGOOGLE_CLIENT_SECRET=${clientSecret}\n`;
     const envBackup = await backupEnvFile(envPath);
-    await fs.writeFile(envPath, envContent);
+    await mergeCredentialEnv(envPath, { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret });
     const displayPath = envPath.replace(os.homedir(), '~');
     p.log.success(`Credentials saved to ${chalk.dim(displayPath)}`);
     if (envBackup) p.log.message(chalk.dim(`Previous credentials backed up to ${envBackup.replace(os.homedir(), '~')}`));
@@ -608,13 +607,61 @@ export async function backupClientEntry(adapter, entry, { configDir = getConfigD
     await appendFile(path.join(configDir, 'client-config-backups.log'), `${JSON.stringify({ timestamp: new Date().toISOString(), client: adapter.name, entry: redactEntry(entry) })}\n`);
 }
 
-export async function backupEnvFile(envPath, { copyFile = fs.copyFile, readdir = fs.readdir, unlink = fs.unlink } = {}) {
-    try { await fs.access(envPath); } catch { return null; }
+export async function backupEnvFile(envPath, { readFile = fs.readFile, open = fs.open, readdir = fs.readdir, unlink = fs.unlink, lstat = fs.lstat } = {}) {
+    try {
+        const stat = await lstat(envPath);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Refusing to back up unsafe credential .env path.');
+    } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
     const backup = `${envPath}.bak.${Date.now()}-${backupSequence++}`;
-    await copyFile(envPath, backup);
+    const content = await readFile(envPath);
+    let handle;
+    let complete = false;
+    try {
+        handle = await open(backup, 'wx', 0o600);
+        await handle.writeFile(content);
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        complete = true;
+    } finally {
+        await handle?.close().catch(() => {});
+        if (!complete) await unlink(backup).catch(() => {});
+    }
     const backups = (await readdir(path.dirname(envPath))).filter(name => name.startsWith(`${path.basename(envPath)}.bak.`)).sort().reverse();
     await Promise.all(backups.slice(2).map(name => unlink(path.join(path.dirname(envPath), name))));
     return backup;
+}
+
+export async function mergeCredentialEnv(envPath, values, { readFile = fs.readFile, lstat = fs.lstat, mkdir = fs.mkdir, writeFile = fs.writeFile, rename = fs.rename, unlink = fs.unlink } = {}) {
+    let existing = '';
+    try {
+        const stat = await lstat(envPath);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Refusing to modify unsafe credential .env path.');
+        existing = await readFile(envPath, 'utf8');
+    } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+    }
+    const lines = existing ? existing.split(/(?<=\n)/) : [];
+    const replaced = new Set();
+    const output = lines.map(line => {
+        const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+        if (!match || !(match[1] in values)) return line;
+        replaced.add(match[1]);
+        return `${match[1]}=${values[match[1]]}\n`;
+    });
+    const missing = Object.entries(values).filter(([key]) => !replaced.has(key));
+    if (missing.length && output.length && !output.at(-1).endsWith('\n')) output.push('\n');
+    for (const [key, value] of missing) output.push(`${key}=${value}\n`);
+    const dir = path.dirname(envPath);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    await fs.chmod(dir, 0o700);
+    const temporary = `${envPath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+        await writeFile(temporary, output.join(''), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        await fs.chmod(temporary, 0o600);
+        await rename(temporary, envPath);
+        await fs.chmod(envPath, 0o600);
+    } finally { await unlink(temporary).catch(() => {}); }
 }
 
 export async function configureTransport(launch, {
@@ -648,6 +695,7 @@ export async function configureTransport(launch, {
 
 export async function registerClients(launch, transport = { transport: 'stdio' }, {
     adapters = createClientAdapters(),
+    ui = p,
 } = {}) {
     let detected = false;
     for (const adapter of adapters) {
@@ -655,23 +703,25 @@ export async function registerClients(launch, transport = { transport: 'stdio' }
         detected = true;
         const desired = buildClientEntry(adapter.name, { ...transport, launch });
         const result = await reconcileClientEntry(adapter, desired, {
+            token: transport.token,
             confirm: async ({ action, current }) => {
                 if (action === 'replace') {
-                    p.log.message(`${adapter.name} current entry:\n${chalk.dim(JSON.stringify(redactEntry(current.entry)))}\nRecommended:\n${chalk.cyan(adapter.addCommand(desired, { redact: true }))}`);
+                    ui.log.message(`${adapter.name} current entry:\n${chalk.dim(JSON.stringify(redactEntry(current.entry)))}\nRecommended:\n${chalk.cyan(adapter.addCommand(desired, { redact: true }))}`);
                 }
-                const answer = await p.confirm({ message: action === 'replace' ? `Repair the ${adapter.name} google MCP entry?` : `Add to ${adapter.name} as an MCP server?`, initialValue: true });
-                if (p.isCancel(answer)) cancelled();
+                const answer = await ui.confirm({ message: action === 'replace' ? `Repair the ${adapter.name} google MCP entry?` : `Add to ${adapter.name} as an MCP server?`, initialValue: true });
+                if (ui.isCancel(answer)) cancelled();
                 return answer;
             },
             backup: current => backupClientEntry(adapter, current.entry),
         });
         if (!result.ok) {
-            p.log.error(`${adapter.name} configuration failed. Setup stopped without claiming completion.`);
-            p.log.message(`Manual recovery command:\n${chalk.cyan(result.manualCommand)}`);
+            ui.log.error(`${adapter.name} was left unconfigured (${result.status}). Setup is incomplete.`);
+            if (result.explanation) ui.log.message(result.explanation);
+            ui.log.message(`Run these exact commands to finish configuring ${adapter.name}:\n${chalk.cyan(result.manualCommand)}`);
             throw new Error(`${adapter.name} MCP registration ${result.status}`);
         }
         const message = { added: 'Added', replaced: 'Repaired', unchanged: 'Already correct, skipped', declined: 'Left unchanged' }[result.status];
-        p.log.success(`${adapter.name}: ${message}.`);
+        ui.log.success(`${adapter.name}: ${message}.`);
     }
     return { detected };
 }
@@ -689,23 +739,32 @@ async function existingLaunchTarget() {
 // Returning users do not revisit cloud-project or credential prompts.  The
 // token check deliberately has no persistence side effects; only an explicit
 // reauth or failed refresh reaches the browser flow.
-export async function runSetup({ reauth = false } = {}) {
-    const credentials = await checkCredentials();
+export async function runSetup({
+    reauth = false,
+    checkCredentialsImpl = checkCredentials,
+    inspectTokenImpl = inspectToken,
+    existingLaunchTargetImpl = existingLaunchTarget,
+    configureTransportImpl = configureTransport,
+    registerClientsImpl = registerClients,
+    ui = p,
+    clear = () => console.clear(),
+} = {}) {
+    const credentials = await checkCredentialsImpl();
     if (!credentials.configured) return runFirstInstallSetup();
 
-    console.clear();
-    p.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
-    const token = await inspectToken();
-    p.log.message(token.status === 'valid' && !reauth
+    clear();
+    ui.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
+    const token = await inspectTokenImpl();
+    ui.log.message(token.status === 'valid' && !reauth
         ? 'Existing OAuth credentials and token are valid. Skipping project setup and OAuth.'
         : `Existing credentials found; token is ${token.status}${reauth ? ' and --reauth was requested' : ''}.`);
     if (reauth || token.status !== 'valid') {
-        p.log.step('Authenticate with Google');
+        ui.log.step('Authenticate with Google');
         const { runAuthFlow } = await import('./auth.js');
         await runAuthFlow();
-        p.log.success('Authenticated with Google.');
+        ui.log.success('Authenticated with Google.');
     }
-    let launch = await existingLaunchTarget();
+    let launch = await existingLaunchTargetImpl();
     if (!launch) {
         const result = await installGlobalFastLaunch();
         let runningIndexPath = resolveRunningIndexPath();
@@ -713,9 +772,9 @@ export async function runSetup({ reauth = false } = {}) {
         launch = buildLaunchCommand(result, { runningIndexPath });
         if (!launch) throw new Error('Could not find or install a usable MCP launch command.');
     } else {
-        p.log.success('Existing global launch target is valid. Skipping npm install.');
+        ui.log.success('Existing global launch target is valid. Skipping npm install.');
     }
-    const transport = await configureTransport(launch);
-    await registerClients(launch, transport);
-    p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' Existing configuration was preserved or repaired.'));
+    const transport = await configureTransportImpl(launch);
+    await registerClientsImpl(launch, transport, { ui });
+    ui.outro(chalk.green.bold('Setup complete!') + chalk.dim(' Existing configuration was preserved or repaired.'));
 }

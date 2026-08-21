@@ -31,8 +31,8 @@ async function makeConfigFixture() {
 
 function runConfig(fixture, env = {}) {
     const script = [
-        `import { getConfigDir, getLoadedConfigFiles } from ${JSON.stringify(fixture.configUrl)};`,
-        'const configDir = getConfigDir(); const loadedProfile = process.env.GOOGLE_MCP_PROFILE; process.env.GOOGLE_MCP_PROFILE = "mutated-after-load"; process.stdout.write(JSON.stringify({ env: process.env, loadedProfile, configDir, configDirAfterMutation: getConfigDir(), loaded: getLoadedConfigFiles() }));',
+        `import { getConfigDir, getLoadedConfigFiles, getLoadedConfigKeys } from ${JSON.stringify(fixture.configUrl)};`,
+        'const configDir = getConfigDir(); const loadedProfile = process.env.GOOGLE_MCP_PROFILE; process.env.GOOGLE_MCP_PROFILE = "mutated-after-load"; process.stdout.write(JSON.stringify({ env: process.env, loadedProfile, configDir, configDirAfterMutation: getConfigDir(), loaded: getLoadedConfigFiles(), loadedKeys: getLoadedConfigKeys() }));',
     ].join('\n');
     return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, ['--input-type=module', '--eval', script], {
@@ -70,6 +70,7 @@ describe('shared startup configuration', () => {
             for (const [index, key] of STARTUP_VARIABLES.entries()) {
                 expect(result.env[key]).toBe(`file-${index}`);
             }
+            expect(result.loadedKeys).toEqual(expect.arrayContaining(STARTUP_VARIABLES));
         } finally {
             await rm(fixture.root, { recursive: true, force: true });
         }
@@ -84,6 +85,8 @@ describe('shared startup configuration', () => {
             const { result } = await runConfig(fixture, { GOOGLE_MCP_TRANSPORT: '', GOOGLE_MCP_PORT: '4444' });
             expect(result.env.GOOGLE_MCP_TRANSPORT).toBe('');
             expect(result.env.GOOGLE_MCP_PORT).toBe('4444');
+            expect(result.loadedKeys).not.toContain('GOOGLE_MCP_TRANSPORT');
+            expect(result.loadedKeys).not.toContain('GOOGLE_MCP_PORT');
         } finally {
             await rm(fixture.root, { recursive: true, force: true });
         }
@@ -134,6 +137,19 @@ describe('shared startup configuration', () => {
         } finally {
             await rm(fixture.root, { recursive: true, force: true });
         }
+    });
+
+    it('warns with file and line for malformed assignments while loading valid lines', async () => {
+        const fixture = await makeConfigFixture();
+        try {
+            const userDir = path.join(fixture.xdg, 'google-tools-mcp');
+            await mkdir(userDir);
+            await writeFile(path.join(userDir, '.env'), 'GOOD_KEY=loaded\nnot an assignment\n BAD-KEY=nope\n');
+            const { result, stderr } = await runConfig(fixture);
+            expect(result.env.GOOD_KEY).toBe('loaded');
+            expect(stderr).toContain(`${path.join(userDir, '.env')}:2`);
+            expect(stderr).toContain(`${path.join(userDir, '.env')}:3`);
+        } finally { await rm(fixture.root, { recursive: true, force: true }); }
     });
 
     it('applies a Windows-safe user config file before the entrypoint selects HTTP transport', async () => {

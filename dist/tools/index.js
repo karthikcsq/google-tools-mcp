@@ -9,7 +9,7 @@ import * as os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getTokenPath, SCOPES } from '../auth.js';
-import { getConfigDir, getLoadedConfigFiles } from '../config.js';
+import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { getLogFilePath, getStructuredLogFilePath, logger, readRecentToolCalls } from '../logger.js';
 import { getPublicErrorMessage, publicError } from '../errors.js';
@@ -378,6 +378,7 @@ export async function registerAllTools(server) {
                 transport: process.env.GOOGLE_MCP_TRANSPORT || 'stdio',
                 port: process.env.GOOGLE_MCP_PORT || '3939',
                 loadedConfigFiles: getLoadedConfigFiles(),
+                warnings: getConfigWarnings(),
             };
 
             // --- Privacy-safe recent activity ---

@@ -3,7 +3,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { google } from 'googleapis';
-import { getConfigDir, getConfigFiles } from './config.js';
+import { getConfigDir, getConfigFiles, getConfigWarnings } from './config.js';
 import { getTokenPath, loadClientSecrets, SCOPES } from './auth.js';
 import { entriesEqual } from './clientAdapters.js';
 import { getHttpServiceStatus } from './httpLifecycle.js';
@@ -42,8 +42,8 @@ export function checkLaunchTarget(entry, { exists = (target) => fs.access(target
 
 export async function checkClientEntry(adapter, desired) {
     const current = await adapter.get();
-    if (current.status === 'missing') return { adapter: adapter.name, status: 'missing' };
-    if (current.status === 'unknown') return { adapter: adapter.name, status: 'unknown', raw: current.raw };
+    if (current.status === 'missing') return { adapter: adapter.name, status: desired ? 'problem' : 'missing', problem: desired ? 'missing client entry' : undefined, recommended: desired };
+    if (current.status === 'unknown') return { adapter: adapter.name, status: desired ? 'problem' : 'unknown', problem: desired ? 'unrecognized client entry' : undefined, raw: current.raw, recommended: desired };
     const target = await checkLaunchTarget(current.entry);
     return { adapter: adapter.name, status: entriesEqual(current.entry, desired) && target.healthy ? 'healthy' : 'different', current, target };
 }
@@ -62,18 +62,28 @@ export async function checkGlobalInstall({ run, access = fs.access } = {}) {
     }
 }
 
-export async function inspectSetup({ adapters = [], desiredEntry = null, inspectHttp = getHttpServiceStatus } = {}) {
-    const credentials = await checkCredentials();
-    const token = await inspectToken();
+export async function inspectSetup({ adapters = [], desiredEntry = null, desiredEntries = null, inspectHttp = getHttpServiceStatus, credentialsCheck = checkCredentials, tokenCheck = inspectToken, configWarnings = getConfigWarnings() } = {}) {
+    const credentials = await credentialsCheck();
+    const token = await tokenCheck();
     const clients = [];
     for (const adapter of adapters) {
         if (!await adapter.detect()) continue;
         const current = await adapter.get();
+        const expectsRecommended = desiredEntry !== null || desiredEntries !== null;
+        const desiredResult = typeof desiredEntries === 'function' ? desiredEntries(adapter) : (desiredEntries?.[adapter.name] || desiredEntry);
+        const wrappedDesired = desiredResult && typeof desiredResult === 'object' && Object.hasOwn(desiredResult, 'desiredEntry');
+        const recommended = wrappedDesired ? desiredResult.desiredEntry : desiredResult;
+        const desiredProblem = wrappedDesired ? desiredResult.problem : (expectsRecommended && !recommended ? 'recommended client entry could not be constructed' : undefined);
         if (current.status === 'found') {
             const target = await checkLaunchTarget(current.entry);
-            clients.push({ client: adapter.name, status: target.healthy ? 'configured' : 'problem', problem: target.problem, entry: current.entry,
-                matchesRecommended: desiredEntry ? entriesEqual(current.entry, desiredEntry) : undefined });
-        } else clients.push({ client: adapter.name, status: current.status, raw: current.raw });
+            const matchesRecommended = recommended ? entriesEqual(current.entry, recommended) : undefined;
+            const healthy = target.healthy && matchesRecommended !== false && !desiredProblem;
+            clients.push({ client: adapter.name, status: healthy ? 'configured' : 'problem', problem: desiredProblem || target.problem || (matchesRecommended === false ? 'entry differs from recommended configuration' : undefined), entry: current.entry,
+                matchesRecommended, recommended });
+        } else {
+            const problem = desiredProblem || (recommended ? (current.status === 'missing' ? 'missing client entry' : 'unrecognized client entry') : undefined);
+            clients.push({ client: adapter.name, status: problem ? 'problem' : current.status, problem, raw: current.raw, recommended });
+        }
     }
     const usesHttp = clients.some(client => client.entry?.url);
     const http = usesHttp ? await inspectHttp() : null;
@@ -82,6 +92,7 @@ export async function inspectSetup({ adapters = [], desiredEntry = null, inspect
         ...(token.status === 'valid' ? [] : [`OAuth token: ${token.status}`]),
         ...clients.filter(client => client.status === 'problem' || client.status === 'unknown').map(client => `${client.client}: ${client.problem || 'could not inspect entry'}`),
         ...(http && !http.healthy ? [`Shared HTTP service: ${http.diagnostic}`] : []),
+        ...configWarnings.map(warning => `Config: ${warning}`),
     ];
-    return { healthy: problems.length === 0, credentials, token, clients, http, config: configLocations(), problems };
+    return { healthy: problems.length === 0, credentials, token, clients, http, config: { ...configLocations(), warnings: configWarnings }, problems };
 }

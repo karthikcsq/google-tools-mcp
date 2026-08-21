@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createV2HttpHandler, MCP_PROTOCOL_VERSION, prepareMcpServerFactory } from '../dist/mcpServer.js';
-import { getArgumentShape, getStructuredLogFilePath, logToolCall, resetLoggerForTests } from '../dist/logger.js';
+import { getArgumentShape, getStructuredLogFilePath, logToolCall, logger, resetLoggerForTests, setLogRotationThresholdForTests } from '../dist/logger.js';
 import { publicError, registerSecret } from '../dist/errors.js';
 
 const originalEnv = { ...process.env };
@@ -12,6 +12,7 @@ afterEach(() => {
     for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
     Object.assign(process.env, originalEnv);
     resetLoggerForTests();
+    setLogRotationThresholdForTests();
 });
 
 function request(name, args) {
@@ -66,5 +67,29 @@ describe('structured diagnostics', () => {
         const runbook = await readFile('docs/troubleshooting-runbook.md', 'utf8');
         for (const field of ['ts', 'event', 'tool', 'reqId', 'durationMs', 'outcome', 'errCode', 'errMsg', 'argShape']) expect(runbook).toContain(`\`${field}\``);
         expect(getStructuredLogFilePath()).toBeTruthy();
+    });
+
+    it('rotates both long-lived plain and JSONL logs during runtime', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-runtime-rotation-'));
+        const plainPath = join(directory, 'server.log');
+        const jsonlPath = join(directory, 'server.jsonl');
+        process.env.GOOGLE_MCP_LOG_FILE = plainPath;
+        process.env.GOOGLE_MCP_JSONL_FILE = jsonlPath;
+        const payload = 'x'.repeat(1_000);
+        setLogRotationThresholdForTests(4_096);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        logger.info('seed');
+        for (let i = 0; i < 10; i += 1) {
+            logger.info(payload);
+            logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'first', reqId: i, durationMs: 0, outcome: 'ok', errCode: null, errMsg: null, argShape: { x: payload } });
+        }
+        logger.info('after-rotation');
+        logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'after', reqId: 2, durationMs: 0, outcome: 'ok', errCode: null, errMsg: null, argShape: {} });
+        expect((await stat(`${plainPath}.1`)).size).toBeGreaterThan(0);
+        expect((await stat(`${jsonlPath}.1`)).size).toBeGreaterThan(0);
+        expect(await readFile(plainPath, 'utf8')).toContain('after-rotation');
+        expect(await readFile(jsonlPath, 'utf8')).toContain('"tool":"after"');
+        errorSpy.mockRestore();
+        await rm(directory, { recursive: true, force: true });
     });
 });

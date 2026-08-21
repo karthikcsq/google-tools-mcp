@@ -163,18 +163,37 @@ async function loadSavedCredentialsIfExist() {
 
 async function saveCredentials(client) {
     const { client_secret, client_id } = await loadClientSecrets();
-    const configDir = getConfigDir();
-    await fs.mkdir(configDir, { recursive: true });
-    const tokenPath = getTokenPath();
-    const payload = JSON.stringify({
-        type: 'authorized_user',
-        client_id,
-        client_secret,
-        refresh_token: client.credentials.refresh_token,
-        scopes: SCOPES,
-    }, null, 2);
-    await fs.writeFile(tokenPath, payload);
+    const tokenPath = await persistTokenCredentials({ clientId: client_id, clientSecret: client_secret,
+        refreshToken: client.credentials.refresh_token });
     logger.info('Token stored to', tokenPath);
+}
+
+export async function persistTokenCredentials({ clientId, clientSecret, refreshToken, scopes = SCOPES }, {
+    configDir = getConfigDir(), mkdir = fs.mkdir, chmod = fs.chmod, open = fs.open,
+    rename = fs.rename, unlink = fs.unlink,
+} = {}) {
+    await mkdir(configDir, { recursive: true, mode: 0o700 });
+    await chmod(configDir, 0o700);
+    const tokenPath = path.join(configDir, 'token.json');
+    const payload = JSON.stringify({
+        type: 'authorized_user', client_id: clientId, client_secret: clientSecret,
+        refresh_token: refreshToken, scopes,
+    }, null, 2);
+    const temporary = `${tokenPath}.tmp-${process.pid}-${Date.now()}`;
+    let handle;
+    try {
+        handle = await open(temporary, 'wx', 0o600);
+        await handle.writeFile(payload, 'utf8');
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        await rename(temporary, tokenPath);
+        await chmod(tokenPath, 0o600);
+    } finally {
+        await handle?.close().catch(() => {});
+        await unlink(temporary).catch(() => {});
+    }
+    return tokenPath;
 }
 
 // ---------------------------------------------------------------------------

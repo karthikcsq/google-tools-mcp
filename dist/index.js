@@ -18,10 +18,11 @@ import { checkForUpdate } from './updateCheck.js';
 import { assertSafeHttpBinding } from './httpAuth.js';
 import { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntimeLifecycle } from './mcpServer.js';
 import {
-    createPublishedState, getHttpServiceStatus, resolveHttpServiceConfig, restartHttpService,
+    assertHttpServiceConfigurationMatch, createPublishedState, getHttpServiceStatus, resolveHttpServiceConfig, restartHttpService,
     startHttpService, stopHttpService,
 } from './httpLifecycle.js';
 import { ensureHttpToken, publishHttpState, removeHttpState, removeHttpStateSync } from './httpState.js';
+import { createDoctorDesiredEntryResolver, formatDoctorReport } from './doctor.js';
 
 // Read our own published version straight from package.json rather than
 // hardcoding it. `files: ["dist"]` in package.json only restricts what npm
@@ -40,11 +41,13 @@ function statusOutput(report, json) {
         `${report.identity.name} ${report.identity.version}, profile ${report.state.profile}, token source ${report.tokenSource}).\n`;
 }
 
+
 async function exitOperationsCli(code) {
     // Node's Windows fetch implementation releases an async libuv handle just
     // after the response body closes. An immediate process.exit can trip its
-    // UV_HANDLE_CLOSING assertion; one short turn lets the SDK probe unwind.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // UV_HANDLE_CLOSING assertion; leave enough time for the SDK probe to
+    // unwind even when parallel test workers are loading the event loop.
+    await new Promise((resolve) => setTimeout(resolve, 250));
     process.exit(code);
 }
 
@@ -113,17 +116,21 @@ if (process.argv[2] === 'doctor') {
     const { createClientAdapters } = await import('./clientAdapters.js');
     const { inspectSetup } = await import('./setupInspect.js');
     try {
-        const report = await inspectSetup({ adapters: createClientAdapters() });
-        if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        const launch = { command: process.execPath, args: [entrypointPath] };
+        const doctorTransport = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase();
+        const httpConfigForDoctor = ['http', 'httpstream'].includes(doctorTransport) ? resolveHttpServiceConfig(process.env) : null;
+        const transport = ['http', 'httpstream'].includes(doctorTransport)
+            ? { transport: 'http', url: httpConfigForDoctor.url }
+            : { transport: 'stdio' };
+        const desiredEntries = await createDoctorDesiredEntryResolver({ launch, transport, env: process.env });
+        const report = await inspectSetup({ adapters: createClientAdapters(), desiredEntries });
+        if (json) process.stdout.write(formatDoctorReport(report, true));
         else {
-            console.log(report.healthy ? 'Setup is healthy.' : 'Setup problems found:');
-            for (const problem of report.problems) console.log(`- ${problem}`);
-            for (const client of report.clients) console.log(`- ${client.client}: ${client.status}`);
+            process.stdout.write(formatDoctorReport(report));
         }
         process.exit(report.healthy ? 0 : 1);
     } catch {
-        if (json) process.stdout.write(`${JSON.stringify({ healthy: false, inspectionError: true })}\n`);
-        else console.error('Could not inspect setup.');
+        process.stdout.write(formatDoctorReport({ healthy: false, inspectionError: true, problems: ['Could not inspect setup.'], clients: [] }, json));
         process.exit(2);
     }
 }
@@ -207,13 +214,14 @@ try {
     if (useHttp) {
         const existing = await getHttpServiceStatus();
         if (existing.healthy) {
-            if (existing.state.profile !== profile) {
-                process.stderr.write(`FATAL: Port ${httpConfig.port} is managed by profile ${existing.state.profile}. ` +
-                    'Set GOOGLE_MCP_PORT to a different port for this profile.\n');
-                process.exit(1);
+            try {
+                assertHttpServiceConfigurationMatch(existing, httpConfig, packageVersion);
+            } catch (configurationError) {
+                process.stderr.write(`FATAL: ${configurationError.message}\n`);
+                await exitOperationsCli(1);
             }
             process.stderr.write(`Shared HTTP service is already healthy at ${existing.state.url}; attach clients to that instance.\n`);
-            process.exit(0);
+            await exitOperationsCli(0);
         }
     }
     logger.info('Starting google-tools-mcp server...');

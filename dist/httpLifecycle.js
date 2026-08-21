@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { isLoopbackHost, resolveHttpAuthConfig } from './httpAuth.js';
 import { connectModernHttpClient } from './httpClient.js';
 import {
     ensureHttpToken, getHttpStatePaths, isProcessAlive, publishHttpState,
     readHttpState, removeHttpState,
 } from './httpState.js';
+const packageVersion = createRequire(import.meta.url)('../package.json').version;
 
 export const HTTP_OPERATIONS_DOC_URL = 'https://github.com/karthikcsq/google-tools-mcp/blob/main/docs/http-mode.md';
 export const DEFAULT_HTTP_PORT = 3939;
@@ -65,11 +67,11 @@ export async function probeHealth(url, token, { fetchImpl = globalThis.fetch, ti
         });
         if (!response.ok) return Object.freeze({ ok: false, status: response.status });
         const body = await response.json();
-        return Object.freeze({ ok: body?.status === 'ok', status: response.status });
+        return Object.freeze({ ok: body?.status === 'ok', pid: Number(body?.pid), status: response.status });
     } finally { clearTimeout(timer); }
 }
 
-export async function getHttpServiceStatus({ configDir, env = process.env, fetchImpl = globalThis.fetch } = {}) {
+export async function getHttpServiceStatus({ configDir, env = process.env, fetchImpl = globalThis.fetch, kill = process.kill } = {}) {
     const authConfig = resolveHttpAuthConfig(env);
     const tokenInfo = authConfig.noAuth
         ? { token: null, source: 'disabled' }
@@ -80,7 +82,7 @@ export async function getHttpServiceStatus({ configDir, env = process.env, fetch
         return Object.freeze({ healthy: false, state: null, tokenSource: tokenInfo.source, diagnostic: 'invalid-state' });
     }
     if (!state) return Object.freeze({ healthy: false, state: null, tokenSource: tokenInfo.source, diagnostic: 'not-running' });
-    if (!isProcessAlive(state.pid)) {
+    if (!isProcessAlive(state.pid, { kill })) {
         await removeHttpState({ configDir, expectedPid: state.pid });
         return Object.freeze({ healthy: false, state, tokenSource: tokenInfo.source, diagnostic: 'stale-state' });
     }
@@ -92,7 +94,7 @@ export async function getHttpServiceStatus({ configDir, env = process.env, fetch
             probeMcpIdentity(state.url, tokenInfo.token, { fetchImpl }),
             probeHealth(state.url, tokenInfo.token, { fetchImpl }),
         ]);
-        const healthy = identity.name === 'google-tools-mcp' && health.ok;
+        const healthy = identity.name === 'google-tools-mcp' && health.ok && health.pid === state.pid;
         return Object.freeze({ healthy, state, identity, health, tokenSource: tokenInfo.source,
             diagnostic: healthy ? 'healthy' : 'unexpected-service' });
     } catch {
@@ -113,15 +115,36 @@ export async function waitForHttpService({ configDir, env = process.env, fetchIm
     return last || Object.freeze({ healthy: false, diagnostic: 'startup-timeout' });
 }
 
+export function getHttpServiceConfigurationDifferences(existing, config, expectedVersion = packageVersion) {
+    const differences = [];
+    for (const key of ['host', 'port', 'endpoint', 'profile']) {
+        if (existing.state?.[key] !== config[key]) {
+            differences.push(`${key}: running ${existing.state?.[key] ?? 'unknown'}, requested ${config[key]}`);
+        }
+    }
+    if (existing.identity?.name !== 'google-tools-mcp') {
+        differences.push(`identity: running ${existing.identity?.name || 'unknown'}`);
+    }
+    if (existing.state?.version !== expectedVersion || existing.identity?.version !== expectedVersion) {
+        differences.push(`version: running ${existing.state?.version || 'unknown'}/${existing.identity?.version || 'unknown'}, requested ${expectedVersion}`);
+    }
+    return differences;
+}
+
+export function assertHttpServiceConfigurationMatch(existing, config, expectedVersion = packageVersion) {
+    const differences = getHttpServiceConfigurationDifferences(existing, config, expectedVersion);
+    if (differences.length) {
+        throw new Error(`Running shared HTTP service does not match requested configuration (${differences.join('; ')}). Stop/restart it explicitly.`);
+    }
+}
+
 export async function startHttpService({
-    configDir, env = process.env, launch, spawnImpl = spawn, fetchImpl = globalThis.fetch, timeoutMs = 15_000,
+    configDir, env = process.env, launch, spawnImpl = spawn, fetchImpl = globalThis.fetch, timeoutMs = 15_000, expectedVersion = packageVersion,
 } = {}) {
     const config = resolveHttpServiceConfig(env);
     const existing = await getHttpServiceStatus({ configDir, env, fetchImpl });
     if (existing.healthy) {
-        if (existing.state.profile !== config.profile) {
-            throw new Error(`Port ${config.port} is managed by profile ${existing.state.profile}; set GOOGLE_MCP_PORT to a different port.`);
-        }
+        assertHttpServiceConfigurationMatch(existing, config, expectedVersion);
         return Object.freeze({ status: 'attached', ...existing });
     }
     await ensureHttpToken({ configDir, env });
@@ -148,12 +171,17 @@ export async function startHttpService({
     return Object.freeze({ status: 'started', ...status });
 }
 
-export async function stopHttpService({ configDir, kill = process.kill, timeoutMs = 10_000 } = {}) {
+export async function stopHttpService({ configDir, env = process.env, fetchImpl = globalThis.fetch, kill = process.kill, timeoutMs = 10_000 } = {}) {
     const state = await readHttpState({ configDir }).catch(() => null);
     if (!state) return Object.freeze({ status: 'not-running' });
     if (!isProcessAlive(state.pid, { kill })) {
         await removeHttpState({ configDir, expectedPid: state.pid });
         return Object.freeze({ status: 'stale-state-removed', state });
+    }
+    const ownership = await getHttpServiceStatus({ configDir, env, fetchImpl, kill });
+    if (!ownership.healthy || ownership.state?.pid !== state.pid) {
+        await removeHttpState({ configDir, expectedPid: state.pid });
+        return Object.freeze({ status: 'foreign-or-unverified', state, diagnostic: ownership.diagnostic });
     }
     try { kill(state.pid, 'SIGTERM'); }
     catch (error) {
