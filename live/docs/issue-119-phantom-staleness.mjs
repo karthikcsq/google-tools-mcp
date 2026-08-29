@@ -14,7 +14,17 @@
 export const name = 'issue-119-phantom-staleness';
 export const issue = 119;
 export const description = 'A series of modifyText calls with no external edits must not be rejected as stale.';
-export const expectedOnBase = 'fail';
+// DOES NOT REPRODUCE ON THIS BRANCH, and expectedOnBase says so. Five runs of
+// this scenario -- 60 guarded edits, with and without a read between each --
+// produced no rejection. That matches the reporter ("I could not make it fire
+// deterministically, which points at a revision-id or mtime race"), and there
+// is a mechanical reason a single-process run cannot force it: readTracker's
+// trackMutation() clears modifiedTime after every successful write, and
+// guardMutation skips the external-change comparison when modifiedTime is null.
+// So the scenario stands as a regression guard on the staleness path rather
+// than as a repro: if the phantom starts firing, this goes red and prints the
+// rejection plus whether the identical retry succeeded.
+export const expectedOnBase = 'pass';
 
 const WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth'];
@@ -28,7 +38,16 @@ export async function run(ctx) {
     await ctx.call('readDocument', { documentId: doc.id, format: 'text' });
 
     // 2. Twelve edits. No external editor, nothing else touching the document.
+    //
+    // Each edit is preceded by a read, which is what the reporter's session
+    // looked like and what the documented workflow tells callers to do. It also
+    // matters mechanically: readTracker.trackMutation() clears modifiedTime
+    // after every write and guardMutation skips the external-change comparison
+    // when modifiedTime is null, so a back-to-back run of writes cannot trip
+    // the guard at all. The read is what re-arms it against a modifiedTime that
+    // Google may bump behind us.
     for (let i = 0; i < WORDS.length; i += 1) {
+        await ctx.call('readDocument', { documentId: doc.id, format: 'text' });
         const find = 'Line ' + WORDS[i] + ' is the ' + ORDINALS[i] + ' target phrase.';
         const args = {
             documentId: doc.id,

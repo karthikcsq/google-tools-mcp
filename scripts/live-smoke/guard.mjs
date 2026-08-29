@@ -42,6 +42,67 @@ const INSTRUMENTED = new WeakMap(); // client object -> { label, originals }
 // through to "allowed".
 const MUTATING_VERB = /^(create|insert|import|update|patch|delete|batchDelete|batchModify|modify|modifyLabels|batchUpdate|copy|move|send|trash|untrash|append|clear|batchClear|batchClearByDataFilter|batchUpdateByDataFilter|emptyTrash|watch|stop|generateIds|setIamPolicy|resolve|reply|add|remove|set|enable|disable|publish|unpublish|refresh|reset|cancel|close|complete|clone|duplicate|replace|revoke|upload|write|save|apply)$/;
 
+// --- write quota -----------------------------------------------------------
+//
+// The Docs API allows 60 write requests per minute per user, and a full smoke
+// run comfortably exceeds that: the first run without this hit
+// RESOURCE_EXHAUSTED partway through and two scenarios failed with a 429
+// instead of failing for the reason their reporter described. A rate-limit
+// failure masquerading as a repro result makes the whole table untrustworthy,
+// so writes are paced here and 429s are retried.
+//
+// A sliding window rather than fixed spacing: a burst goes straight through and
+// throttling only kicks in near the cap, which keeps a full run to a few
+// minutes instead of serialising every write behind a fixed delay.
+const WRITE_LIMITS = { docs: 50, drive: 50, sheets: 50, slides: 50, gmail: 200 };
+const WINDOW_MS = 60_000;
+const MAX_RETRIES = 5;
+const windows = new Map(); // label -> number[] of request timestamps
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isRateLimited(error) {
+    if (!error) return false;
+    if (error.code === 429 || error.status === 429 || error.response?.status === 429) return true;
+    const message = typeof error.message === 'string' ? error.message : '';
+    return /RESOURCE_EXHAUSTED|rateLimitExceeded|Quota exceeded|userRateLimitExceeded/i.test(message);
+}
+
+let quotaWaits = 0;
+let quotaRetries = 0;
+
+async function takeWriteSlot(label) {
+    const limit = WRITE_LIMITS[label] ?? 50;
+    for (;;) {
+        const now = Date.now();
+        let stamps = windows.get(label);
+        if (!stamps) { stamps = []; windows.set(label, stamps); }
+        while (stamps.length && now - stamps[0] >= WINDOW_MS) stamps.shift();
+        if (stamps.length < limit) { stamps.push(now); return; }
+        quotaWaits += 1;
+        await sleep(Math.max(50, WINDOW_MS - (now - stamps[0]) + 50));
+    }
+}
+
+async function runWriteWithQuota(label, path, perform) {
+    for (let attempt = 0; ; attempt += 1) {
+        await takeWriteSlot(label);
+        try {
+            return await perform();
+        } catch (error) {
+            if (!isRateLimited(error) || attempt >= MAX_RETRIES) throw error;
+            quotaRetries += 1;
+            // Google's own guidance for this quota is to back off and retry;
+            // the window is per minute, so the delays are seconds, not ms.
+            await sleep(Math.min(32_000, 2000 * 2 ** attempt));
+        }
+    }
+}
+
+export function getQuotaStats() {
+    return { waits: quotaWaits, retries: quotaRetries };
+}
+
 export class SafetyViolation extends Error {
     constructor(message) {
         super(message);
@@ -266,6 +327,7 @@ export function createGuard({ folderId }) {
     };
 
     function wrapFn(label, path, fn, decide) {
+        const isMutation = MUTATING_VERB.test(path.split('.').pop());
         return async function guarded(...args) {
             try {
                 await decide(path, args[0]);
@@ -273,7 +335,8 @@ export function createGuard({ folderId }) {
                 denials.push({ client: label, method: path, reason: error.message });
                 throw error;
             }
-            return fn(...args);
+            if (!isMutation) return fn(...args);
+            return runWriteWithQuota(label, path, () => fn(...args));
         };
     }
 
@@ -363,6 +426,6 @@ export function createGuard({ folderId }) {
         // "the guard refused this" from "the API refused this".
         get denialCount() { return denials.length; },
         get lastDenial() { return denials.length ? denials[denials.length - 1] : null; },
-        get stats() { return { parentLookups: lookups, denials: denials.slice() }; },
+        get stats() { return { parentLookups: lookups, denials: denials.slice(), quota: getQuotaStats() }; },
     };
 }

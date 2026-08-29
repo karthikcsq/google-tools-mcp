@@ -30,14 +30,15 @@ export async function run(ctx) {
         .some((run) => (run.textRun?.content || '').includes(ANCHOR)));
     ctx.assert(element, 'Setup failed: the anchor paragraph is not in the document.');
 
-    const added = JSON.parse(await ctx.call('addComment', {
+    // addComment and resolveComment both return text, not JSON.
+    const added = await ctx.call('addComment', {
         documentId: doc.id,
         startIndex: element.startIndex,
         endIndex: element.endIndex - 1,
         content: 'Live smoke: resolve then reopen.',
-    }));
-    const commentId = added.id ?? added.commentId ?? added.comment?.id;
-    ctx.assert(commentId, 'Setup failed: addComment returned no comment id.');
+    });
+    const commentId = (/Comment ID:\s*(\S+)/.exec(String(added)) || [])[1];
+    ctx.assert(commentId, 'Setup failed: addComment reported no comment id: ' + String(added).replace(/\s+/g, ' ').slice(0, 200));
 
     const resolveResult = await ctx.call('resolveComment', { documentId: doc.id, commentId });
     const afterResolve = JSON.parse(await ctx.call('getComment', { documentId: doc.id, commentId }));

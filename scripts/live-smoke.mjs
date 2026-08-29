@@ -238,7 +238,7 @@ async function main() {
             }
         }
         lines.push(`Stdout leaks from tool code paths: ${journal.stdoutLeaks}.`);
-        lines.push(`Guard: ${guard.stats.parentLookups} containment lookup(s), ${guard.stats.denials.length} refusal(s).`);
+        lines.push(`Guard: ${guard.stats.parentLookups} containment lookup(s), ${guard.stats.denials.length} refusal(s), ${guard.stats.quota.waits} quota wait(s), ${guard.stats.quota.retries} rate-limit retry(ies).`);
         for (const d of guard.stats.denials) lines.push(`  refused ${d.client}.${d.method}: ${oneLine(d.reason, 120)}`);
         lines.push(`Journal: ${journal.file}`);
         lines.push('');
