@@ -6,8 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { runArgv } from '../shellSafe.js';
 import { getTokenPath, SCOPES } from '../auth.js';
 import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
@@ -16,32 +15,38 @@ import { getPublicErrorMessage, publicError } from '../errors.js';
 import { google } from 'googleapis';
 import { registerLegacyAliases } from './legacyAliases.js';
 
-const execAsync = promisify(exec);
-
 const REPO = 'karthikcsq/google-tools-mcp';
 
-async function tryGhCli(title, body, label) {
+// The issue title is caller-supplied MCP tool input. It is never rendered into
+// a shell command string: every `gh` invocation below is an argv array handed
+// to runArgv(), so `$(...)`, backticks, `;`, `&`, and quotes are inert bytes in
+// a single argv element rather than shell syntax. (Issue #114.)
+export async function tryGhCli(title, body, label, { run = runArgv } = {}) {
     // Probe for gh CLI
     try {
-        await execAsync('gh --version');
+        await run(['gh', '--version']);
     } catch {
         return { ok: false, reason: 'gh CLI not installed' };
     }
     // Probe for auth
     try {
-        await execAsync('gh auth status');
+        await run(['gh', 'auth', 'status']);
     } catch {
         return { ok: false, reason: 'gh CLI not authenticated (run: gh auth login)' };
     }
-    // Write body to a temp file to avoid shell-escaping issues with newlines/quotes.
+    // The body still goes through a temp file: it is multiline markdown, which
+    // no argv-length limit or console encoding handles reliably.
     const tmpFile = path.join(os.tmpdir(), `gtm-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
     try {
         await fs.writeFile(tmpFile, body, 'utf8');
-        const { stdout } = await execAsync(
-            `gh issue create --repo ${REPO} --title ${JSON.stringify(title)} --label ${JSON.stringify(label)} --body-file ${JSON.stringify(tmpFile)}`,
-            { maxBuffer: 10 * 1024 * 1024 }
-        );
-        const issueUrl = stdout.trim().split('\n').pop();
+        const stdout = await run([
+            'gh', 'issue', 'create',
+            '--repo', REPO,
+            '--title', String(title),
+            '--label', String(label),
+            '--body-file', tmpFile,
+        ], { maxBuffer: 10 * 1024 * 1024 });
+        const issueUrl = String(stdout).trim().split('\n').pop();
         return { ok: true, issueUrl };
     } catch (err) {
         return { ok: false, reason: `gh CLI failed: ${err.stderr || err.message || err}` };
@@ -50,19 +55,16 @@ async function tryGhCli(title, body, label) {
     }
 }
 
-function openBrowser(url) {
-    const platform = process.platform;
-    let cmd;
-    if (platform === 'win32') {
-        cmd = `start "" "${url}"`;
-    } else if (platform === 'darwin') {
-        cmd = `open "${url}"`;
-    } else {
-        cmd = `xdg-open "${url}"`;
-    }
-    return new Promise((resolve) => {
-        exec(cmd, (err) => resolve(!err));
-    });
+// The fallback URL embeds the same caller-supplied title and description. Even
+// though URLSearchParams percent-encodes them, the opener is argv-based so no
+// shell (or cmd.exe `%VAR%` expansion) ever sees the value.
+export function openBrowser(url, { run = runArgv, platform = process.platform } = {}) {
+    const argv = platform === 'win32'
+        // rundll32 opens a URL with the registered protocol handler without a
+        // shell; `start` is a cmd.exe builtin and would need one.
+        ? ['rundll32.exe', 'url.dll,FileProtocolHandler', String(url)]
+        : [platform === 'darwin' ? 'open' : 'xdg-open', String(url)];
+    return run(argv).then(() => true, () => false);
 }
 
 // ---------------------------------------------------------------------------

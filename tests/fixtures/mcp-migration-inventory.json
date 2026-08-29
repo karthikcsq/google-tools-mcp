@@ -88,6 +88,9 @@
         "file": "dist/setupInspect.js"
       },
       {
+        "file": "dist/shellSafe.js"
+      },
+      {
         "file": "dist/tools/calendar/getBusy.js"
       },
       {
@@ -687,6 +690,9 @@
         "file": "tests/setupUpdateCommand.test.js"
       },
       {
+        "file": "tests/shellSafeExecution.test.js"
+      },
+      {
         "file": "tests/textNormalization.test.js"
       },
       {
@@ -1201,22 +1207,22 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 243,
+        "line": 245,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 267,
+        "line": 269,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 288,
+        "line": 290,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 436,
+        "line": 438,
         "match": ".addTool({"
       },
       {
