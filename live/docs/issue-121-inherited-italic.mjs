@@ -42,10 +42,13 @@ export async function run(ctx) {
     }));
     const italicRuns = (formatting.textStyles || []).filter((run) => run.style?.italic);
     const resultMentionsInheritance = typeof result === 'string' && /inherit/i.test(result);
+    // Docs tool results lead with the document URL on its own line; the part
+    // worth quoting in a failure is the last line.
+    const resultMessage = ctx.lastLine(result);
 
     ctx.assert(
         italicRuns.length === 0 || resultMentionsInheritance,
         'The replacement inherited the placeholder italic (' + italicRuns.length + ' italic run(s) over the inserted text) '
-        + 'and the result said nothing about it: "' + String(result).replace(/\s+/g, ' ').slice(0, 140) + '" (#121).',
+        + 'and the result said nothing about it: "' + resultMessage.slice(0, 140) + '" (#121).',
     );
 }

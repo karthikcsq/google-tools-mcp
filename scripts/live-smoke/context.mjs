@@ -226,6 +226,10 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
          *  acceptance checks for a tool that does not exist on the base branch. */
         hasTool: (toolName) => tools.has(toolName),
         toolNames: () => [...tools.keys()].sort(),
+        /** Docs and comment tool results lead with the document URL on its own
+         *  line. When a failure message quotes a result, this is the part worth
+         *  quoting -- otherwise the reason column is all URL. */
+        lastLine: (value) => String(value ?? '').trim().split(/\r?\n/).pop(),
         track,
         createDoc,
         createFolder,

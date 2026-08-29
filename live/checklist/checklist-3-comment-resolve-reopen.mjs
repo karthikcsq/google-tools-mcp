@@ -41,11 +41,13 @@ export async function run(ctx) {
     ctx.assert(commentId, 'Setup failed: addComment reported no comment id: ' + String(added).replace(/\s+/g, ' ').slice(0, 200));
 
     const resolveResult = await ctx.call('resolveComment', { documentId: doc.id, commentId });
+    // Comment tool results lead with the document URL on its own line.
+    const resolveMessage = ctx.lastLine(resolveResult);
     const afterResolve = JSON.parse(await ctx.call('getComment', { documentId: doc.id, commentId }));
 
     ctx.assert(
         isResolved(afterResolve),
-        'resolveComment returned "' + String(resolveResult).replace(/\s+/g, ' ').slice(0, 120)
+        'resolveComment returned "' + resolveMessage.slice(0, 150)
         + '" but the comment reads back unresolved, so a caller cannot tell whether the thread is actually resolved.',
     );
 
