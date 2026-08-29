@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, rm, writeFile, copyFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, rm, writeFile, copyFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,6 +121,92 @@ describe('shared startup configuration', () => {
             expect(result.configDirAfterMutation).toBe(userDir);
             expect(result.loadedProfile).toBeUndefined();
             expect(stderr).toContain(`Ignoring GOOGLE_MCP_PROFILE in config file ${path.join(userDir, '.env')}`);
+        } finally {
+            await rm(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    // Finding 14: GOOGLE_MCP_PROFILE was used as an unchecked path component,
+    // so a profile containing ".." could move getConfigDir() (and every
+    // mkdir/chmod that follows it in logger.js/httpState.js) outside
+    // ~/.config/google-tools-mcp entirely.
+    it('rejects a path-traversal GOOGLE_MCP_PROFILE and never touches the escaped directory', async () => {
+        const fixture = await makeConfigFixture();
+        try {
+            // configBaseDir is <xdg>/google-tools-mcp, so "../shared" resolves
+            // to a sibling of it -- <xdg>/shared -- which must never be created.
+            const escapedDir = path.join(fixture.xdg, 'shared');
+            await expect(runConfig(fixture, { GOOGLE_MCP_PROFILE: '../shared' }))
+                .rejects.toThrow(/Invalid GOOGLE_MCP_PROFILE/);
+            await expect(access(escapedDir)).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally {
+            await rm(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects every other unsafe GOOGLE_MCP_PROFILE shape (dot-segments, absolute paths, separators)', async () => {
+        const fixture = await makeConfigFixture();
+        try {
+            for (const bad of ['..', '.', '/etc/passwd', 'a/b', 'a\\b', path.join(fixture.root, 'x')]) {
+                await expect(runConfig(fixture, { GOOGLE_MCP_PROFILE: bad }))
+                    .rejects.toThrow(/Invalid GOOGLE_MCP_PROFILE/);
+            }
+        } finally {
+            await rm(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    it('accepts a plain profile name and resolves it as a direct child of the config base directory', async () => {
+        const fixture = await makeConfigFixture();
+        try {
+            const { result } = await runConfig(fixture, { GOOGLE_MCP_PROFILE: 'work' });
+            expect(result.configDir).toBe(path.join(fixture.xdg, 'google-tools-mcp', 'work'));
+        } finally {
+            await rm(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    // Finding 17: a cwd .env is a materially lower trust boundary than the
+    // user config directory -- it's wherever the client happened to be
+    // launched from, often a cloned repository the operator does not
+    // control. Security/lifecycle settings must not be reachable from it.
+    it('ignores security/lifecycle settings from a cwd .env but still loads them from the user config directory', async () => {
+        const fixture = await makeConfigFixture();
+        try {
+            const userDir = path.join(fixture.xdg, 'google-tools-mcp');
+            await mkdir(userDir);
+            const restricted = [
+                'GOOGLE_MCP_TRANSPORT=http', 'GOOGLE_MCP_HTTP_NO_AUTH=1', 'GOOGLE_MCP_HTTP_HOST=0.0.0.0',
+                'GOOGLE_MCP_HTTP_ALLOWED_ORIGINS=https://evil.example', 'GOOGLE_MCP_HTTP_TOKEN=cwd-token',
+                'GOOGLE_MCP_PORT=9999', 'GOOGLE_MCP_ENDPOINT=/evil', 'GOOGLE_MCP_LOG_FILE=/tmp/evil.log',
+                'GOOGLE_MCP_JSONL_FILE=/tmp/evil.jsonl', 'GOOGLE_MCP_OAUTH_PORT=9998',
+                'SERVICE_ACCOUNT_PATH=/tmp/evil-key.json', 'GOOGLE_IMPERSONATE_USER=admin@evil.example',
+            ];
+            await writeFile(path.join(fixture.cwd, '.env'), [...restricted, 'CWD_ONLY_KEY=still-loads'].join('\n'));
+            const { result, stderr } = await runConfig(fixture);
+
+            for (const line of restricted) {
+                const [key] = line.split('=');
+                expect(result.env[key]).toBeUndefined();
+                expect(result.loadedKeys).not.toContain(key);
+                expect(stderr).toContain(`Ignoring ${key} in lower-trust config file ${path.join(fixture.cwd, '.env')}`);
+            }
+            // A non-restricted key from the same lower-trust file still loads.
+            expect(result.env.CWD_ONLY_KEY).toBe('still-loads');
+        } finally {
+            await rm(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    it('still loads security/lifecycle settings from the user config directory .env', async () => {
+        const fixture = await makeConfigFixture();
+        try {
+            const userDir = path.join(fixture.xdg, 'google-tools-mcp');
+            await mkdir(userDir);
+            await writeFile(path.join(userDir, '.env'), 'GOOGLE_MCP_TRANSPORT=http\nGOOGLE_MCP_HTTP_NO_AUTH=1');
+            const { result } = await runConfig(fixture);
+            expect(result.env.GOOGLE_MCP_TRANSPORT).toBe('http');
+            expect(result.env.GOOGLE_MCP_HTTP_NO_AUTH).toBe('1');
         } finally {
             await rm(fixture.root, { recursive: true, force: true });
         }
