@@ -52,7 +52,7 @@ function usage() {
         'Flags:',
         '  --list                     list every registered tool and exit',
         '  --raw                      print the tool result verbatim instead of pretty-printing JSON',
-        '  --cleanup                  trash everything previous live-call runs created, then exit',
+        '  --cleanup [id...]          trash what previous live-call runs created, or the ids given, then exit',
         '',
         '$FOLDER expands to the test folder id inside any argument value.',
     ].join('\n');
@@ -113,8 +113,14 @@ function recordCreated(toolName, result, runId) {
     return { id, kind };
 }
 
-async function cleanup({ guard, journal, tools }) {
-    const entries = readLedger();
+async function cleanup({ guard, journal, tools }, explicitIds = []) {
+    // Explicit ids are how you clean up after "live-smoke --keep": the runner
+    // prints the exact command with the ids it left behind. Containment is
+    // re-verified below either way, so a stray id cannot trash anything outside
+    // the sandbox.
+    const entries = explicitIds.length
+        ? explicitIds.map((id) => ({ ts: new Date().toISOString(), tool: 'explicit', id, kind: 'drive' }))
+        : readLedger();
     if (!entries.length) {
         journal.toStdout('Nothing recorded to clean up.\n');
         return 0;
@@ -145,7 +151,7 @@ async function cleanup({ guard, journal, tools }) {
             journal.write({ kind: 'cleanup', id: entry.id, resource: entry.kind, ok: false, error: reason });
         }
     }
-    fs.rmSync(LEDGER, { force: true });
+    if (!explicitIds.length) fs.rmSync(LEDGER, { force: true });
     journal.toStdout(`Cleaned up ${cleaned} of ${entries.length} recorded item(s).\n`);
     if (failures.length) {
         journal.toStdout(`Could not clean up ${failures.length}:\n${failures.map((f) => `  - ${f}`).join('\n')}\n`);
@@ -184,7 +190,7 @@ async function main() {
             return 0;
         }
 
-        if (wantsCleanup) return cleanup(boot);
+        if (wantsCleanup) return cleanup(boot, rest);
 
         const [toolName, ...rawArgs] = rest;
         const blocked = BLOCKED_TOOLS.get(toolName);

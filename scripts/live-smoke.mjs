@@ -244,6 +244,10 @@ async function main() {
         lines.push(`${unexpected.length} scenario(s) disagreed with expectedOnBase${unexpected.length ? `: ${unexpected.map((r) => r.slug).join(', ')}` : ''}.`);
         if (cleanup.skipped) {
             lines.push(`Cleanup skipped (--keep): ${registry.length} item(s) left in the test folder.`);
+            const driveIds = registry.filter((item) => item.kind === 'drive').map((item) => item.id);
+            const draftIds = registry.filter((item) => item.kind === 'draft').map((item) => item.id);
+            if (driveIds.length) lines.push(`  clean up with: npm run live-call -- --cleanup ${driveIds.join(' ')}`);
+            for (const id of draftIds) lines.push(`  delete draft with: npm run live-call -- deleteDraft id=${id}`);
         } else {
             lines.push(`Cleanup: trashed ${cleanup.cleaned} of ${cleanup.attempted} created item(s).`);
             if (cleanup.failures.length) {

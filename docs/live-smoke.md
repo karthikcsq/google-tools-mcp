@@ -41,6 +41,9 @@ npm run live-call -- modifyText @edit.json
 
 # trash everything your live-call pokes created
 npm run live-call -- --cleanup
+
+# ...or specific ids, which is what "live-smoke --keep" prints for you
+npm run live-call -- --cleanup 1abc... 1def...
 ```
 
 Argument forms are the same three `scripts/call-local-tool.js` accepts:
@@ -132,8 +135,10 @@ npm run live-smoke -- --list                        # what exists, calls nothing
 npm run live-smoke -- docs --keep                   # skip cleanup and go look at the artifacts
 ```
 
-Exit code is non-zero if any scenario failed **or** if cleanup could not remove
-something it created. `--list` and a scenario selector both accept a cluster
+Exit code is non-zero if any scenario failed, if cleanup could not remove
+something it created, or if a draft the run created is still in the mailbox.
+`--keep` prints the exact `live-call -- --cleanup <ids>` command for whatever it
+left behind. `--list` and a scenario selector both accept a cluster
 name, a file name, a scenario name, or an issue number.
 
 The summary table is the only thing written to stdout. Progress, tool logs and
