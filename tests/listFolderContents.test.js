@@ -187,4 +187,86 @@ describe('listFolderContents recursive traversal', () => {
         expect(result.entries.map((entry) => entry.id)).toEqual(['a']);
         expect(list).toHaveBeenCalledTimes(2);
     });
+
+    // Review finding 1: Drive uses 403 for both "you can't read this folder"
+    // and "you're temporarily over quota/rate limit" — the latter must be
+    // propagated (and retried by the caller per Drive's own guidance), never
+    // fabricated into an `unreadable` entry or used to trigger the isolation
+    // bisection that burns more calls exactly when Drive is asking the
+    // client to back off.
+    it('propagates a rate-limited 403 instead of fabricating an unreadable entry or bisecting the chunk', async () => {
+        let combinedChunkAttempts = 0;
+        const list = jest.fn(async ({ q }) => {
+            if (q.includes("'root-id'")) return { data: { files: [folder('a', 'A', ['root-id']), folder('b', 'B', ['root-id'])] } };
+            if (q.includes("'a' in parents") && q.includes("'b' in parents")) {
+                combinedChunkAttempts += 1;
+                const error = new Error('User Rate Limit Exceeded');
+                error.code = 403;
+                error.errors = [{ domain: 'usageLimits', reason: 'userRateLimitExceeded', message: 'User Rate Limit Exceeded' }];
+                throw error;
+            }
+            throw new Error('must not bisect into a singleton-parent query on a rate-limit 403');
+        });
+        fakeDrive = { files: { get: jest.fn(async () => ({ data: { id: 'root-id', name: 'Root' } })), list } };
+
+        await expect(getTool().execute({ folderId: 'root', depth: 'all' }, { log: noopLog })).rejects.toThrow(/rate limit|quota/i);
+
+        // Exactly one attempt at the combined [a, b] chunk — no isolation
+        // bisection into singleton 'a' / 'b' retries.
+        expect(combinedChunkAttempts).toBe(1);
+        expect(list).toHaveBeenCalledTimes(2);
+    });
+
+    // Review finding 2: a maxItems cap already satisfiable from an earlier
+    // page must stop pagination before the next page is requested, instead
+    // of buffering every page of the chunk first.
+    it('stops paginating once maxItems is satisfied without fetching a needless later page', async () => {
+        const list = jest.fn(async ({ q, pageToken }) => {
+            if (q.includes("'root-id'") && !pageToken) {
+                return { data: { files: [file('first', 'first.txt', ['root-id']), file('second', 'second.txt', ['root-id'])], nextPageToken: 'page-2' } };
+            }
+            if (pageToken === 'page-2') {
+                throw new Error('must not fetch a later page once maxItems is already satisfied');
+            }
+            return { data: { files: [] } };
+        });
+        fakeDrive = { files: { get: jest.fn(async () => ({ data: { id: 'root-id', name: 'Root' } })), list } };
+
+        const result = JSON.parse(await getTool().execute({ folderId: 'root', depth: 'all', maxItems: 1 }, { log: noopLog }));
+
+        expect(result).toMatchObject({ count: 1, truncated: true });
+        expect(result.entries).toEqual([expect.objectContaining({ id: 'first' })]);
+        expect(list).toHaveBeenCalledTimes(1);
+    });
+
+    // Review finding 4: a shared-drive root must scope every recursive
+    // files.list call to that drive (corpora: 'drive' + driveId), or
+    // descendants the caller has access to via the drive but never
+    // individually opened are silently dropped from a tree reported as
+    // complete (truncated: false).
+    it('scopes every recursive files.list call to the shared drive when the root has a driveId', async () => {
+        const list = jest.fn(async ({ q }) => q.includes("'root-id'")
+            ? ({ data: { files: [folder('a', 'A', ['root-id'])] } })
+            : ({ data: { files: [] } }));
+        const get = jest.fn(async () => ({ data: { id: 'root-id', name: 'Shared Root', driveId: 'shared-drive-x' } }));
+        fakeDrive = { files: { get, list } };
+
+        await getTool().execute({ folderId: 'root', depth: 'all' }, { log: noopLog });
+
+        expect(get).toHaveBeenCalledWith(expect.objectContaining({ fields: expect.stringContaining('driveId') }));
+        expect(list).toHaveBeenCalledTimes(2);
+        for (const call of list.mock.calls) {
+            expect(call[0]).toMatchObject({ corpora: 'drive', driveId: 'shared-drive-x' });
+        }
+    });
+
+    it('does not set corpora/driveId for a My Drive root without a driveId', async () => {
+        const list = jest.fn(async () => ({ data: { files: [] } }));
+        fakeDrive = { files: { get: jest.fn(async () => ({ data: { id: 'root-id', name: 'My Drive' } })), list } };
+
+        await getTool().execute({ folderId: 'root', depth: 'all' }, { log: noopLog });
+
+        expect(list.mock.calls[0][0].corpora).toBeUndefined();
+        expect(list.mock.calls[0][0].driveId).toBeUndefined();
+    });
 });
