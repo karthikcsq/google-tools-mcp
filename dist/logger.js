@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { redactDiagnostic } from './errors.js';
-import { getDefaultLogPath, getDefaultJsonlPath } from './config.js';
+import { getConfigDir, getDefaultLogPath, getDefaultJsonlPath } from './config.js';
 
 const LOG_LEVELS = {
     debug: 0,
@@ -50,17 +50,21 @@ export function getLogFilePath() {
     return configuredPath(process.env.GOOGLE_MCP_LOG_FILE, getDefaultLogPath());
 }
 
+// The two sinks are documented as independently controlled: GOOGLE_MCP_LOG_FILE
+// changes or disables the plain file, GOOGLE_MCP_JSONL_FILE changes or disables
+// JSONL. So an explicit JSONL path is resolved on its own and stays live even
+// when the plain log is switched off. The plain log is only consulted to derive
+// a default location when JSONL has no explicit path of its own.
 export function getStructuredLogFilePath() {
+    const configured = process.env.GOOGLE_MCP_JSONL_FILE;
+    if (configured !== undefined && configured !== '' && configured !== '1') {
+        return disabledValues.has(String(configured).toLowerCase()) ? null : configured;
+    }
     const plainPath = getLogFilePath();
     if (!plainPath) return null;
-    const configured = process.env.GOOGLE_MCP_JSONL_FILE;
-    if (configured === undefined || configured === '' || configured === '1') {
-        return process.env.GOOGLE_MCP_LOG_FILE && process.env.GOOGLE_MCP_LOG_FILE !== '1'
-            ? path.join(path.dirname(plainPath), 'server.jsonl')
-            : getDefaultJsonlPath();
-    }
-    if (disabledValues.has(String(configured).toLowerCase())) return null;
-    return configured;
+    return process.env.GOOGLE_MCP_LOG_FILE && process.env.GOOGLE_MCP_LOG_FILE !== '1'
+        ? path.join(path.dirname(plainPath), 'server.jsonl')
+        : getDefaultJsonlPath();
 }
 
 function warnFileFailure(filePath) {
@@ -83,8 +87,22 @@ function rotateIfAlreadyOversized(filePath) {
     }
 }
 
+// GOOGLE_MCP_LOG_FILE and GOOGLE_MCP_JSONL_FILE accept arbitrary paths, so the
+// parent directory is frequently one this process does not own — /tmp, or a
+// directory the operator deliberately shares at 0755. Tightening that to 0700
+// would change permissions on unrelated files, and on /tmp the chmod fails
+// outright with EPERM and takes requested logging down with it. So a directory
+// only gets its mode set when this logger created it, or when it is the
+// dedicated config directory the logger owns by definition. Privacy for a
+// custom location rests on the 0600 file mode instead.
 function ensurePrivateDirectory(directory) {
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const owned = path.resolve(directory) === path.resolve(getConfigDir());
+    let created = false;
+    if (!fs.existsSync(directory)) {
+        fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+        created = true;
+    }
+    if (!created && !owned) return;
     try { fs.chmodSync(directory, 0o700); } catch (error) { if (process.platform !== 'win32') throw error; }
 }
 
