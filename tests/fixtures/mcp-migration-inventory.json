@@ -645,6 +645,9 @@
         "file": "tests/markdownFidelity.test.js"
       },
       {
+        "file": "tests/markdownRoundTrip.test.js"
+      },
+      {
         "file": "tests/markdownToolSuccessMessages.test.js"
       },
       {
