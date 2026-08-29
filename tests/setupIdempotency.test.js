@@ -5,9 +5,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'node:url';
 import {
-    buildClientEntry, createClientAdapters, reconcileClientEntry, entriesEqual, parseClientEntry,
+    buildClientEntry, codexTokenEnvironmentCommand, createClientAdapters, reconcileClientEntry, entriesEqual, parseClientEntry,
 } from '../dist/clientAdapters.js';
-import { checkLaunchTarget, inspectToken } from '../dist/setupInspect.js';
+import { shellQuote } from '../dist/shellSafe.js';
+import { checkLaunchTarget, inspectSetup, inspectToken } from '../dist/setupInspect.js';
 import { persistTokenCredentials, SCOPES } from '../dist/auth.js';
 import { backupClientEntry, backupEnvFile, configureTransport, mergeCredentialEnv, persistTransportSelection, registerClients, runSetup } from '../dist/setup.js';
 
@@ -164,14 +165,143 @@ describe('setup client reconciliation', () => {
         expect(client.calls).toEqual([]);
     });
 
-    it('refuses unsupported Codex HTTP auth without issuing an invalid command', async () => {
+    it('refuses unsupported Codex HTTP auth without printing the bearer token', async () => {
         const [codex] = createClientAdapters({ run: async () => '' });
+        const tokenPath = path.join(os.tmpdir(), 'google-tools-mcp-config', 'http-token');
         const result = await reconcileClientEntry({ ...codex, get: async () => ({ status: 'missing' }) },
-            { url: 'http://127.0.0.1:3939/mcp', bearer_token_env_var: 'GOOGLE_MCP_HTTP_TOKEN' }, { token: 'private-token' });
+            { url: 'http://127.0.0.1:3939/mcp', bearer_token_env_var: 'GOOGLE_MCP_HTTP_TOKEN' }, { tokenPath });
         expect(result).toMatchObject({ ok: false, status: 'unsupported-http-auth' });
         expect(result.manualCommand).toContain('GOOGLE_MCP_HTTP_TOKEN');
-        expect(result.manualCommand).toContain('private-token');
+        // Issue #83: the persisted token is stored privately and never printed.
+        // The instruction names the file it lives in instead.
+        expect(result.manualCommand).toContain(tokenPath);
         expect(result.manualCommand).not.toContain(' --env ');
+    });
+
+    it('never renders the bearer token anywhere in the Codex completion instructions', async () => {
+        const token = 'private-token-that-must-not-appear';
+        const tokenPath = path.join(os.tmpdir(), 'google-tools-mcp-config', 'http-token');
+        const [codex] = createClientAdapters({ run: async () => '' });
+        const desiredHttp = { url: 'http://127.0.0.1:3939/mcp', bearer_token_env_var: 'GOOGLE_MCP_HTTP_TOKEN' };
+        for (const current of [{ status: 'missing' }, { status: 'found', entry: { url: 'http://127.0.0.1:9999/mcp' } }]) {
+            const result = await reconcileClientEntry({ ...codex, get: async () => current }, desiredHttp, { tokenPath });
+            expect(result.manualCommand).not.toContain(token);
+            expect(result.manualCommand.split('\n')[0]).toMatch(/^(export GOOGLE_MCP_HTTP_TOKEN=|setx GOOGLE_MCP_HTTP_TOKEN )/);
+        }
+        for (const platform of ['linux', 'darwin', 'win32']) {
+            expect(codexTokenEnvironmentCommand({ tokenPath, platform })).toContain(tokenPath);
+            expect(codexTokenEnvironmentCommand({ tokenPath, platform })).not.toContain(token);
+            // No stored path (the token came from the environment): say so,
+            // still without a value.
+            const noPath = codexTokenEnvironmentCommand({ tokenPath: null, platform });
+            expect(noPath).toMatch(/^(#|REM) /);
+            expect(noPath).toContain('GOOGLE_MCP_HTTP_TOKEN');
+        }
+    });
+
+    it('registers Codex directly for a no-auth loopback HTTP service', async () => {
+        const url = 'http://127.0.0.1:3939/mcp';
+        const codexEntry = buildClientEntry('Codex', { transport: 'http', url, noAuth: true });
+        const claudeEntry = buildClientEntry('Claude Code', { transport: 'http', url, noAuth: true });
+        expect(codexEntry).toEqual({ url });
+        // No token in the environment, and none needed.
+        expect(claudeEntry).toEqual({ type: 'http', url });
+
+        const [base] = createClientAdapters({ run: async () => '' });
+        const calls = [];
+        const missing = { ...base, get: async () => ({ status: 'missing' }), add: async value => { calls.push(value); } };
+        await expect(reconcileClientEntry(missing, codexEntry, { noAuth: true })).resolves.toMatchObject({ ok: true, status: 'added' });
+        expect(calls).toEqual([codexEntry]);
+        expect(base.addCommand(codexEntry)).toBe(`codex mcp add google --url ${url}`);
+        expect(base.addCommand(codexEntry)).not.toContain('--bearer-token-env-var');
+
+        // An already-correct no-auth entry converges instead of being re-added.
+        const correct = { ...base, get: async () => ({ status: 'found', entry: { name: 'google', enabled: true, transport: { type: 'streamable_http', url, bearer_token_env_var: null } } }) };
+        await expect(reconcileClientEntry(correct, codexEntry, { noAuth: true })).resolves.toMatchObject({ ok: true, status: 'unchanged' });
+    });
+
+    it('recognizes the real codex mcp get --json transport shapes for both transports', async () => {
+        // inspectSetup runs checkLaunchTarget() with the real filesystem, so the
+        // absolute paths here must actually exist on every platform this suite
+        // runs on: the current interpreter and this test file itself stand in
+        // for the real launch command and installed entry point.
+        const launch = { command: process.execPath, args: [fileURLToPath(import.meta.url)] };
+        const stdioJson = JSON.stringify({
+            name: 'google',
+            enabled: true,
+            transport: {
+                type: 'stdio',
+                command: launch.command,
+                args: launch.args,
+                env: { CODEX_MCP_PROTOCOL_VERSION: '2026-07-28' },
+            },
+            startup_timeout_sec: 10,
+            tool_timeout_sec: 60,
+            enabled_tools: null,
+            disabled_tools: null,
+        });
+        const parsedStdio = parseClientEntry(stdioJson);
+        expect(parsedStdio.status).toBe('found');
+        // Codex bookkeeping is dropped; only the registration fields survive.
+        expect(parsedStdio.entry).toEqual({ command: launch.command, args: launch.args, env: { CODEX_MCP_PROTOCOL_VERSION: '2026-07-28' } });
+
+        const desiredStdio = buildClientEntry('Codex', { transport: 'stdio', launch });
+        expect(entriesEqual(parsedStdio.entry, desiredStdio)).toBe(true);
+
+        const url = 'http://127.0.0.1:3939/mcp';
+        const httpJson = JSON.stringify({
+            name: 'google',
+            enabled: true,
+            transport: { type: 'streamable_http', url, bearer_token_env_var: 'GOOGLE_MCP_HTTP_TOKEN', http_headers: null },
+            startup_timeout_sec: 10,
+        });
+        const parsedHttp = parseClientEntry(httpJson);
+        expect(parsedHttp.entry).toEqual({ url, bearer_token_env_var: 'GOOGLE_MCP_HTTP_TOKEN' });
+        expect(entriesEqual(parsedHttp.entry, buildClientEntry('Codex', { transport: 'http', url, token: 'irrelevant' }))).toBe(true);
+
+        // End to end through the adapter: setup converges instead of offering
+        // to remove and re-add a correct entry on every run.
+        const [codex] = createClientAdapters({ run: async () => stdioJson });
+        await expect(reconcileClientEntry(codex, desiredStdio, { backup: async () => { throw new Error('must not back up a correct entry'); } }))
+            .resolves.toMatchObject({ ok: true, status: 'unchanged' });
+
+        // ... and doctor calls it configured.
+        const report = await inspectSetup({
+            adapters: [{ name: 'Codex', detect: async () => true, get: async () => parsedStdio }],
+            desiredEntry: desiredStdio, inspectHttp: async () => ({ healthy: true }),
+            credentialsCheck: async () => ({ configured: true }), tokenCheck: async () => ({ status: 'valid' }), configWarnings: [],
+        });
+        expect(report.clients[0]).toMatchObject({ client: 'Codex', status: 'configured', matchesRecommended: true });
+        expect(report.healthy).toBe(true);
+    });
+
+    it('executes client commands as argv, never as a shell string', async () => {
+        const calls = [];
+        const [codex, claude] = createClientAdapters({ run: async (argv) => { calls.push(argv); return ''; } });
+        // An endpoint validEndpoint() allows, and an install path carrying shell
+        // metacharacters: both must survive as single literal argv elements.
+        const url = 'http://127.0.0.1:3939/mcp;id;:';
+        const launch = { command: '/opt/my $tools & co/bin/node', args: ['/opt/my $tools & co/dist/index.js'] };
+
+        await codex.add(buildClientEntry('Codex', { transport: 'http', url, token: 't' }));
+        expect(calls.at(-1)).toEqual(['codex', 'mcp', 'add', 'google', '--url', url, '--bearer-token-env-var', 'GOOGLE_MCP_HTTP_TOKEN']);
+        expect(calls.at(-1).filter(value => value === url)).toHaveLength(1);
+
+        await codex.add(buildClientEntry('Codex', { transport: 'stdio', launch }));
+        expect(calls.at(-1)).toEqual(['codex', 'mcp', 'add', 'google', '--env', 'CODEX_MCP_PROTOCOL_VERSION=2026-07-28', '--', launch.command, launch.args[0]]);
+
+        await claude.add(buildClientEntry('Claude Code', { transport: 'stdio', launch }));
+        expect(calls.at(-1)).toEqual(['claude', 'mcp', 'add', '-s', 'user', 'google', '--', launch.command, launch.args[0]]);
+
+        await claude.add(buildClientEntry('Claude Code', { transport: 'http', url, token: 'tok;id' }));
+        expect(calls.at(-1)).toEqual(['claude', 'mcp', 'add', '-s', 'user', '--transport', 'http', 'google', url, '--header', 'Authorization: Bearer tok;id']);
+
+        // Nothing anywhere is a joined command string.
+        expect(calls.every(argv => Array.isArray(argv) && argv.every(value => typeof value === 'string'))).toBe(true);
+        // The display rendering quotes what a shell would otherwise split.
+        const display = codex.addCommand(buildClientEntry('Codex', { transport: 'http', url, token: 't' }));
+        expect(display).toContain(shellQuote(url));
+        expect(display).not.toBe(`codex mcp add google --url ${url} --bearer-token-env-var GOOGLE_MCP_HTTP_TOKEN`);
     });
 
     it('accepts an already-correct Codex HTTP registration and gives state-specific manual commands otherwise', async () => {
@@ -207,7 +337,8 @@ describe('setup client reconciliation', () => {
         const result = await reconcileClientEntry(client, desired, { backup: async () => { throw new Error('must not back up'); } });
         expect(result).toMatchObject({ ok: false, status: 'unknown' });
         expect(run).toHaveBeenCalledTimes(2);
-        expect(run.mock.calls.every(([command]) => command === client.getCommand)).toBe(true);
+        expect(run.mock.calls.every(([argv]) => Array.isArray(argv))).toBe(true);
+        expect(run.mock.calls.every(([argv]) => argv.join(' ') === client.getCommand)).toBe(true);
     });
 
     it('propagates a declined repair through runSetup without printing completion', async () => {

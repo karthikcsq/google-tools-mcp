@@ -26,7 +26,11 @@ export async function readPersistedHttpToken({ configDir = getConfigDir(), lstat
 export async function createDoctorDesiredEntryResolver({ launch, transport, env = process.env, configDir = getConfigDir(), lstat = fs.lstat, readFile = fs.readFile, loadedConfigKeys = env === process.env ? getLoadedConfigKeys() : [] } = {}) {
     const environmentToken = String(env.GOOGLE_MCP_HTTP_TOKEN || '').trim();
     const tokenIsInherited = Boolean(environmentToken) && !loadedConfigKeys.includes('GOOGLE_MCP_HTTP_TOKEN');
-    const persistedToken = transport?.transport === 'http' && !environmentToken
+    // With GOOGLE_MCP_HTTP_NO_AUTH=1 the running server checks no bearer token,
+    // so there is nothing to read from disk and nothing Codex must inherit.
+    // Demanding it anyway reported a correct URL-only entry as unhealthy.
+    const noAuth = Boolean(transport?.noAuth);
+    const persistedToken = transport?.transport === 'http' && !noAuth && !environmentToken
         ? await readPersistedHttpToken({ configDir, lstat, readFile })
         : null;
     return (adapter) => {
@@ -34,7 +38,7 @@ export async function createDoctorDesiredEntryResolver({ launch, transport, env 
             const desiredEntry = buildClientEntry(adapter.name, {
                 ...transport, launch, token: environmentToken || persistedToken || transport?.token,
             });
-            const problem = transport?.transport === 'http' && adapter.name === 'Codex' && !tokenIsInherited
+            const problem = transport?.transport === 'http' && adapter.name === 'Codex' && !noAuth && !tokenIsInherited
                 ? 'GOOGLE_MCP_HTTP_TOKEN is missing from the Codex launch environment'
                 : undefined;
             return { desiredEntry, problem };

@@ -704,14 +704,18 @@ export async function configureTransport(launch, {
     // Establish the server before writing either client entry. If startup,
     // authentication, or discovery fails, setup stops with every client still
     // pointed at its previous configuration.
-    const tokenInfo = await ensureToken();
-    env.GOOGLE_MCP_HTTP_TOKEN = tokenInfo.token;
     const config = resolveHttpServiceConfig(env);
+    // GOOGLE_MCP_HTTP_NO_AUTH=1 disables the bearer gate entirely, so minting
+    // and persisting a token would produce a credential nothing checks and push
+    // Codex down a manual path it does not need.
+    const tokenInfo = config.noAuth ? { token: null, source: 'disabled', path: null } : await ensureToken();
+    if (tokenInfo.token) env.GOOGLE_MCP_HTTP_TOKEN = tokenInfo.token;
     const service = await startService({ launch, env });
     if (!service.healthy) throw new Error('Shared HTTP lifecycle did not become healthy; client configuration was not changed.');
     await persistTransport('http');
     env.GOOGLE_MCP_TRANSPORT = 'http';
     return Object.freeze({ transport: 'http', url: service.state.url || config.url, token: tokenInfo.token,
+        noAuth: config.noAuth, tokenPath: tokenInfo.path || null,
         tokenSource: tokenInfo.source, serviceStatus: service.status });
 }
 
@@ -725,7 +729,9 @@ export async function registerClients(launch, transport = { transport: 'stdio' }
         detected = true;
         const desired = buildClientEntry(adapter.name, { ...transport, launch });
         const result = await reconcileClientEntry(adapter, desired, {
-            token: transport.token,
+            // The token path, never the token: the Codex completion instruction
+            // reads the private file instead of printing its bytes.
+            tokenPath: transport.tokenPath, noAuth: Boolean(transport.noAuth),
             confirm: async ({ action, current }) => {
                 if (action === 'replace') {
                     ui.log.message(`${adapter.name} current entry:\n${chalk.dim(JSON.stringify(redactEntry(current.entry)))}\nRecommended:\n${chalk.cyan(adapter.addCommand(desired, { redact: true }))}`);

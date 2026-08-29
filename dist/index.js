@@ -120,7 +120,7 @@ if (process.argv[2] === 'doctor') {
         const doctorTransport = await resolveDoctorTransport({ env: process.env, getHttpStatus: getHttpServiceStatus });
         const httpConfigForDoctor = doctorTransport === 'http' ? resolveHttpServiceConfig(process.env) : null;
         const transport = doctorTransport === 'http'
-            ? { transport: 'http', url: httpConfigForDoctor.url }
+            ? { transport: 'http', url: httpConfigForDoctor.url, noAuth: httpConfigForDoctor.noAuth }
             : { transport: 'stdio' };
         const desiredEntries = await createDoctorDesiredEntryResolver({ launch, transport, env: process.env });
         const report = await inspectSetup({ adapters: createClientAdapters(), desiredEntries });
