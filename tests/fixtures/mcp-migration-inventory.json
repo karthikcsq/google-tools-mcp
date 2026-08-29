@@ -618,6 +618,9 @@
         "file": "tests/googleDocsApiHelpers.test.js"
       },
       {
+        "file": "tests/guardMutationPhantomStaleness.test.js"
+      },
+      {
         "file": "tests/guardMutationRevisionRefresh.test.js"
       },
       {
@@ -900,7 +903,7 @@
       },
       {
         "file": "dist/tools/docs/modifyText.js",
-        "line": 113,
+        "line": 129,
         "match": ".addTool({"
       },
       {

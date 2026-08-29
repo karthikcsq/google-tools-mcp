@@ -856,6 +856,101 @@ export function buildDefaultColorStyleRequest(startIndex, endIndex, color, tabId
         },
     };
 }
+// Character-style properties `clearStyle` resets, and the properties reported
+// back as "inherited style" when they are set on the run new text lands in.
+// Docs API rule: a field named in the mask but absent from the payload is reset
+// to its default, which is what makes one empty textStyle enough to clear all
+// of these (https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/request#updatetextstylerequest).
+const CLEARABLE_TEXT_STYLE_FIELDS = [
+    'bold', 'italic', 'underline', 'strikethrough', 'smallCaps',
+    'baselineOffset', 'link', 'foregroundColor', 'backgroundColor',
+    'fontSize', 'weightedFontFamily',
+];
+/**
+ * Builds an updateTextStyle request that strips direct character formatting from
+ * [startIndex, endIndex), so text inserted there lands as plain body text
+ * instead of inheriting the formatting of the run it replaced (issue #121).
+ * Returns null for an empty/invalid range.
+ */
+export function buildClearTextStyleRequest(startIndex, endIndex, tabId) {
+    if (endIndex <= startIndex)
+        return null;
+    const range = { startIndex, endIndex };
+    if (tabId)
+        range.tabId = tabId;
+    return {
+        updateTextStyle: {
+            range,
+            // Deliberately empty: every field in the mask resets to its default.
+            textStyle: {},
+            fields: CLEARABLE_TEXT_STYLE_FIELDS.join(','),
+        },
+    };
+}
+/**
+ * Human-readable list of the non-default character formatting on a textStyle,
+ * or an empty array when it is plain. Used to tell the caller what formatting
+ * the text they just inserted will have inherited (issue #121) — "Successfully
+ * replaced text at range 2934-3110" gave no hint that 2,500 characters had just
+ * landed in italic.
+ *
+ * Only the visually obvious attributes are named. Font size, family and colors
+ * are omitted on purpose: they are set on essentially every run in a real
+ * document, so reporting them would make the note noise and train the caller to
+ * ignore it.
+ */
+export function describeInheritedTextStyle(textStyle) {
+    if (!textStyle || typeof textStyle !== 'object')
+        return [];
+    const named = [];
+    if (textStyle.bold === true) named.push('bold');
+    if (textStyle.italic === true) named.push('italic');
+    if (textStyle.underline === true) named.push('underline');
+    if (textStyle.strikethrough === true) named.push('strikethrough');
+    if (textStyle.smallCaps === true) named.push('small caps');
+    if (textStyle.baselineOffset === 'SUPERSCRIPT') named.push('superscript');
+    if (textStyle.baselineOffset === 'SUBSCRIPT') named.push('subscript');
+    if (textStyle.link?.url) named.push('a hyperlink');
+    return named;
+}
+/**
+ * The textStyle of the run covering `index`, or null when it cannot be found.
+ *
+ * Docs inserts text with the formatting of the surrounding run, so this is the
+ * style newly inserted text will carry. Fetched with a narrow field mask (text
+ * styles and element bounds only, never content) so the probe stays cheap even
+ * on a large document. Any failure answers null: "we could not tell you what
+ * style you inherited" must never fail the edit itself.
+ */
+export async function fetchTextStyleAtIndex(docs, documentId, index, tabId) {
+    if (!Number.isInteger(index) || index < 1)
+        return null;
+    try {
+        const fields = tabId
+            ? 'tabs(tabProperties(tabId),documentTab(body(content(paragraph(elements(startIndex,endIndex,textRun(textStyle)))))))'
+            : 'body(content(paragraph(elements(startIndex,endIndex,textRun(textStyle)))))';
+        const response = await docs.documents.get({
+            documentId,
+            ...(tabId ? { includeTabsContent: true } : {}),
+            fields,
+        });
+        const content = tabId
+            ? findTabById(response.data, tabId)?.documentTab?.body?.content
+            : response.data.body?.content;
+        for (const element of content ?? []) {
+            for (const pe of element.paragraph?.elements ?? []) {
+                if (!pe.textRun) continue;
+                if (typeof pe.startIndex !== 'number' || typeof pe.endIndex !== 'number') continue;
+                if (index >= pe.startIndex && index < pe.endIndex) return pe.textRun.textStyle ?? null;
+            }
+        }
+        return null;
+    }
+    catch (error) {
+        logger.warn(`Could not read the text style at index ${index} of ${documentId}: ${error.message}`);
+        return null;
+    }
+}
 // --- Style Request Builders ---
 export function buildUpdateTextStyleRequest(startIndex, endIndex, style, tabId) {
     const textStyle = {};

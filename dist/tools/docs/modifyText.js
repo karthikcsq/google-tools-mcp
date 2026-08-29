@@ -24,6 +24,13 @@ const ModifyTextParameters = DocumentIdParameter.extend({
         .describe('Target by range indices, text search, or insertion index.'),
     text: z.string().optional().describe('New text to insert or replace with.'),
     style: TextStyleParameters.optional().describe('Text formatting to apply (bold, italic, font size, etc.).'),
+    clearStyle: z
+        .boolean()
+        .optional()
+        .describe('If true, inserted text lands as plain body text instead of inheriting the character formatting of the run it replaced. ' +
+        'Google Docs gives inserted text the formatting of the surrounding run, so replacing a one-line italic placeholder with a long section silently makes the whole section italic. ' +
+        'Set this whenever the replacement is new content rather than an in-place edit of an existing phrase. Any `style` you also pass is applied after the clear, so it still wins. ' +
+        'Ignored when the call inserts no text. When you do not set it, the result reports any non-default formatting the new text inherited.'),
     paragraphStyle: ParagraphStyleParameters.optional().describe('Paragraph formatting to apply (alignment, indentation, headings, spacing, etc.).'),
     tabId: z
         .string()
@@ -52,7 +59,7 @@ const ModifyTextParameters = DocumentIdParameter.extend({
  * last request touching the range (issue #14).
  */
 export function buildModifyTextRequests(opts) {
-    const { startIndex, endIndex, text, style, paragraphStyle, tabId, defaultColor } = opts;
+    const { startIndex, endIndex, text, style, paragraphStyle, tabId, defaultColor, clearStyle } = opts;
     const requests = [];
     if (text === undefined && !style && !paragraphStyle)
         return requests;
@@ -69,6 +76,15 @@ export function buildModifyTextRequests(opts) {
         if (tabId)
             location.tabId = tabId;
         requests.push({ insertText: { location, text } });
+        // 2a. Strip the character formatting the insertion inherited from its
+        // surrounding run (issue #121). Emitted BEFORE the default-color and
+        // caller-style requests below so neither is undone by the clear.
+        if (clearStyle) {
+            const clearRequest = GDocsHelpers.buildClearTextStyleRequest(startIndex, startIndex + text.length, tabId);
+            if (clearRequest) {
+                requests.push(clearRequest);
+            }
+        }
         // 2b. Paint the freshly-created range with the document default
         // foreground color, if one was resolved (issue #14). Only for text
         // that was actually just inserted — never touches existing content.
@@ -124,6 +140,7 @@ export function register(server) {
             'For multi-line, list, or section-level content at a range, use replaceRangeWithMarkdown; to rewrite a whole document, use replaceDocumentWithMarkdown. ' +
             'To add content to the end of a doc, use appendMarkdown or appendText. ' +
             "Newly inserted text carries the document's default text color explicitly, when the document defines one. " +
+            'Google Docs also gives inserted text the CHARACTER formatting of the run around it, so replacing an italic placeholder with a long section makes that whole section italic: pass clearStyle:true to insert as plain body text instead. When you do not, the result names any non-default formatting the new text inherited. ' +
             'If the document changed after you read it, a textToFind target is re-resolved against the current document and proceeds when the change did not touch it; an explicit startIndex/endIndex or insertionIndex is refused unless the change landed strictly after the range, because explicit indices have no anchor to re-resolve and an edit before them moves the content they addressed. Prefer textToFind when a document has other editors.',
         parameters: ModifyTextParameters,
         execute: async (args, { log }) => {
@@ -234,13 +251,27 @@ export function register(server) {
                 // inserted text carries an explicit foreground color instead
                 // of leaving it undefined (issue #14). Only needed when we're
                 // actually inserting new text.
+                const insertsText = normalizedText !== undefined && normalizedText !== '';
                 let defaultColor;
-                if (normalizedText !== undefined && normalizedText !== '') {
+                if (insertsText) {
                     const { color, error: defaultColorError } = await GDocsHelpers.getDefaultTextColor(docs, args.documentId);
                     defaultColor = color;
                     if (defaultColorError) {
                         log.warn(`modifyText: could not fetch document default text color for ${args.documentId}: ${defaultColorError.message}`);
                     }
+                }
+                // What formatting the new text will inherit (issue #121). Docs
+                // gives inserted text the style of the run around it, so for a
+                // replacement that is the run being replaced (at startIndex) and
+                // for a pure insertion it is the character immediately before
+                // the insertion point. Probed only when it can matter: not for a
+                // delete, not for a style-only call, and not when clearStyle
+                // already guarantees plain text.
+                let inheritedStyleNames = [];
+                if (insertsText && !args.clearStyle) {
+                    const probeIndex = endIndex !== undefined ? startIndex : startIndex - 1;
+                    const inheritedStyle = await GDocsHelpers.fetchTextStyleAtIndex(docs, args.documentId, probeIndex, args.tabId);
+                    inheritedStyleNames = GDocsHelpers.describeInheritedTextStyle(inheritedStyle);
                 }
                 const requests = buildModifyTextRequests({
                     startIndex,
@@ -250,6 +281,7 @@ export function register(server) {
                     paragraphStyle: args.paragraphStyle,
                     tabId: args.tabId,
                     defaultColor,
+                    clearStyle: args.clearStyle,
                 });
                 if (requests.length === 0) {
                     // Nothing was written, so the lease must not stay RESERVED —
@@ -280,7 +312,17 @@ export function register(server) {
                 if (args.paragraphStyle)
                     actions.push('applied paragraph formatting');
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
-                return `${docUrl}\nSuccessfully ${actions.join(' and ')} at range ${startIndex}-${endIndex ?? startIndex + (args.text?.length ?? 0)}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+                // Say it in the result, not just in the doc. A silent inherit is
+                // how 2,500 characters landed in italic behind a "Successfully
+                // replaced text" (issue #121).
+                const inheritedNote = inheritedStyleNames.length > 0
+                    ? ` The new text inherited ${inheritedStyleNames.join(', ')} from the text around it — ` +
+                      'pass clearStyle:true to insert as plain body text instead, or fix it with a follow-up modifyText style call.'
+                    : '';
+                const clearedNote = args.clearStyle && insertsText
+                    ? ' Character formatting was cleared on the new text (clearStyle).'
+                    : '';
+                return `${docUrl}\nSuccessfully ${actions.join(' and ')} at range ${startIndex}-${endIndex ?? startIndex + (args.text?.length ?? 0)}${args.tabId ? ` in tab ${args.tabId}` : ''}.${clearedNote}${inheritedNote}`;
             }
             catch (error) {
                 // A failure before the write (tab not found, text not found, a
