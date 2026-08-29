@@ -132,6 +132,136 @@ export function checkMarkdownFidelity(bodyContent) {
     }
     return warnings;
 }
+// --- Link/display-text mismatch detection (issue #117) ---
+//
+// Google Docs silently re-autolinks substrings when a line containing an
+// email address is edited: the visible text stays correct while the link
+// target underneath drifts (a typo'd domain, or the link boundary sliding to
+// start mid-word). Every readable surface — markdown, format='text', the doc
+// itself at a glance — agrees with the WRONG target, so nothing about
+// reading the document catches it. This is a read-time detector, not a
+// markdown-rendering concern, but it lives next to checkMarkdownFidelity
+// because both are "scan bodyContent, report something readDocument's
+// markdown output cannot show on its own" checks fed by the same caller.
+//
+// Conservative by design: a link is only ever flagged when its OWN display
+// text independently looks like an email address or a URL. A display text
+// like "click here" or "our pricing page" never matches either shape, so an
+// ordinary prose link is never flagged, no matter what it points to.
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// TLDs actually seen in the wild for bare "example.com"-style display text.
+// Deliberately NOT a generic "word.word" matcher: that would flag ordinary
+// prose like "Node.js" or "e.g." as a URL. Requiring a recognized TLD after
+// the final dot keeps the bare-domain path narrow while still catching the
+// reported case (a plain domain with no scheme, e.g. "rolltackventures.com").
+const COMMON_TLDS = new Set([
+    'com', 'org', 'net', 'io', 'dev', 'co', 'gov', 'edu', 'app', 'ai', 'info',
+    'biz', 'me', 'us', 'uk', 'ca', 'au', 'de', 'fr', 'jp', 'cn', 'ru', 'br',
+    'in', 'nl', 'se', 'es', 'it', 'xyz', 'tech', 'cloud', 'online', 'site', 'blog',
+]);
+function isEmailShaped(text) {
+    return EMAIL_SHAPE.test(text);
+}
+function isUrlShaped(text) {
+    if (!text || /\s/.test(text))
+        return false;
+    if (/^(?:https?|ftp):\/\/\S+$/i.test(text))
+        return true;
+    if (/^www\.\S+$/i.test(text))
+        return true;
+    const match = text.match(/^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)\.([a-z]{2,24})(\/\S*)?$/i);
+    if (!match)
+        return false;
+    return COMMON_TLDS.has(match[2].toLowerCase());
+}
+// Loosely canonicalize a URL/mailto target so trivial, meaningless
+// differences (scheme, "www.", a trailing slash, a mailto query string,
+// case) never produce a false-positive mismatch — only an actual difference
+// in the address/host/path does.
+function normalizeLinkTarget(value) {
+    return value
+        .trim()
+        .toLowerCase()
+        .replace(/^mailto:/, '')
+        .replace(/\?.*$/, '') // mailto query string (?subject=...)
+        .replace(/^(?:https?|ftp):\/\//, '')
+        .replace(/^www\./, '')
+        .replace(/[?#].*$/, '') // http(s) query/hash
+        .replace(/\/+$/, '');
+}
+/**
+ * Scans body content for links whose visible text disagrees with their
+ * actual target — an email or URL rendered correctly but pointing somewhere
+ * else. Returns an array of `{ displayText, targetUrl, precedingWord }`
+ * (empty if nothing looks wrong). `precedingWord` is the last whitespace-
+ * delimited token immediately before the link within the same paragraph,
+ * when that token butts directly against the link with no space — the
+ * signature of an autolink boundary sliding mid-word (e.g. "Fred.nash@..."
+ * autolinking from after the period) — or null otherwise.
+ *
+ * @param {Array} bodyContent structural elements of the body being read
+ *   (mirrors checkMarkdownFidelity's scope: the active tab's body, or the
+ *   document body).
+ * @returns {Array<{displayText: string, targetUrl: string, precedingWord: string|null}>}
+ */
+export function detectLinkMismatches(bodyContent) {
+    const findings = [];
+    function scanContent(content) {
+        for (const element of content) {
+            if (element.paragraph) {
+                scanParagraph(element.paragraph);
+            }
+            else if (element.table) {
+                for (const row of element.table.tableRows ?? []) {
+                    for (const cell of row.tableCells ?? []) {
+                        scanContent(cell.content ?? []);
+                    }
+                }
+            }
+        }
+    }
+    function scanParagraph(paragraph) {
+        // Text accumulated so far in THIS paragraph, across runs — used only
+        // to find the token immediately preceding a linked run.
+        let precedingText = '';
+        for (const pe of paragraph.elements ?? []) {
+            const run = pe.textRun;
+            if (!run)
+                continue;
+            const rawContent = run.content ?? '';
+            const linkUrl = run.textStyle?.link?.url;
+            if (linkUrl) {
+                const displayText = rawContent.replace(/\n$/, '').trim();
+                const emailShaped = displayText ? isEmailShaped(displayText) : false;
+                if (displayText && (emailShaped || isUrlShaped(displayText))) {
+                    const normalizedDisplay = normalizeLinkTarget(emailShaped ? `mailto:${displayText}` : displayText);
+                    const normalizedTarget = normalizeLinkTarget(linkUrl);
+                    const targetMismatch = normalizedDisplay !== normalizedTarget;
+                    // A non-whitespace character immediately before the link (no
+                    // gap) is the autolink-boundary-break signature from the
+                    // issue: Docs re-linked starting mid-word, so the run's OWN
+                    // display text can legitimately match its OWN target while
+                    // still being the wrong (truncated) address — e.g. a link
+                    // reading "nash@yahoo.com" whose mailto is also
+                    // "nash@yahoo.com", when the actual address was
+                    // "Fred.nash@yahoo.com". Scoped to emails (per the issue):
+                    // a URL is routinely preceded by punctuation with no space
+                    // ("(https://example.com)") without anything being wrong.
+                    const boundaryBreak = emailShaped
+                        && precedingText.length > 0
+                        && !/\s/.test(precedingText[precedingText.length - 1]);
+                    if (targetMismatch || boundaryBreak) {
+                        const precedingWord = boundaryBreak ? (precedingText.match(/(\S+)$/)?.[1] ?? null) : null;
+                        findings.push({ displayText, targetUrl: linkUrl, precedingWord });
+                    }
+                }
+            }
+            precedingText += rawContent;
+        }
+    }
+    scanContent(bodyContent ?? []);
+    return findings;
+}
 // --- Main Conversion ---
 /**
  * Converts Google Docs JSON structure to a markdown string.
@@ -152,28 +282,44 @@ export function docsJsonToMarkdown(docData, options = {}) {
     const conversionOptions = {
         richMarkdown: options.plainMarkdown ? false : options.richMarkdown ?? true,
     };
+    // Stateful list-rendering context threaded through the whole conversion
+    // loop: per-nesting-level ordinal counters (keyed to the Docs listId so a
+    // list resumes its count across an interrupting paragraph but resets when
+    // a different list, or a new parent item, takes over that level) plus
+    // whether the immediately preceding block was a list item (so a following
+    // non-list block gets a blank-line separator instead of being read as a
+    // lazy continuation of the last list item).
+    const listState = { listStack: [], lastWasListItem: false };
     let markdown = '';
     for (const element of body.content) {
         if (element.paragraph) {
-            markdown += convertParagraph(element.paragraph, lists, conversionOptions);
+            markdown += convertParagraph(element.paragraph, lists, conversionOptions, listState);
         }
         else if (element.table) {
-            markdown += convertTable(element.table, conversionOptions);
+            markdown += separatorIfAfterListItem(listState) + convertTable(element.table, conversionOptions);
+            listState.lastWasListItem = false;
         }
         else if (element.sectionBreak) {
             if (isInitialDocumentSectionBreak(element)) {
                 continue;
             }
-            markdown += '\n---\n\n';
+            markdown += separatorIfAfterListItem(listState) + '\n---\n\n';
+            listState.lastWasListItem = false;
         }
     }
     return markdown.trim();
+}
+// A blank-line separator so a non-list block that immediately follows a list
+// item is parsed as its own block rather than a lazy continuation line of the
+// last list item (CommonMark's "lazy continuation" rule).
+function separatorIfAfterListItem(listState) {
+    return listState.lastWasListItem ? '\n' : '';
 }
 function isInitialDocumentSectionBreak(element) {
     return element.endIndex === 1 && element.startIndex === undefined;
 }
 // --- Paragraph Conversion ---
-function convertParagraph(paragraph, lists, options) {
+function convertParagraph(paragraph, lists, options, listState) {
     // 1. Determine paragraph type
     const headingLevel = getHeadingLevel(paragraph);
     const listInfo = getListInfo(paragraph, lists);
@@ -181,27 +327,70 @@ function convertParagraph(paragraph, lists, options) {
     const elements = paragraph.elements ?? [];
     const text = extractFormattedText(elements, options);
     // 3. Format based on type
+    if (listInfo && text.trim()) {
+        // List items are handled before the "was the previous block a list
+        // item" separator check below — they ARE the list, not the thing that
+        // needs separating from it.
+        return renderListItem(listInfo, text.trim(), listState);
+    }
+    const separator = separatorIfAfterListItem(listState);
+    listState.lastWasListItem = false;
     if (headingLevel && text.trim()) {
         const hashes = '#'.repeat(Math.min(headingLevel, 6));
-        return `${hashes} ${text.trim()}\n\n`;
-    }
-    if (listInfo && text.trim()) {
-        const indent = '  '.repeat(listInfo.nestingLevel);
-        const marker = listInfo.ordered ? `1.` : `-`;
-        return `${indent}${marker} ${text.trim()}\n`;
+        return `${separator}${hashes} ${text.trim()}\n\n`;
     }
     if (text.trim()) {
         const trimmed = text.trim();
         if (options.richMarkdown && isBlockquoteParagraph(paragraph)) {
-            return `<blockquote>${trimmed}</blockquote>\n\n`;
+            return `${separator}<blockquote>${trimmed}</blockquote>\n\n`;
         }
         const alignment = paragraphAlignmentToHtml(paragraph.paragraphStyle?.alignment);
         if (options.richMarkdown && alignment) {
-            return `<p align="${alignment}">${trimmed}</p>\n\n`;
+            return `${separator}<p align="${alignment}">${trimmed}</p>\n\n`;
         }
-        return `${trimmed}\n\n`;
+        return `${separator}${trimmed}\n\n`;
     }
-    return '\n';
+    return `${separator}\n`;
+}
+// Renders one list item's marker/indent and updates the per-level ordinal
+// state. Indentation for a level is the cumulative rendered width (marker +
+// trailing space) of every ancestor level's marker, so a nested item lands
+// past its parent's marker column regardless of whether the parent is a
+// `-` (2 columns) or a multi-digit ordinal like `12.` (4 columns) — the bug
+// this replaces used a flat 2-space-per-level indent that only happened to
+// work for unordered lists.
+function renderListItem(listInfo, text, listState) {
+    const { nestingLevel, ordered, listId } = listInfo;
+    const stack = listState.listStack;
+    // Preserve this level's existing entry (needed below to decide whether the
+    // ordinal continues or resets) while discarding any deeper levels: we have
+    // returned to `nestingLevel`, so whatever nested sub-list state existed
+    // below it no longer applies to what comes next.
+    const existing = stack[nestingLevel];
+    stack.length = nestingLevel + 1;
+    let count;
+    if (existing && existing.listId === listId) {
+        // Same Docs list resuming at this level — continue counting even if a
+        // non-list paragraph interrupted it (an "interrupted/resumed" list).
+        count = existing.count + 1;
+    }
+    else {
+        // A different list, or the first item a new parent introduces at this
+        // level: sequential numbering restarts at 1.
+        count = 1;
+    }
+    const marker = ordered ? `${count}.` : '-';
+    stack[nestingLevel] = { listId, count, markerWidth: marker.length + 1 };
+    let indent = '';
+    for (let level = 0; level < nestingLevel; level++) {
+        const ancestor = stack[level];
+        // No ancestor entry means Docs jumped straight to a deep nesting level
+        // with no intervening parent item observed; fall back to the classic
+        // 2-column indent for that level rather than losing indentation.
+        indent += ' '.repeat(ancestor ? ancestor.markerWidth : 2);
+    }
+    listState.lastWasListItem = true;
+    return `${indent}${marker} ${text}\n`;
 }
 // --- Heading Detection ---
 function getHeadingLevel(paragraph) {
@@ -233,7 +422,7 @@ function getListInfo(paragraph, lists) {
             }
         }
     }
-    return { ordered, nestingLevel };
+    return { ordered, nestingLevel, listId };
 }
 // --- Text Run Conversion ---
 function extractFormattedText(elements, options) {
@@ -265,23 +454,50 @@ function convertTextRun(textRun, options) {
     const content = trailingNewline ? text.slice(0, -1) : text;
     if (!content)
         return text;
-    let formatted = content;
+    // Emphasis delimiters must hug non-whitespace (issue #118).
+    //
+    // Users routinely bold a label AND the space after it, so the Docs run is
+    // "Owner: Andres. " with bold set. Wrapping that whole run gives
+    // `**Owner: Andres. **`, and per CommonMark a closing `**` preceded by
+    // whitespace is not right-flanking, so the delimiters are not emphasis at
+    // all — they stay as four literal asterisks. Re-importing this export
+    // therefore writes visible `**` into the document and loses the bold: a
+    // read-then-write with zero edits corrupts the doc, and because markdown
+    // export cannot tell "bold run including a trailing space" from "literal
+    // asterisks", re-reading as markdown shows the same string and hides it.
+    //
+    // Moving the run's own leading/trailing whitespace OUTSIDE the delimiters
+    // renders identically and parses back as real emphasis. A run that is
+    // nothing but whitespace carries no emphasizable text at all, so it emits
+    // no delimiters rather than the degenerate `** **`.
+    const leadingSpace = content.match(/^\s*/)[0];
+    const trailingSpace = content.length > leadingSpace.length
+        ? content.slice(leadingSpace.length).match(/\s*$/)[0]
+        : '';
+    const core = content.slice(leadingSpace.length, content.length - trailingSpace.length);
+    let formatted = core;
     // Apply inline formatting (bold + italic combined, or individually)
-    if (style.bold && style.italic) {
-        formatted = `***${formatted}***`;
+    if (core) {
+        if (style.bold && style.italic) {
+            formatted = `***${formatted}***`;
+        }
+        else if (style.bold) {
+            formatted = `**${formatted}**`;
+        }
+        else if (style.italic) {
+            formatted = `*${formatted}*`;
+        }
+        if (style.strikethrough) {
+            formatted = `~~${formatted}~~`;
+        }
+        if (options.richMarkdown && style.underline && !style.link) {
+            formatted = `<u>${formatted}</u>`;
+        }
     }
-    else if (style.bold) {
-        formatted = `**${formatted}**`;
-    }
-    else if (style.italic) {
-        formatted = `*${formatted}*`;
-    }
-    if (style.strikethrough) {
-        formatted = `~~${formatted}~~`;
-    }
-    if (options.richMarkdown && style.underline && !style.link) {
-        formatted = `<u>${formatted}</u>`;
-    }
+    // The whitespace goes back on outside the emphasis but still inside the
+    // rich-style span and the link, so neither the styled span nor the link
+    // text loses any character the document actually had.
+    formatted = `${leadingSpace}${formatted}${trailingSpace}`;
     if (options.richMarkdown) {
         formatted = applyRichTextStyle(formatted, style);
     }

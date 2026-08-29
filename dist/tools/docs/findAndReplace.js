@@ -25,7 +25,10 @@ export function register(server) {
     server.addTool({
         name: 'findAndReplace',
         description: 'Replaces all occurrences of a text string throughout the document (or a specific tab). ' +
-            'Returns the number of replacements made. Use an empty replaceText to delete all matches.',
+            'Returns the number of replacements made. Use an empty replaceText to delete all matches. ' +
+            'This only changes VISIBLE text — it cannot change a hyperlink target. Renaming a mismatched link ' +
+            '(e.g. readDocument flagged a LINK MISMATCH) with findAndReplace reports success but leaves the wrong ' +
+            'URL/mailto in place; use modifyText with style.linkUrl on that range instead.',
         parameters: FindAndReplaceParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -47,6 +50,15 @@ export function register(server) {
                 `${args.matchCase ? ' (case-sensitive)' : ''}` +
                 `${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
             try {
+                // No explicit default-color styling here (issue #14 audit):
+                // Docs API's ReplaceAllTextRequest inherits the text style of
+                // the range being replaced — it doesn't create style-less
+                // text the way a bare insertText does. Whatever explicit or
+                // inherited color the matched text already had (including a
+                // prior default-color paint from this server) carries over,
+                // so there is no "undefined color" gap to close for this
+                // path. See tests/findAndReplace.test.js for the regression
+                // guard on this (no extra style request emitted).
                 const request = {
                     replaceAllText: {
                         containsText: {

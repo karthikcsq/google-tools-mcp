@@ -323,6 +323,185 @@ describe('docsJsonToMarkdown', () => {
         const md = docsJsonToMarkdown(docData);
         expect(md).toContain('| :---: | ---: |');
     });
+
+    // -----------------------------------------------------------------------
+    // Issue #106: ordered-list nesting round-trip fidelity.
+    //
+    // A flat 2-space-per-level indent (the old behavior) is narrower than an
+    // ordered marker like "1. " (3 columns), so CommonMark parsers (including
+    // the markdown-it-based re-importer in markdownToDocs.js) read a nested
+    // ordered item as a sibling of its parent instead of a child, silently
+    // flattening the list on export. These tests pin the fix: indentation is
+    // derived from the actual rendered marker width of each ancestor level.
+    // -----------------------------------------------------------------------
+    describe('ordered list nesting (#106)', () => {
+        function bulletParagraph(level, text, listId = 'L1') {
+            return {
+                paragraph: {
+                    bullet: { listId, nestingLevel: level },
+                    elements: [{ textRun: { content: `${text}\n` } }],
+                },
+            };
+        }
+
+        function orderedList(levels = 3) {
+            return {
+                L1: {
+                    listProperties: {
+                        nestingLevels: Array.from({ length: levels }, () => ({ glyphType: 'DECIMAL' })),
+                    },
+                },
+            };
+        }
+
+        it('indents a nested ordered item past its parent marker width (3 columns for "1. ")', () => {
+            const docData = {
+                body: { content: [bulletParagraph(0, 'Parent'), bulletParagraph(1, 'Child')] },
+                lists: orderedList(2),
+            };
+            const md = docsJsonToMarkdown(docData);
+            expect(md).toBe('1. Parent\n   1. Child');
+        });
+
+        it('indents a three-level nested ordered list cumulatively per ancestor marker width', () => {
+            const docData = {
+                body: {
+                    content: [
+                        bulletParagraph(0, 'A'),
+                        bulletParagraph(1, 'A1'),
+                        bulletParagraph(2, 'A1a'),
+                        bulletParagraph(1, 'A2'),
+                        bulletParagraph(0, 'B'),
+                    ],
+                },
+                lists: orderedList(3),
+            };
+            const md = docsJsonToMarkdown(docData);
+            expect(md).toBe('1. A\n   1. A1\n      1. A1a\n   2. A2\n2. B');
+        });
+
+        it('widens indentation for a double-digit parent marker ("11. " is 4 columns)', () => {
+            const items = [];
+            for (let i = 1; i <= 11; i++) items.push(bulletParagraph(0, `Item${i}`));
+            items.push(bulletParagraph(1, 'Nested under 11'));
+            const docData = { body: { content: items }, lists: orderedList(2) };
+            const md = docsJsonToMarkdown(docData);
+            expect(md).toContain('11. Item11\n    1. Nested under 11');
+        });
+
+        it('normalizes ordered numbering to sequential decimals per level, resetting under each new parent', () => {
+            const docData = {
+                body: {
+                    content: [
+                        bulletParagraph(0, 'A'),
+                        bulletParagraph(1, 'A1'),
+                        bulletParagraph(1, 'A2'),
+                        bulletParagraph(0, 'B'),
+                        bulletParagraph(1, 'B1'),
+                    ],
+                },
+                lists: orderedList(2),
+            };
+            const md = docsJsonToMarkdown(docData);
+            // A2 continues at "2." under A; B1 restarts at "1." under the new
+            // parent B, even though it shares list L1 and nesting level 1 with A1/A2.
+            expect(md).toBe('1. A\n   1. A1\n   2. A2\n2. B\n   1. B1');
+        });
+
+        it('resumes (does not reset) ordered numbering across a paragraph that interrupts the same list', () => {
+            const docData = {
+                body: {
+                    content: [
+                        bulletParagraph(0, 'Item 1'),
+                        { paragraph: { elements: [{ textRun: { content: 'An interrupting paragraph\n' } }] } },
+                        bulletParagraph(0, 'Item 2'),
+                    ],
+                },
+                lists: orderedList(1),
+            };
+            const md = docsJsonToMarkdown(docData);
+            expect(md).toBe('1. Item 1\n\nAn interrupting paragraph\n\n2. Item 2');
+        });
+
+        it('preserves unordered nesting indentation unchanged (2 columns per level)', () => {
+            const docData = {
+                body: {
+                    content: [
+                        bulletParagraph(0, 'Parent'),
+                        bulletParagraph(1, 'Child'),
+                    ],
+                },
+                lists: {
+                    L1: { listProperties: { nestingLevels: [{ glyphSymbol: '●' }, { glyphSymbol: '○' }] } },
+                },
+            };
+            const md = docsJsonToMarkdown(docData);
+            expect(md).toBe('- Parent\n  - Child');
+        });
+
+        it('handles mixed ordered/unordered nesting (ordered parent, unordered child)', () => {
+            const docData = {
+                body: {
+                    content: [
+                        bulletParagraph(0, 'Parent', 'ordered-list'),
+                        { paragraph: { bullet: { listId: 'unordered-list', nestingLevel: 1 }, elements: [{ textRun: { content: 'Child\n' } }] } },
+                    ],
+                },
+                lists: {
+                    'ordered-list': { listProperties: { nestingLevels: [{ glyphType: 'DECIMAL' }, { glyphSymbol: '●' }] } },
+                    'unordered-list': { listProperties: { nestingLevels: [{ glyphType: 'DECIMAL' }, { glyphSymbol: '●' }] } },
+                },
+            };
+            const md = docsJsonToMarkdown(docData);
+            expect(md).toBe('1. Parent\n   - Child');
+        });
+
+        it('separates a list block from a following non-list paragraph with a blank line', () => {
+            const docData = {
+                body: {
+                    content: [
+                        bulletParagraph(0, 'Only item'),
+                        { paragraph: { elements: [{ textRun: { content: 'Trailing paragraph\n' } }] } },
+                    ],
+                },
+                lists: orderedList(1),
+            };
+            const md = docsJsonToMarkdown(docData);
+            expect(md).toBe('1. Only item\n\nTrailing paragraph');
+            // Never a bare single-newline transition (which CommonMark treats as
+            // a lazy continuation of the preceding list item).
+            expect(md).not.toContain('item\nTrailing');
+        });
+
+        it('produces markdown whose indentation the re-importer actually nests (apply-and-re-export round trip)', () => {
+            const docData = {
+                body: {
+                    content: [
+                        bulletParagraph(0, 'A'),
+                        bulletParagraph(1, 'A1'),
+                        bulletParagraph(2, 'A1a'),
+                        bulletParagraph(1, 'A2'),
+                        bulletParagraph(0, 'B'),
+                    ],
+                },
+                lists: orderedList(3),
+            };
+            const md = docsJsonToMarkdown(docData);
+            const { requests, warnings } = convertMarkdownToRequests(md, 1);
+            expect(warnings).toEqual([]);
+            const insertedText = requests
+                .filter((r) => 'insertText' in r)
+                .map((r) => r.insertText.text)
+                .join('');
+            // markdownToDocs.js encodes each level of nesting as a leading tab
+            // character per line before applying createParagraphBullets, mirroring
+            // how Docs itself represents nesting depth. Zero tabs for a level-0
+            // item, one for level 1, two for level 2 — proving the CommonMark
+            // parser read the indentation this converter emitted as real nesting
+            // rather than flattening every item to level 0.
+            expect(insertedText).toBe('A\n\tA1\n\t\tA1a\n\tA2\nB\n');
+        });
+    });
 });
 
 // ---------------------------------------------------------------------------

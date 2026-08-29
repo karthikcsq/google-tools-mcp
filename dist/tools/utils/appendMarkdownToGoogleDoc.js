@@ -14,7 +14,8 @@ export function register(server) {
             'Supports headings, bold, italic, strikethrough, links, tables, bullet/numbered lists, and rich markdown HTML extensions for underline, color, highlight, font, alignment, and blockquotes. ' +
             'Does not support markdown images or raw HTML outside those listed extensions; unsupported content is omitted and reported as warnings in the result. Use insertImage for images. ' +
             'Use this instead of appendText when you need formatting. ' +
-            'To edit existing content, use modifyText (single-location) or replaceDocumentWithMarkdown (section/full rewrite).',
+            'To edit existing content, use modifyText (single-location) or replaceDocumentWithMarkdown (section/full rewrite). ' +
+            "Inserted text carries the document's default text color explicitly, when the document defines one.",
         parameters: DocumentIdParameter.extend({
             markdown: z.string().optional().describe('The markdown content to append. For content longer than ~2000 characters, prefer writing to a local file first and passing filePath instead.'),
             filePath: z.string().optional().describe('Path to a local markdown file to use as content. Takes precedence over the markdown parameter.'),

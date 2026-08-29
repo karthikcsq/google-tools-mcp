@@ -78,6 +78,10 @@ jest.unstable_mockModule('../dist/workspace.js', () => ({
         await fs.writeFile(filePath, content, 'utf-8');
         return filePath;
     },
+    // Not under test here (see tests/readGoogleDocLocalMirrorConflict.test.js
+    // for #122 coverage) -- this suite only needs readGoogleDoc.js's import
+    // of it to resolve.
+    backupIfLocallyModified: async () => ({ backedUp: false }),
 }));
 
 const { createV2HttpHandler, prepareMcpServerFactory, MCP_PROTOCOL_VERSION } = await import('../dist/mcpServer.js');

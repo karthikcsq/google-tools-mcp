@@ -13,7 +13,16 @@
         "file": "dist/clients.js"
       },
       {
+        "file": "dist/docsChangePrecision.js"
+      },
+      {
+        "file": "dist/docsCollateral.js"
+      },
+      {
         "file": "dist/docsHandles.js"
+      },
+      {
+        "file": "dist/docsIndex.js"
       },
       {
         "file": "dist/docsStructure.js"
@@ -100,6 +109,9 @@
         "file": "dist/tools/docs/appendToGoogleDoc.js"
       },
       {
+        "file": "dist/tools/docs/batchModifyText.js"
+      },
+      {
         "file": "dist/tools/docs/comments/addComment.js"
       },
       {
@@ -119,6 +131,9 @@
       },
       {
         "file": "dist/tools/docs/comments/resolveComment.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/updateComment.js"
       },
       {
         "file": "dist/tools/docs/deleteRange.js"
@@ -154,6 +169,9 @@
         "file": "dist/tools/docs/listDocumentTabs.js"
       },
       {
+        "file": "dist/tools/docs/listHeadings.js"
+      },
+      {
         "file": "dist/tools/docs/modifyText.js"
       },
       {
@@ -164,6 +182,9 @@
       },
       {
         "file": "dist/tools/docs/renameTab.js"
+      },
+      {
+        "file": "dist/tools/docs/replaceRangeWithMarkdown.js"
       },
       {
         "file": "dist/tools/drafts.js"
@@ -525,7 +546,40 @@
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
       },
       {
+        "file": "tests/applyParagraphStyleBulletNesting.test.js"
+      },
+      {
+        "file": "tests/batchModifyText.test.js"
+      },
+      {
+        "file": "tests/batchModifyTextHandleIntegration.test.js"
+      },
+      {
+        "file": "tests/comments.test.js"
+      },
+      {
+        "file": "tests/createFlowsReadSeeding.test.js"
+      },
+      {
+        "file": "tests/defaultTextColor.test.js"
+      },
+      {
+        "file": "tests/docsChangePrecision.test.js"
+      },
+      {
+        "file": "tests/docsCollateral.test.js"
+      },
+      {
+        "file": "tests/docsConflictGuardPrecision.test.js"
+      },
+      {
         "file": "tests/docsHandleLeaseFailure.test.js"
+      },
+      {
+        "file": "tests/docsIndexRead.test.js"
+      },
+      {
+        "file": "tests/docsLeaseSuccessorFailure.test.js"
       },
       {
         "file": "tests/docsStructure.test.js"
@@ -546,6 +600,9 @@
         "file": "tests/extraDocsToolsWriteControl.test.js"
       },
       {
+        "file": "tests/findTextRangeDiagnostics.test.js"
+      },
+      {
         "file": "tests/fixtures/mcpSdkV2Fixture.js"
       },
       {
@@ -561,6 +618,9 @@
         "file": "tests/googleDocsApiHelpers.test.js"
       },
       {
+        "file": "tests/guardMutationPhantomStaleness.test.js"
+      },
+      {
         "file": "tests/guardMutationRevisionRefresh.test.js"
       },
       {
@@ -573,13 +633,25 @@
         "file": "tests/httpAuth.test.js"
       },
       {
+        "file": "tests/insertImageGuardBeforeUpload.test.js"
+      },
+      {
         "file": "tests/legacyAliasAuthRetry.test.js"
+      },
+      {
+        "file": "tests/linkMismatchDetection.test.js"
+      },
+      {
+        "file": "tests/listHeadings.test.js"
       },
       {
         "file": "tests/maps.test.js"
       },
       {
         "file": "tests/markdownFidelity.test.js"
+      },
+      {
+        "file": "tests/markdownRoundTrip.test.js"
       },
       {
         "file": "tests/markdownToolSuccessMessages.test.js"
@@ -600,6 +672,15 @@
         "file": "tests/modifyText.test.js"
       },
       {
+        "file": "tests/modifyTextBulletPreset.test.js"
+      },
+      {
+        "file": "tests/modifyTextClearStyle.test.js"
+      },
+      {
+        "file": "tests/modifyTextNoOpLeaseRelease.test.js"
+      },
+      {
         "file": "tests/mutatingDocsToolsWriteControl.test.js"
       },
       {
@@ -612,6 +693,12 @@
         "file": "tests/publicErrorBoundary.test.js"
       },
       {
+        "file": "tests/readDocumentLinkMismatch.test.js"
+      },
+      {
+        "file": "tests/readGoogleDocLocalMirrorConflict.test.js"
+      },
+      {
         "file": "tests/readGoogleDocTabs.test.js"
       },
       {
@@ -621,13 +708,25 @@
         "file": "tests/readHandleIntegration.test.js"
       },
       {
+        "file": "tests/readToolParity.test.js"
+      },
+      {
         "file": "tests/readTracker.test.js"
+      },
+      {
+        "file": "tests/replaceDocumentCollateral.test.js"
       },
       {
         "file": "tests/replaceDocumentWithMarkdown.test.js"
       },
       {
         "file": "tests/replaceMarkdownWriteControl.test.js"
+      },
+      {
+        "file": "tests/replaceRangeHandleIntegration.test.js"
+      },
+      {
+        "file": "tests/replaceRangeWithMarkdown.test.js"
       },
       {
         "file": "tests/requestContextAndReadHandles.test.js"
@@ -728,33 +827,43 @@
         "match": ".addTool({"
       },
       {
+        "file": "dist/tools/docs/batchModifyText.js",
+        "line": 317,
+        "match": ".addTool({"
+      },
+      {
         "file": "dist/tools/docs/comments/addComment.js",
-        "line": 7,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/docs/comments/deleteComment.js",
-        "line": 7,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/docs/comments/getComment.js",
-        "line": 7,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/docs/comments/listComments.js",
         "line": 6,
         "match": ".addTool({"
       },
       {
+        "file": "dist/tools/docs/comments/deleteComment.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/getComment.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/listComments.js",
+        "line": 39,
+        "match": ".addTool({"
+      },
+      {
         "file": "dist/tools/docs/comments/replyToComment.js",
-        "line": 7,
+        "line": 6,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/comments/resolveComment.js",
-        "line": 7,
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/updateComment.js",
+        "line": 6,
         "match": ".addTool({"
       },
       {
@@ -769,7 +878,7 @@
       },
       {
         "file": "dist/tools/docs/formatting/applyParagraphStyle.js",
-        "line": 7,
+        "line": 187,
         "match": ".addTool({"
       },
       {
@@ -794,7 +903,7 @@
       },
       {
         "file": "dist/tools/docs/insertTableWithData.js",
-        "line": 71,
+        "line": 81,
         "match": ".addTool({"
       },
       {
@@ -803,18 +912,28 @@
         "match": ".addTool({"
       },
       {
+        "file": "dist/tools/docs/listHeadings.js",
+        "line": 44,
+        "match": ".addTool({"
+      },
+      {
         "file": "dist/tools/docs/modifyText.js",
-        "line": 98,
+        "line": 174,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/readGoogleDoc.js",
-        "line": 27,
+        "line": 73,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/renameTab.js",
         "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/replaceRangeWithMarkdown.js",
+        "line": 399,
         "match": ".addTool({"
       },
       {
@@ -859,7 +978,7 @@
       },
       {
         "file": "dist/tools/drive/createDocument.js",
-        "line": 6,
+        "line": 9,
         "match": ".addTool({"
       },
       {
@@ -869,7 +988,7 @@
       },
       {
         "file": "dist/tools/drive/createFromTemplate.js",
-        "line": 5,
+        "line": 8,
         "match": ".addTool({"
       },
       {
@@ -1809,12 +1928,12 @@
       },
       {
         "file": "dist/tools/utils/replaceDocumentWithMarkdown.js",
-        "line": 12,
+        "line": 101,
         "match": ".addTool({"
       }
     ],
     "userErrorImports": [],
     "contextLogCallSites": [],
-    "loadedDefaultToolCount": 156
+    "loadedDefaultToolCount": 160
   }
 }

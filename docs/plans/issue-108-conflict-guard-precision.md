@@ -39,6 +39,31 @@ After migration, a changed revision can be known to differ without telling a cal
 - Explicit-index shifts, overlaps, and structure that cannot be mapped safely are rejected.
 - Rejections say what changed, where confidence ended, and which read workflow can recover.
 
+## As built
+
+Landed on `feat/docs-cluster`. Where the plan and the branch disagreed, the branch won and the reason is recorded here.
+
+**Name mapping.** The plan's `guardMutation` is the migration's `beginDocsMutation` (`dist/docsHandles.js`). The `targetRange` / `reresolve` interface is `lease.guardTargets({targets, snapshot|fetchSnapshot|fetchRevisionId, reresolve})`, plus a `targetRange`/`reresolve`/`fetchSnapshot`/`fetchRevisionId` convenience on `beginDocsMutation` itself for a tool whose target is known before it fetches anything. Classification lives in a new pure module, `dist/docsChangePrecision.js`.
+
+**A lease method, not begin-time arguments only.** Three of the four consumers cannot know their target before they fetch (`modifyText` and `replaceRangeWithMarkdown` resolve anchors; `batchModifyText` resolves N targets against its own snapshot). A begin-time-only interface would have forced a second, different fetch and broken the plan's own "same snapshot" requirement. `deleteRange`, whose target is pure input, uses the begin-time form.
+
+**Hunks come from the text projection, not the markdown patch.** §Design decisions says "derive hunks from the existing markdown patch". Markdown carries no document indices, so a markdown hunk cannot be compared to a caller's range without re-deriving positions from a lossy rendering. Instead each read stores the projection it actually saw — every `textRun`'s text with the document index of every character, plus a structural census — and hunks are diffed between two such projections and mapped straight back to index ranges. The unified diff shown to the caller is rendered from the same projections.
+
+**Per-tool threading.**
+
+| Tool | Target kind | Snapshot the guard classifies | Re-resolution |
+|---|---|---|---|
+| `modifyText` | `textToFind` semantic; `startIndex/endIndex` and `insertionIndex` explicit | `revisionId` probe, then `textSearchFields` fetch only if it moved | `findTextRangeInDoc` against the guard's snapshot |
+| `batchModifyText` | per operation, same rule | its own existing single snapshot, passed straight in | already resolved against that snapshot; `reresolve` returns the same ranges |
+| `deleteRange` | always explicit | probe, then `textSearchFields` fetch only if it moved | none possible; a change before the range blocks |
+| `replaceRangeWithMarkdown` | `afterHeading`/`headingId`/`textToFind` semantic; explicit range explicit | the `revisionId,body,lists` body it already fetches | `resolveTargetRange` / `findTextRangeInDoc` re-run against that body |
+
+The guard runs before `validateRange`, the fidelity scan and the covered-element list in `replaceRangeWithMarkdown`, so everything derived from the range is derived from the re-resolved one. A `dryRun` is guarded too: a preview of a range that a real write would refuse is worse than the refusal.
+
+**Two additions to the plan's conservatism.** A revision that moved with no visible text or structural difference classifies as `unknown` and rejects (a formatting-only edit is real and cannot be located). A handle minted by a read whose field mask carried no indices — `format='text'` — has no comparable projection and also rejects, naming `format='index'` as the read that works.
+
+**Not done here.** `computeStructuralFingerprint` walks a tab read's `{body, lists}` fragment with the tab id still applied, which `walkDocument` filters to nothing, so tab reads carry a degenerate fingerprint. `#108`'s projections avoid it via `walkTabFilter`, but the migration-owned fingerprint itself is untouched; it needs its own fix.
+
 ## Sequencing
 
 After the migration, #105, and #88. #88 ships against the migrated document-scoped guard; #108 adds range precision and re-resolution afterwards. #107 consumes the same interface once it is available.

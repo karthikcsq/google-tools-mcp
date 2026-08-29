@@ -50,6 +50,8 @@ The Docs API distinguishes "inherits from named style" from "explicitly #000000"
 - Reading back a document written by this server produces no redundant default-color spans (round-trip clean with #96).
 - Named-styles fetch failure is visible in logs; raw-path color-update failure is visible in the tool response.
 
+**Acceptance widened during implementation:** the tests above no longer stop at the pure markdown converter (`tests/markdownTransformer.test.js`) — `tests/defaultTextColor.test.js` drives the real `modifyText`, `appendText`, `insertTableWithData`, `createDocument`, `findAndReplace`, and `createDocumentFromTemplate` tool modules end-to-end against a mocked Docs client and asserts the emitted `batchUpdate` requests directly, closing the gap where the original criteria could pass while the reported `modifyText` path stayed broken.
+
 ## Sequencing
 
 Coordinate with #96 (converter span policy) and #56 (`createDocument` tests + warning surfacing). No hard blockers.

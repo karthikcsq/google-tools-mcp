@@ -1,7 +1,6 @@
 import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { z } from 'zod';
-import { google } from 'googleapis';
-import { getAuthClient } from '../../../clients.js';
+import { getDriveClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
 export function register(server) {
     server.addTool({
@@ -13,8 +12,7 @@ export function register(server) {
         execute: async (args, { log }) => {
             log.info(`Deleting comment ${args.commentId} from doc ${args.documentId}`);
             try {
-                const authClient = await getAuthClient();
-                const drive = google.drive({ version: 'v3', auth: authClient });
+                const drive = await getDriveClient();
                 await drive.comments.delete({
                     fileId: args.documentId,
                     commentId: args.commentId,

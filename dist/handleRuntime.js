@@ -42,6 +42,14 @@ let configuredBinding = null;
 const ownedWorkspaces = new Map();
 // baselineId -> Set<workspaceId> currently initialized from that baseline.
 const baselineReferences = new Map();
+// workspaceId -> the text/structure projection the read captured (issue #108).
+//
+// In memory rather than on disk, deliberately: it is derived data whose only
+// consumer is the conflict classifier inside the same process, its lifetime is
+// exactly the handle's, and writing document text to a second file would widen
+// the on-disk footprint of a read for no recovery value. It is reaped with the
+// workspace it belongs to, on exactly the same paths.
+const workspaceProjections = new Map();
 
 function v2Root() {
     return path.join(getWorkspaceDir(), V2_SUBDIR);
@@ -285,6 +293,22 @@ export async function createHandleWorkspace({
     };
 }
 
+/**
+ * Attach the projection a read captured to the workspace that read minted, so
+ * the conflict classifier can compare it against the document later (#108).
+ */
+export function setWorkspaceProjection(workspaceId, projection) {
+    if (!workspaceId || !projection) return false;
+    workspaceProjections.set(workspaceId, projection);
+    return true;
+}
+
+/** The projection captured for a workspace, or null when none was stored. */
+export function getWorkspaceProjection(workspaceId) {
+    if (!workspaceId) return null;
+    return workspaceProjections.get(workspaceId) ?? null;
+}
+
 /** Record the handle expiry the store assigned, so FS-side expiry can act on it. */
 export function noteWorkspaceExpiry(workspaceId, expiresAt) {
     const manifest = ownedWorkspaces.get(workspaceId);
@@ -313,6 +337,7 @@ async function removeWorkspaceFiles(manifest) {
     await fs.rm(manifest.manifestPath, { force: true }).catch(() => {});
     await fs.rmdir(manifest.directory).catch(() => {});
     ownedWorkspaces.delete(manifest.workspaceId);
+    workspaceProjections.delete(manifest.workspaceId);
     await releaseBaselineReference(manifest.baselineId, manifest.workspaceId);
 }
 
@@ -467,6 +492,7 @@ export function resetHandleRuntimeState() {
     configuredBinding = null;
     ownedWorkspaces.clear();
     baselineReferences.clear();
+    workspaceProjections.clear();
     forcedDiscardFailureWorkspaceId = null;
 }
 
