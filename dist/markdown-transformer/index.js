@@ -13,7 +13,7 @@ import { docsJsonToMarkdown } from './docsToMarkdown.js';
 import { convertMarkdownToRequests } from './markdownToDocs.js';
 import { executeBatchUpdateWithSplitting, findTabById, getDefaultTextColor } from '../googleDocsApiHelpers.js';
 import { logger } from '../logger.js';
-export { docsJsonToMarkdown, checkMarkdownFidelity } from './docsToMarkdown.js';
+export { docsJsonToMarkdown, checkMarkdownFidelity, detectLinkMismatches } from './docsToMarkdown.js';
 /** Formats InsertMarkdownResult into a concise human-readable debug summary. */
 export function formatInsertResult(result) {
     const lines = [];

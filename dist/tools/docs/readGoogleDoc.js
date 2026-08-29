@@ -4,7 +4,7 @@ import { createPatch } from 'diff';
 import { getDocsClient, getDriveClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { docsJsonToMarkdown, checkMarkdownFidelity } from '../../markdown-transformer/index.js';
+import { docsJsonToMarkdown, checkMarkdownFidelity, detectLinkMismatches } from '../../markdown-transformer/index.js';
 import { trackRead, getLastReadContent } from '../../readTracker.js';
 import { writeWorkspaceFile } from '../../workspace.js';
 import { mintDocsReadHandle } from '../../docsHandles.js';
@@ -254,6 +254,21 @@ export function register(server) {
                             'in place, use replaceRangeWithMarkdown: it builds the same markdown structure inside a chosen range ' +
                             'and checks fidelity only inside that range. For one line or paragraph of plain text, use modifyText.\n---'
                         : '';
+                    // Issue #117: a link whose visible text is itself email- or
+                    // URL-shaped but disagrees with its actual target. Every
+                    // readable surface (this markdown, format='text', the doc
+                    // itself) shows the CORRECT-looking display text, so nothing
+                    // about reading the document catches a re-autolinked target —
+                    // this is the one surface that compares the two.
+                    const linkMismatches = detectLinkMismatches(contentSource.body?.content);
+                    const linkMismatchNotice = linkMismatches.length > 0
+                        ? '\n\n---\n⚠️ LINK MISMATCH: ' +
+                            `${linkMismatches.length} link(s) whose target does not match their visible text:\n` +
+                            linkMismatches.map((m) => `  • "${m.displayText}" → ${m.targetUrl}` +
+                                (m.precedingWord ? `  (preceded by "${m.precedingWord}" — possible autolink boundary break)` : '')).join('\n') +
+                            '\nfindAndReplace cannot fix these: it only changes visible text, not the link target, and will ' +
+                            'report success while leaving the wrong target in place. Use modifyText with style.linkUrl to repair one.\n---'
+                        : '';
                     if (args.diffFromLastRead) {
                         const previous = getLastReadContent(args.documentId);
                         if (previous !== null) {
@@ -288,7 +303,7 @@ export function register(server) {
                             const plainMarkdownIgnoredNotice = args.plainMarkdown
                                 ? '\n\n---\nNote: plainMarkdown was ignored for this diff. Diffs are always computed from rich markdown so they stay comparable across reads regardless of flag usage.\n---'
                                 : '';
-                            return patch + plainMarkdownIgnoredNotice + fidelityNotice;
+                            return patch + plainMarkdownIgnoredNotice + fidelityNotice + linkMismatchNotice;
                         }
                         log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
                     }
@@ -325,6 +340,7 @@ export function register(server) {
                     // Append fidelity warning after the markdown so the AI knows what
                     // replaceDocumentWithMarkdown would permanently destroy.
                     output += fidelityNotice;
+                    output += linkMismatchNotice;
                     if (localPath) {
                         // Use forward slashes in the advice string so the path is valid JSON
                         // regardless of OS (backslashes in Windows paths break JSON encoding).

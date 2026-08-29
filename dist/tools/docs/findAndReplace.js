@@ -25,7 +25,10 @@ export function register(server) {
     server.addTool({
         name: 'findAndReplace',
         description: 'Replaces all occurrences of a text string throughout the document (or a specific tab). ' +
-            'Returns the number of replacements made. Use an empty replaceText to delete all matches.',
+            'Returns the number of replacements made. Use an empty replaceText to delete all matches. ' +
+            'This only changes VISIBLE text — it cannot change a hyperlink target. Renaming a mismatched link ' +
+            '(e.g. readDocument flagged a LINK MISMATCH) with findAndReplace reports success but leaves the wrong ' +
+            'URL/mailto in place; use modifyText with style.linkUrl on that range instead.',
         parameters: FindAndReplaceParameters,
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
