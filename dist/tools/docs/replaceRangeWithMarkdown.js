@@ -457,6 +457,16 @@ export function register(server) {
             // still there; cleared as soon as the old content is gone. Non-null
             // in the catch means the failure left both copies behind.
             let pendingOldRange = null;
+            // True when the delete was refused because the document moved to a
+            // new revision. `pendingOldRange` is computed from a measurement
+            // taken at the pre-collaboration revision, so once the document has
+            // moved those numbers describe where the old copy USED to be: an
+            // insertion or deletion before it shifts it, and an edit inside it
+            // changes what it covers. Reporting them as an exact manual-cleanup
+            // range would hand the caller a deleteRange over content that may
+            // now be somebody else's. Recorded here so the catch below can
+            // switch to "re-read and locate it" instead.
+            let pendingOldRangeStale = false;
             try {
                 const { contentSource, content, revisionId: snapshotRevisionId } = await fetchBody(
                     docs,
@@ -648,9 +658,20 @@ export function register(server) {
                 }
                 if (deleteEnd > deleteStart) {
                     pendingOldRange = { start: deleteStart + insertedLength, end: deleteEnd + insertedLength };
-                    const deleteResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
-                        { deleteContentRange: { range: rangeFor(pendingOldRange.start, pendingOldRange.end, tabId) } },
-                    ], writeControlChain.current);
+                    let deleteResult;
+                    try {
+                        deleteResult = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                            { deleteContentRange: { range: rangeFor(pendingOldRange.start, pendingOldRange.end, tabId) } },
+                        ], writeControlChain.current);
+                    } catch (deleteError) {
+                        // The guard did its job: a collaborator edit landed after
+                        // the measurement above and before this delete. The
+                        // measured range is therefore from the previous revision
+                        // and is no longer exact, so it must not be handed back
+                        // as a deleteRange instruction.
+                        if (GDocsHelpers.isRevisionConflictError(deleteError)) pendingOldRangeStale = true;
+                        throw deleteError;
+                    }
                     writeControlChain.advance(deleteResult);
                     log.info(`Deleted replaced content at ${pendingOldRange.start}-${pendingOldRange.end}.`);
                     pendingOldRange = null;
@@ -709,9 +730,24 @@ export function register(server) {
                 if (pendingOldRange) {
                     // The insert landed and the delete did not: the document now
                     // holds BOTH copies. No content was lost, but the caller needs
-                    // the exact leftover range to finish the job.
+                    // to finish the job.
+                    const cause = `${isPublicError(error) ? error.message : 'the delete request did not complete'}`;
+                    if (pendingOldRangeStale) {
+                        // The document moved between the measurement and the
+                        // delete, so the measured numbers describe the PREVIOUS
+                        // revision. Send the caller back to a fresh read rather
+                        // than to a stale numeric range.
+                        throw publicError('The new markdown was inserted, but removing the old content failed: ' +
+                            `${cause} ` +
+                            'Nothing was lost — the document now contains BOTH copies. Because the document changed ' +
+                            'while this ran, the old copy\'s indices are no longer known: do NOT delete a numeric ' +
+                            "range from this call. Re-read the document (readDocument with format='index', or " +
+                            "format='markdown') to locate the duplicated old content in the CURRENT revision, then " +
+                            'remove it there. ' +
+                            `https://docs.google.com/document/d/${args.documentId}/edit`);
+                    }
                     throw publicError('The new markdown was inserted, but removing the old content failed: ' +
-                        `${isPublicError(error) ? error.message : 'the delete request did not complete'}. ` +
+                        `${cause} ` +
                         'Nothing was lost — the document now contains BOTH copies. The old content is at ' +
                         `${pendingOldRange.start}-${pendingOldRange.end}; re-read the document and delete that range ` +
                         '(deleteRange) to finish. ' +

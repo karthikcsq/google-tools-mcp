@@ -99,6 +99,11 @@ function makeGoogle(body, {
     tabId = null,
     failDelete = false,
     concurrentChangeBeforeMeasurement = false,
+    // A collaborator edit that lands AFTER the post-insert measurement read has
+    // already been served (and verified against the inserted revision) but
+    // BEFORE the guarded delete reaches the API. The real service answers that
+    // delete with FAILED_PRECONDITION on its requiredRevisionId.
+    concurrentChangeBeforeDelete = false,
     concurrentGrowth = 0,
 } = {}) {
     const batches = [];
@@ -137,6 +142,13 @@ function makeGoogle(body, {
         batches.push({ requests, writeControl: requestBody.writeControl });
         if (failDelete && requests.some((r) => 'deleteContentRange' in r)) {
             throw Object.assign(new Error('backend refused the delete'), { code: 500 });
+        }
+        if (concurrentChangeBeforeDelete && requests.some((r) => 'deleteContentRange' in r)) {
+            currentRevisionId = 'rev-collaborator';
+            throw Object.assign(new Error('failed precondition'), {
+                code: 400,
+                response: { data: { error: { status: 'FAILED_PRECONDITION', message: 'The document has been updated since the last read.' } } },
+            });
         }
         for (const request of requests) {
             if (request.insertText) growth += request.insertText.text.length;
@@ -713,6 +725,45 @@ describe('replaceRangeWithMarkdown — dryRun and partial-failure reporting', ()
         }, { log: noopLog })).rejects.toThrow(/changed before its new range could be verified[\s\S]*No delete was attempted/);
 
         expect(requestsOf(batches, 'deleteContentRange')).toHaveLength(0);
+    });
+
+    // The second half of the same race. `concurrentChangeBeforeMeasurement`
+    // above covers insert -> measurement; this covers measurement -> delete,
+    // where the measurement was verified against the inserted revision and the
+    // collaborator lands immediately after it. The delete is correctly refused,
+    // but the range it was computed from belongs to the pre-collaboration
+    // revision, so it must not be surfaced as a deleteRange instruction.
+    it('does not surface an exact leftover range when the delete is refused because the document moved', async () => {
+        const { batches } = makeGoogle(buildBody(SECTIONS), { concurrentChangeBeforeDelete: true });
+        const documentId = `range-concurrent-delete-${Date.now()}`;
+        trackRead(documentId, null, '# doc', 'rev-read');
+
+        const failure = await getTool().execute({
+            documentId, target: { afterHeading: 'Roadmap' }, markdown: '- rewritten\n',
+        }, { log: noopLog }).then(() => null, (error) => error);
+
+        expect(failure).toBeTruthy();
+        expect(failure.message).toMatch(/contains BOTH copies/);
+        expect(failure.message).toMatch(/do NOT delete a numeric range/i);
+        expect(failure.message).toMatch(/[Rr]e-read the document/);
+        // No numeric range at all: not the one that was attempted, not any other.
+        const attempted = requestsOf(batches, 'deleteContentRange')[0].deleteContentRange.range;
+        expect(failure.message).not.toContain(`${attempted.startIndex}-${attempted.endIndex}`);
+        expect(failure.message).not.toMatch(/old content is at \d+-\d+/);
+    });
+
+    it('still reports the exact leftover range when the delete fails for a non-revision reason', async () => {
+        const { batches } = makeGoogle(buildBody(SECTIONS), { failDelete: true });
+        const documentId = `range-partial-exact-${Date.now()}`;
+        trackRead(documentId, null, '# doc', 'rev-read');
+
+        const failure = await getTool().execute({
+            documentId, target: { afterHeading: 'Roadmap' }, markdown: '- rewritten\n',
+        }, { log: noopLog }).then(() => null, (error) => error);
+
+        const attempted = requestsOf(batches, 'deleteContentRange')[0].deleteContentRange.range;
+        expect(failure.message).toContain(`old content is at ${attempted.startIndex}-${attempted.endIndex}`);
+        expect(failure.message).not.toMatch(/do NOT delete a numeric range/i);
     });
 });
 

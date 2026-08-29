@@ -3,6 +3,22 @@ import { hexToRgbColor, NotImplementedError } from './types.js';
 import { logger } from './logger.js';
 // --- Constants ---
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
+// Identity brand for "this write was refused because the document moved to a
+// new revision". A PublicToolError is frozen at construction, so it cannot
+// carry a flag of its own, and re-matching the sentence wording at every call
+// site is exactly the kind of coupling that rots. Callers that must react
+// differently to a revision conflict than to any other failed write (e.g.
+// replaceRangeWithMarkdown, which can only report an exact leftover range when
+// the document is still at the revision it measured) ask this predicate.
+const revisionConflictErrors = new WeakSet();
+function brandRevisionConflict(error) {
+    revisionConflictErrors.add(error);
+    return error;
+}
+/** True when `error` is the conflict `executeBatchUpdate` throws on a failed requiredRevisionId. */
+export function isRevisionConflictError(error) {
+    return typeof error === 'object' && error !== null && revisionConflictErrors.has(error);
+}
 // --- Core Helper to Execute Batch Updates ---
 export async function executeBatchUpdate(docs, documentId, requests, writeControl) {
     if (!requests || requests.length === 0) {
@@ -34,7 +50,7 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
             ((error.code === 400 || error.code === 409) && /revision|write\s*control|updated since/i.test(apiMessage))
         );
         if (isRevisionConflict) {
-            throw publicError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`);
+            throw brandRevisionConflict(publicError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`));
         }
         if (error.code === 400 && error.message.includes('Invalid requests')) {
             // Try to extract more specific info if available
