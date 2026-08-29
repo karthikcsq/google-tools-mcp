@@ -1,6 +1,7 @@
 // Tests for buildModifyTextRequests — the pure/sync request builder in modifyText.js
 import { describe, it, expect } from '@jest/globals';
-import { buildModifyTextRequests } from '../dist/tools/docs/modifyText.js';
+import { buildModifyTextRequests, normalizeEscapes } from '../dist/tools/docs/modifyText.js';
+import { stripMarkdownListMarkersForSearch } from '../dist/googleDocsApiHelpers.js';
 
 describe('buildModifyTextRequests', () => {
     it('returns empty array when nothing specified', () => {
@@ -355,5 +356,41 @@ describe('buildModifyTextRequests — bulletPreset (issue #120)', () => {
             paragraphStyle: { bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
         });
         expect(requests).toEqual([]);
+    });
+});
+
+describe('normalizeEscapes (issue #9)', () => {
+    it('converts literal backslash-n sequences to newlines', () => {
+        expect(normalizeEscapes('one\\ntwo\\nthree')).toBe('one\ntwo\nthree');
+    });
+
+    it('converts literal backslash-t sequences to tabs', () => {
+        expect(normalizeEscapes('one\\ttwo\\tthree')).toBe('one\ttwo\tthree');
+    });
+
+    it('converts mixed escaped newlines and tabs', () => {
+        expect(normalizeEscapes('row1\\tcol2\\nrow2\\tcol2')).toBe('row1\tcol2\nrow2\tcol2');
+    });
+
+    it('leaves ordinary text and existing newlines unchanged', () => {
+        expect(normalizeEscapes('already\nreal')).toBe('already\nreal');
+    });
+
+    it('returns undefined when text is omitted', () => {
+        expect(normalizeEscapes(undefined)).toBeUndefined();
+    });
+});
+
+describe('stripMarkdownListMarkersForSearch', () => {
+    it('strips unordered list markers', () => {
+        expect(stripMarkdownListMarkersForSearch('- Existing Google Docs bullet text')).toBe('Existing Google Docs bullet text');
+    });
+
+    it('strips ordered list markers', () => {
+        expect(stripMarkdownListMarkersForSearch('1. Existing Google Docs numbered item')).toBe('Existing Google Docs numbered item');
+    });
+
+    it('preserves indentation for nested list items', () => {
+        expect(stripMarkdownListMarkersForSearch('  - Nested item')).toBe('  Nested item');
     });
 });
