@@ -768,6 +768,7 @@ export async function runSetup({
     existingLaunchTargetImpl = existingLaunchTarget,
     configureTransportImpl = configureTransport,
     registerClientsImpl = registerClients,
+    runAuthFlowImpl = async () => (await import('./auth.js')).runAuthFlow(),
     ui = p,
     clear = () => console.clear(),
 } = {}) {
@@ -777,13 +778,18 @@ export async function runSetup({
     clear();
     ui.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
     const token = await inspectTokenImpl();
-    ui.log.message(token.status === 'valid' && !reauth
-        ? 'Existing OAuth credentials and token are valid. Skipping project setup and OAuth.'
-        : `Existing credentials found; token is ${token.status}${reauth ? ' and --reauth was requested' : ''}.`);
-    if (reauth || token.status !== 'valid') {
+    // A service-account installation is already fully authenticated through
+    // SERVICE_ACCOUNT_PATH. There is no OAuth token to inspect and no browser
+    // flow that would improve anything, so --reauth has nothing to act on.
+    const usesServiceAccount = credentials.source === 'service-account';
+    ui.log.message(usesServiceAccount
+        ? `Service account credentials are configured and valid${credentials.serviceAccount?.impersonateUser ? ` (impersonating ${credentials.serviceAccount.impersonateUser})` : ''}. Skipping project setup and OAuth.${reauth ? ' --reauth does not apply to service-account authentication.' : ''}`
+        : token.status === 'valid' && !reauth
+            ? 'Existing OAuth credentials and token are valid. Skipping project setup and OAuth.'
+            : `Existing credentials found; token is ${token.status}${reauth ? ' and --reauth was requested' : ''}.`);
+    if (!usesServiceAccount && (reauth || token.status !== 'valid')) {
         ui.log.step('Authenticate with Google');
-        const { runAuthFlow } = await import('./auth.js');
-        await runAuthFlow();
+        await runAuthFlowImpl();
         ui.log.success('Authenticated with Google.');
     }
     let launch = await existingLaunchTargetImpl();

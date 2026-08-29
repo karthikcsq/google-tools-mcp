@@ -8,12 +8,48 @@ import { getTokenPath, loadClientSecrets, SCOPES } from './auth.js';
 import { entriesEqual } from './clientAdapters.js';
 import { getHttpServiceStatus } from './httpLifecycle.js';
 
-export async function checkCredentials({ load = loadClientSecrets } = {}) {
-    try { await load(); return { configured: true }; }
-    catch { return { configured: false }; }
+// dist/auth.js checks SERVICE_ACCOUNT_PATH before anything OAuth, so a
+// service-account installation is a first-class, fully supported runtime
+// configuration with no client secrets and no token.json. Inspection has to
+// follow the same branch, otherwise doctor calls a working install broken and
+// setup routes the operator into an OAuth wizard they do not need.
+export function resolveAuthSource(env = process.env) {
+    return String(env.SERVICE_ACCOUNT_PATH || '').trim() ? 'service-account' : 'oauth';
 }
 
-export async function inspectToken({ tokenPath = getTokenPath(), readFile = fs.readFile, OAuth2 = google.auth.OAuth2, credentialsLoader = loadClientSecrets } = {}) {
+// Read-only, like every other check here: the key file is parsed and shape-
+// checked, never used to mint a token. Problems are fixed strings rather than
+// interpolated error text, so nothing from the filesystem reaches the report.
+export async function inspectServiceAccount({ env = process.env, readFile = fs.readFile } = {}) {
+    const keyPath = String(env.SERVICE_ACCOUNT_PATH || '').trim();
+    const impersonateUser = String(env.GOOGLE_IMPERSONATE_USER || '').trim() || undefined;
+    const base = { source: 'service-account', path: keyPath, impersonateUser };
+    try {
+        const key = JSON.parse(await readFile(keyPath, 'utf8'));
+        if (!key?.client_email || !key?.private_key) {
+            return { ...base, healthy: false, problem: 'service account key file has no client_email/private_key' };
+        }
+        return { ...base, healthy: true, clientEmail: key.client_email };
+    } catch (error) {
+        return { ...base, healthy: false, problem: error?.code === 'ENOENT'
+            ? 'service account key file not found at SERVICE_ACCOUNT_PATH'
+            : 'service account key file could not be read or parsed' };
+    }
+}
+
+export async function checkCredentials({ load = loadClientSecrets, env = process.env, readFile = fs.readFile } = {}) {
+    if (resolveAuthSource(env) === 'service-account') {
+        const serviceAccount = await inspectServiceAccount({ env, readFile });
+        return { configured: serviceAccount.healthy, source: 'service-account', serviceAccount, problem: serviceAccount.problem };
+    }
+    try { await load(); return { configured: true, source: 'oauth' }; }
+    catch { return { configured: false, source: 'oauth' }; }
+}
+
+export async function inspectToken({ tokenPath = getTokenPath(), readFile = fs.readFile, OAuth2 = google.auth.OAuth2, credentialsLoader = loadClientSecrets, env = process.env } = {}) {
+    // There is no OAuth token in a service-account installation, and reading or
+    // refreshing one would be meaningless rather than merely absent.
+    if (resolveAuthSource(env) === 'service-account') return { status: 'not-applicable', source: 'service-account' };
     let token;
     try { token = JSON.parse(await readFile(tokenPath, 'utf8')); }
     catch (error) { return { status: error?.code === 'ENOENT' ? 'missing' : 'invalid' }; }
@@ -88,8 +124,10 @@ export async function inspectSetup({ adapters = [], desiredEntry = null, desired
     const usesHttp = clients.some(client => client.entry?.url);
     const http = usesHttp ? await inspectHttp() : null;
     const problems = [
-        ...(credentials.configured ? [] : ['OAuth credentials are not configured']),
-        ...(token.status === 'valid' ? [] : [`OAuth token: ${token.status}`]),
+        ...(credentials.configured ? [] : [credentials.source === 'service-account'
+            ? `Service account: ${credentials.problem || 'not usable'}`
+            : 'OAuth credentials are not configured']),
+        ...(token.status === 'valid' || token.status === 'not-applicable' ? [] : [`OAuth token: ${token.status}`]),
         ...clients.filter(client => client.status === 'problem' || client.status === 'unknown').map(client => `${client.client}: ${client.problem || 'could not inspect entry'}`),
         ...(http && !http.healthy ? [`Shared HTTP service: ${http.diagnostic}`] : []),
         ...configWarnings.map(warning => `Config: ${warning}`),
