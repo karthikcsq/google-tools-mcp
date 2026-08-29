@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createV2HttpHandler, MCP_PROTOCOL_VERSION, prepareMcpServerFactory } from '../dist/mcpServer.js';
-import { getArgumentShape, getLogFilePath, getStructuredLogFilePath, logToolCall, logger, readRecentToolCalls, resetLoggerForTests, resolveLogDirectoryAction, setLogRotationThresholdForTests } from '../dist/logger.js';
+import { getArgumentShape, getLogFilePath, getStructuredLogFilePath, logToolCall, logger, readRecentToolCalls, resetLoggerForTests, resolveLogDirectoryAction, setLogRotationThresholdForTests, setRotationLockTimingForTests, withRotationLock } from '../dist/logger.js';
 import { publicError, registerSecret } from '../dist/errors.js';
+
+const LOGGER_MODULE_URL = pathToFileURL(fileURLToPath(new URL('../dist/logger.js', import.meta.url))).href;
+
+jest.setTimeout(30_000);
 
 const originalEnv = { ...process.env };
 afterEach(() => {
@@ -13,6 +19,7 @@ afterEach(() => {
     Object.assign(process.env, originalEnv);
     resetLoggerForTests();
     setLogRotationThresholdForTests();
+    setRotationLockTimingForTests();
 });
 
 function request(name, args) {
@@ -208,5 +215,220 @@ describe('structured diagnostics', () => {
             expect(await readdir(directory)).toEqual(['server.log']);
             expect(readRecentToolCalls()).toEqual({ filePath: null, records: [] });
         } finally { errorSpy.mockRestore(); await rm(directory, { recursive: true, force: true }); }
+    });
+
+    // Finding 15: an existing symlink at a configured log path used to be
+    // followed by statSync/openSync/chmodSync, so a custom log location
+    // pointed at a symlink could rotate-check, chmod, and append diagnostic
+    // content into whatever the symlink targeted instead of a log file this
+    // process owns.
+    it('refuses to follow a symlinked log path instead of writing through it', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-symlink-'));
+        const sentinelPlain = join(directory, 'sentinel-plain.txt');
+        const sentinelJsonl = join(directory, 'sentinel-jsonl.txt');
+        await writeFile(sentinelPlain, 'do-not-touch-plain');
+        await writeFile(sentinelJsonl, 'do-not-touch-jsonl');
+        const beforeMode = process.platform !== 'win32' ? (await stat(sentinelPlain)).mode & 0o777 : null;
+        const plainPath = join(directory, 'server.log');
+        const jsonlPath = join(directory, 'server.jsonl');
+        await symlink(sentinelPlain, plainPath);
+        await symlink(sentinelJsonl, jsonlPath);
+        process.env.GOOGLE_MCP_LOG_FILE = plainPath;
+        process.env.GOOGLE_MCP_JSONL_FILE = jsonlPath;
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        try {
+            logger.info('should never reach the symlink target');
+            logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'symlinked', reqId: 1, durationMs: 0, outcome: 'ok', errCode: null, errMsg: null, argShape: {} });
+            expect(await readFile(sentinelPlain, 'utf8')).toBe('do-not-touch-plain');
+            expect(await readFile(sentinelJsonl, 'utf8')).toBe('do-not-touch-jsonl');
+            if (process.platform !== 'win32') {
+                expect((await stat(sentinelPlain)).mode & 0o777).toBe(beforeMode);
+                expect((await stat(sentinelJsonl)).mode & 0o777).toBe(beforeMode);
+            }
+            const warnings = stderrSpy.mock.calls.map(([value]) => String(value)).join('');
+            expect(warnings).toContain(`Unable to write diagnostic log file ${plainPath}`);
+            expect(warnings).toContain(`Unable to write diagnostic log file ${jsonlPath}`);
+        } finally {
+            stderrSpy.mockRestore(); errorSpy.mockRestore();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    // Finding 16: rotateNow() leaves nothing at the JSONL path, so the
+    // appendFileSync that used to follow it directly created the replacement
+    // file through Node's default create-mode (the process umask) instead of
+    // the 0600 openPrivateLogFile() establishes at startup -- the private-
+    // mode guarantee silently disappeared after the first in-process
+    // rotation.
+    it('keeps the structured JSONL file private after in-process rotation', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-jsonl-rotate-mode-'));
+        const jsonlPath = join(directory, 'server.jsonl');
+        process.env.GOOGLE_MCP_LOG_FILE = '0';
+        process.env.GOOGLE_MCP_JSONL_FILE = jsonlPath;
+        setLogRotationThresholdForTests(10);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'first', reqId: 1, durationMs: 0, outcome: 'ok', errCode: null, errMsg: null, argShape: { pad: 'x'.repeat(80) } });
+            logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'second', reqId: 2, durationMs: 0, outcome: 'ok', errCode: null, errMsg: null, argShape: {} });
+            expect(await readFile(`${jsonlPath}.1`, 'utf8')).toContain('"tool":"first"');
+            expect(await readFile(jsonlPath, 'utf8')).toContain('"tool":"second"');
+            if (process.platform !== 'win32') {
+                expect((await stat(jsonlPath)).mode & 0o777).toBe(0o600);
+            }
+        } finally { errorSpy.mockRestore(); await rm(directory, { recursive: true, force: true }); }
+    });
+
+    // Finding 19: rotation retains the previous primary as `${filePath}.1`,
+    // but readRecentToolCalls() (and therefore `troubleshoot`) used to read
+    // only the current primary, so a failure moved into `.1` moments earlier
+    // dropped out of the recent-activity window it is supposed to cover.
+    it('readRecentToolCalls folds in the retained .1 file after rotation', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-jsonl-recent-'));
+        const jsonlPath = join(directory, 'server.jsonl');
+        process.env.GOOGLE_MCP_LOG_FILE = '0';
+        process.env.GOOGLE_MCP_JSONL_FILE = jsonlPath;
+        setLogRotationThresholdForTests(10);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'older-failure', reqId: 1, durationMs: 0, outcome: 'error', errCode: 'BOOM', errMsg: 'boom', argShape: {} });
+            logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: 'newer-ok', reqId: 2, durationMs: 0, outcome: 'ok', errCode: null, errMsg: null, argShape: {} });
+            // Both calls rotated (the threshold is tiny): the failure landed
+            // in `.1` and only the ok record remains in the fresh primary.
+            expect(await readFile(`${jsonlPath}.1`, 'utf8')).toContain('older-failure');
+            expect(await readFile(jsonlPath, 'utf8')).not.toContain('older-failure');
+            const recent = readRecentToolCalls();
+            expect(recent.filePath).toBe(jsonlPath);
+            expect(recent.records.map((record) => record.tool)).toEqual(['older-failure', 'newer-ok']);
+        } finally { errorSpy.mockRestore(); await rm(directory, { recursive: true, force: true }); }
+    });
+
+    // Finding 24: stdio is one process per client, and every process for a
+    // profile shares the same default diagnostic paths with its own
+    // independent byte counters. Rotation used to be a bare stat-then-rename
+    // with no cross-process coordination, so a second process could rotate
+    // (and unconditionally overwrite `.1`) moments after a first process
+    // already had, discarding retained history the first rotation had only
+    // just written -- even though no single write was ever individually
+    // lost. withRotationLock() now serializes the actual check-and-rotate
+    // step behind a short-lived, cross-process exclusive lock file. These
+    // tests exercise that primitive directly and deterministically (real
+    // multi-process races are inherently non-deterministic and their
+    // reproducibility is volume/threshold-sensitive), then one live
+    // multi-process run exercises the full integration.
+    describe('cross-process rotation lock', () => {
+        it('a rotation attempt against a lock already held by another process does not run and does not touch the file', async () => {
+            const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-lock-held-'));
+            const filePath = join(directory, 'server.jsonl');
+            const lockPath = `${filePath}.rotate.lock`;
+            await writeFile(filePath, 'unrotated-content');
+            await writeFile(lockPath, ''); // simulates another process's fresh, live lock
+            setRotationLockTimingForTests({ timeoutMs: 100, staleMs: 60_000 });
+            try {
+                const fn = jest.fn();
+                const ran = withRotationLock(filePath, fn);
+                expect(ran).toBe(false);
+                expect(fn).not.toHaveBeenCalled();
+                // The lock is left in place -- it belongs to whoever created
+                // it, not to a caller that failed to acquire it.
+                expect(await readFile(lockPath, 'utf8')).toBe('');
+                expect(await readFile(filePath, 'utf8')).toBe('unrotated-content');
+            } finally { await rm(directory, { recursive: true, force: true }); }
+        });
+
+        it('breaks a lock abandoned by a crashed process instead of waiting out the full timeout', async () => {
+            const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-lock-stale-'));
+            const filePath = join(directory, 'server.jsonl');
+            const lockPath = `${filePath}.rotate.lock`;
+            await writeFile(lockPath, '');
+            // Back-date the lock file well past the (shortened) staleness
+            // window so it reads as abandoned rather than freshly held.
+            const old = new Date(Date.now() - 10_000);
+            await utimes(lockPath, old, old);
+            setRotationLockTimingForTests({ timeoutMs: 5_000, staleMs: 500 });
+            try {
+                const fn = jest.fn();
+                const ran = withRotationLock(filePath, fn);
+                expect(ran).toBe(true);
+                expect(fn).toHaveBeenCalledTimes(1);
+                // The lock is released again once fn completes.
+                await expect(readFile(lockPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+            } finally { await rm(directory, { recursive: true, force: true }); }
+        });
+
+        it('an uncontended lock is acquired immediately, runs fn once, and cleans itself up', async () => {
+            const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-lock-free-'));
+            const filePath = join(directory, 'server.jsonl');
+            const lockPath = `${filePath}.rotate.lock`;
+            try {
+                const fn = jest.fn();
+                const ran = withRotationLock(filePath, fn);
+                expect(ran).toBe(true);
+                expect(fn).toHaveBeenCalledTimes(1);
+                await expect(readFile(lockPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+            } finally { await rm(directory, { recursive: true, force: true }); }
+        });
+    });
+
+    // Live integration check: two real child processes writing and rotating
+    // against the SAME JSONL file at once. The retention window (roughly
+    // 2x the rotation threshold, across primary + `.1`) is sized to comfortably
+    // hold this run's whole volume, so a correct implementation should be
+    // able to retain every record; anything missing would mean a rotation
+    // destroyed retained content out from under a concurrent peer rather than
+    // the record simply aging out of a window too small to hold it.
+    it('two concurrent processes rotating the same JSONL file lose no records and never crash', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'google-tools-mcp-jsonl-race-'));
+        const jsonlPath = join(directory, 'server.jsonl');
+        const workerPath = join(directory, 'rotation-worker.mjs');
+        await writeFile(workerPath, [
+            `import { setLogRotationThresholdForTests, logToolCall } from ${JSON.stringify(LOGGER_MODULE_URL)};`,
+            'const [, , countArg, tag] = process.argv;',
+            'const count = Number(countArg);',
+            'setLogRotationThresholdForTests(Number(process.env.TEST_ROTATION_THRESHOLD));',
+            'for (let i = 0; i < count; i += 1) {',
+            '  logToolCall({ ts: new Date().toISOString(), event: "tool_call", tool: `${tag}-${i}`, reqId: i, durationMs: 0, outcome: "ok", errCode: null, errMsg: null, argShape: { pad: "x".repeat(10) } });',
+            '}',
+        ].join('\n'), 'utf8');
+
+        const recordsPerWorker = 4;
+        const runWorker = (tag) => new Promise((resolve, reject) => {
+            const child = spawn(process.execPath, [workerPath, String(recordsPerWorker), tag], {
+                env: {
+                    ...process.env, GOOGLE_MCP_LOG_FILE: '0', GOOGLE_MCP_JSONL_FILE: jsonlPath,
+                    // ~150 bytes/record * 8 total records fits comfortably
+                    // within the ~2x900-byte primary+.1 retention window.
+                    TEST_ROTATION_THRESHOLD: '900', XDG_CONFIG_HOME: directory,
+                },
+            });
+            let stderr = '';
+            child.stderr.on('data', (chunk) => { stderr += chunk; });
+            child.once('error', reject);
+            child.once('exit', (code) => (code === 0 ? resolve() : reject(new Error(`worker ${tag} exited ${code}: ${stderr}`))));
+        });
+
+        try {
+            // Launched together (not awaited sequentially) so both processes'
+            // rotation decisions actually overlap in real time.
+            await Promise.all([runWorker('procA'), runWorker('procB')]);
+
+            const parseLines = async (filePath) => {
+                try {
+                    return (await readFile(filePath, 'utf8')).trimEnd().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+                } catch (error) {
+                    if (error?.code === 'ENOENT') return [];
+                    throw error; // a thrown JSON.parse here means a corrupted/torn write
+                }
+            };
+            const combined = [...await parseLines(`${jsonlPath}.1`), ...await parseLines(jsonlPath)];
+            const seenTools = new Set(combined.map((record) => record.tool));
+            const expectedTools = [
+                ...Array.from({ length: recordsPerWorker }, (_, i) => `procA-${i}`),
+                ...Array.from({ length: recordsPerWorker }, (_, i) => `procB-${i}`),
+            ];
+            for (const tool of expectedTools) expect(seenTools.has(tool)).toBe(true);
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
     });
 });
