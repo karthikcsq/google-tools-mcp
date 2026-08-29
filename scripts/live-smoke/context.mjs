@@ -36,6 +36,16 @@ export class ScenarioSkipped extends Error {
 
 const MIRROR_LINE = /\n?📄 Local file: (.+)\n/;
 
+// dist/tools/index.js appends this block to every thrown error. It is noise in
+// a results table and in the journal.
+const ERROR_HINT_START = 'If this error is unexpected or unclear, you can:';
+
+export function stripHint(message) {
+    if (typeof message !== 'string') return message;
+    const at = message.indexOf(ERROR_HINT_START);
+    return (at === -1 ? message : message.slice(0, at)).trimEnd();
+}
+
 /** Pull the local markdown mirror path out of a readDocument(markdown) result. */
 export function mirrorPathFromResult(result) {
     if (typeof result !== 'string') return null;
@@ -71,6 +81,7 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
         await guard.ensureInstrumented();
 
         const started = Date.now();
+        const denialsBefore = guard.denialCount;
         let parsed;
         try {
             parsed = tool.parameters?.parse ? tool.parameters.parse(args) : args;
@@ -93,7 +104,19 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
                 result: truncateDeep(typeof result === 'string' ? result : safeJson(result)),
             });
             return result;
-        } catch (error) {
+        } catch (rawError) {
+            // If the guard refused something during this call, that is the real
+            // reason -- even when the tool's own error boundary replaced it with
+            // "the operation failed".
+            const denial = guard.denialCount > denialsBefore ? guard.lastDenial : null;
+            let error = rawError;
+            if (denial && !rawError?.safety) {
+                error = new Error(denial.reason);
+                error.safety = true;
+                error.cause = rawError;
+            } else if (typeof rawError?.message === 'string') {
+                try { rawError.message = stripHint(rawError.message); } catch { /* frozen message */ }
+            }
             journal.write({
                 kind: 'tool-call',
                 scenario: scenario.name,
@@ -103,7 +126,7 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
                 outcome: error?.safety ? 'safety-refused' : 'error',
                 ok: false,
                 durationMs: Date.now() - started,
-                error: truncateDeep(error?.message || String(error)),
+                error: truncateDeep(stripHint(error?.message) || String(error)),
             });
             throw error;
         }

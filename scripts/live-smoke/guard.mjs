@@ -32,7 +32,10 @@ import {
     getTasksClient,
 } from '../../dist/clients.js';
 
-const MARKER = Symbol.for('google-tools-mcp.live-smoke.instrumented');
+// googleapis client roots are not extensible, so the "already instrumented"
+// marker cannot live on the object. A module-level WeakMap works on frozen
+// objects and is collected with the client it keys.
+const INSTRUMENTED = new WeakMap(); // client object -> { label, originals }
 
 // Method names that mutate state. Anything matching this and not covered by an
 // explicit rule is denied. Read verbs (get/list/export/download/...) fall
@@ -65,7 +68,7 @@ export function createGuard({ folderId }) {
             // Prefer the pre-instrumentation function so the containment walk
             // never re-enters the interceptor (files.get is an allowed read
             // either way, but this keeps the guard free of its own recursion).
-            rawFilesGet = drive[MARKER]?.originals?.['files.get'] ?? drive.files.get.bind(drive.files);
+            rawFilesGet = INSTRUMENTED.get(drive)?.originals?.['files.get'] ?? drive.files.get.bind(drive.files);
         }
         lookups += 1;
         const res = await rawFilesGet({
@@ -306,12 +309,10 @@ export function createGuard({ folderId }) {
     }
 
     function apply(label, client, decide) {
-        if (!client || client[MARKER]) return client;
+        if (!client || INSTRUMENTED.has(client)) return client;
         const originals = {};
         instrument(label, client, '', decide, new Set(), originals);
-        Object.defineProperty(client, MARKER, {
-            value: { label, originals }, enumerable: false, configurable: true,
-        });
+        INSTRUMENTED.set(client, { label, originals });
         return client;
     }
 
@@ -345,7 +346,7 @@ export function createGuard({ folderId }) {
     // cleanup re-checks containment through isInsideTestFolder first.
     async function rawDrive() {
         const drive = await getDriveClient();
-        return drive[MARKER]?.originals ?? null;
+        return INSTRUMENTED.get(drive)?.originals ?? null;
     }
 
     return {
@@ -355,6 +356,13 @@ export function createGuard({ folderId }) {
         requireInside,
         invalidate,
         rawDrive,
+        // Tool code paths rewrap thrown errors (dist/tools/index.js appends a
+        // hint, and most tools funnel failures through wrapOperationError),
+        // which loses the SafetyViolation identity by the time a caller sees
+        // it. Callers therefore compare denialCount across a call to tell
+        // "the guard refused this" from "the API refused this".
+        get denialCount() { return denials.length; },
+        get lastDenial() { return denials.length ? denials[denials.length - 1] : null; },
         get stats() { return { parentLookups: lookups, denials: denials.slice() }; },
     };
 }
