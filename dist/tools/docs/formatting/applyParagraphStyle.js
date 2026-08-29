@@ -29,7 +29,7 @@ const NUMBERED_GLYPH_HINT = /DECIMAL|ALPHA|ROMAN/;
 // NUMBERED_DECIMAL_ALPHA_ROMAN (markdown-transformer/markdownToDocs.js);
 // the rest are valid API values not currently emitted elsewhere but equally
 // legal input here.
-const BULLET_GLYPH_PRESETS = [
+export const BULLET_GLYPH_PRESETS = [
     'BULLET_DISC_CIRCLE_SQUARE',
     'BULLET_DIAMONDX_ARROW3D_SQUARE',
     'BULLET_CHECKBOX',

@@ -6,6 +6,33 @@ import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { guardMutation } from '../../readTracker.js';
 import { ReadHandleParameter, beginDocsMutation, docsSnapshotFetchers } from '../../docsHandles.js';
+import { BULLET_GLYPH_PRESETS } from './formatting/applyParagraphStyle.js';
+// modifyText-only extension of the shared ParagraphStyleParameters (issue
+// #120): a bullet/numbered-list control that createParagraphBullets /
+// deleteParagraphBullets maps onto directly. Deliberately NOT added to the
+// shared ParagraphStyleParameters in types.js -- that schema is also used by
+// batchModifyText and applyParagraphStyle, neither of which builds a request
+// for it, so exposing the field there would silently accept and drop it.
+// applyParagraphStyle already has its own richer bulletNestingLevel/
+// bulletPreset pair for changing an EXISTING list item's depth; this field
+// solves the narrower, more common modifyText case -- a mid-document
+// insert/replace that should become (or stop being) a top-level list item in
+// the same call that writes the text, without a second tool round-trip that
+// has to recompute indices against a document other editors may be touching.
+const ModifyTextParagraphStyle = ParagraphStyleParameters.extend({
+    bulletPreset: z
+        .enum(BULLET_GLYPH_PRESETS)
+        .nullable()
+        .optional()
+        .describe('Turn the target paragraph(s) into a list item using this Docs API bullet glyph preset (e.g. ' +
+            '"BULLET_DISC_CIRCLE_SQUARE" for a bulleted list, "NUMBERED_DECIMAL_ALPHA_ROMAN" for a numbered list), ' +
+            'or pass null to remove an existing list item\'s bullet. Maps directly onto createParagraphBullets / ' +
+            'deleteParagraphBullets over the same range the text/style edit touches, so a mid-document insert can ' +
+            'become a real list item in the same call instead of landing as a bare paragraph that visibly does not ' +
+            'match a parallel bulleted/numbered section elsewhere in the document. Applies to whichever paragraph(s) ' +
+            'the target range covers; to change the nesting DEPTH of an existing list item, use applyParagraphStyle\'s ' +
+            'bulletNestingLevel instead.'),
+});
 const RangeTarget = z
     .object({
     startIndex: z.number().int().min(1).describe('Start of range (inclusive, 1-based).'),
@@ -31,7 +58,7 @@ const ModifyTextParameters = DocumentIdParameter.extend({
         'Google Docs gives inserted text the formatting of the surrounding run, so replacing a one-line italic placeholder with a long section silently makes the whole section italic. ' +
         'Set this whenever the replacement is new content rather than an in-place edit of an existing phrase. Any `style` you also pass is applied after the clear, so it still wins. ' +
         'Ignored when the call inserts no text. When you do not set it, the result reports any non-default formatting the new text inherited.'),
-    paragraphStyle: ParagraphStyleParameters.optional().describe('Paragraph formatting to apply (alignment, indentation, headings, spacing, etc.).'),
+    paragraphStyle: ModifyTextParagraphStyle.optional().describe('Paragraph formatting to apply (alignment, indentation, headings, spacing, list bullets, etc.).'),
     tabId: z
         .string()
         .optional()
@@ -117,9 +144,27 @@ export function buildModifyTextRequests(opts) {
                 ? endIndex
                 : startIndex;
         if (formatEnd > formatStart) {
-            const requestInfo = GDocsHelpers.buildUpdateParagraphStyleRequest(formatStart, formatEnd, paragraphStyle, tabId);
-            if (requestInfo) {
-                requests.push(requestInfo.request);
+            // bulletPreset (issue #120) is not a updateParagraphStyle field at
+            // all -- it maps onto the Docs API's separate createParagraphBullets
+            // / deleteParagraphBullets requests, so it is pulled out before the
+            // rest of paragraphStyle is handed to the ordinary paragraph-style
+            // builder (which only reads the fields it knows and would otherwise
+            // just silently ignore it).
+            const { bulletPreset, ...restParagraphStyle } = paragraphStyle;
+            const hasOtherParagraphStyle = Object.values(restParagraphStyle).some((v) => v !== undefined);
+            if (hasOtherParagraphStyle) {
+                const requestInfo = GDocsHelpers.buildUpdateParagraphStyleRequest(formatStart, formatEnd, restParagraphStyle, tabId);
+                if (requestInfo) {
+                    requests.push(requestInfo.request);
+                }
+            }
+            if (bulletPreset !== undefined) {
+                const range = { startIndex: formatStart, endIndex: formatEnd };
+                if (tabId)
+                    range.tabId = tabId;
+                requests.push(bulletPreset === null
+                    ? { deleteParagraphBullets: { range } }
+                    : { createParagraphBullets: { range, bulletPreset } });
             }
         }
     }
@@ -130,13 +175,14 @@ export function register(server) {
         name: 'modifyText',
         description: 'Best for small, targeted, single-location changes within a line or paragraph. ' +
             'Can insert text at a position, replace a range or found text, delete text (replace with empty string ""), ' +
-            'apply text styling (bold, italic, etc.), apply paragraph styling (alignment, headings, spacing, etc.), or any combination. ' +
+            'apply text styling (bold, italic, etc.), apply paragraph styling (alignment, headings, spacing, list bullets via paragraphStyle.bulletPreset, etc.), or any combination. ' +
             "Use readDocument with format='index' to determine indices — it returns a compact structural map (headings, list items, tables with per-cell indices) instead of the full raw document. " +
             'Supports \\n for line breaks and \\t for tabs in replacement text. ' +
             'When using textToFind, if multiple matches exist the tool returns all instances with context so you can specify matchInstance. ' +
             "textToFind tolerates markdown list markers copied from readDocument(format='markdown'), because Google Docs stores bullets outside text runs. " +
             'For MULTIPLE edits in the same document, use batchModifyText instead: it applies them in one atomic batchUpdate against a single snapshot, so you do not have to recompute indices between edits and a collaborator cannot land halfway through. ' +
-            'This tool is TEXT-ONLY: a multi-line replacement is inserted as one blob with a single paragraph style, so markdown syntax stays literal and list nesting is flattened. ' +
+            'This tool is TEXT-ONLY: a multi-line replacement is inserted as one blob with a single paragraph style, so markdown syntax (e.g. a literal "- " or "1. " prefix) stays literal and is never parsed into a real list. ' +
+            "paragraphStyle.bulletPreset is the one structural exception: it applies a REAL top-level bullet/number (createParagraphBullets) to every paragraph the target range covers — useful for a single inserted line that must match a bulleted/numbered section elsewhere in the document — but it is still one flat preset over the whole range, with no per-line nesting control; for that, or for richer multi-line structure, use replaceRangeWithMarkdown. " +
             'For multi-line, list, or section-level content at a range, use replaceRangeWithMarkdown; to rewrite a whole document, use replaceDocumentWithMarkdown. ' +
             'To add content to the end of a doc, use appendMarkdown or appendText. ' +
             "Newly inserted text carries the document's default text color explicitly, when the document defines one. " +
@@ -309,8 +355,13 @@ export function register(server) {
                     actions.push('inserted text');
                 if (args.style)
                     actions.push('applied text formatting');
-                if (args.paragraphStyle)
-                    actions.push('applied paragraph formatting');
+                if (args.paragraphStyle) {
+                    const { bulletPreset, ...restParagraphStyle } = args.paragraphStyle;
+                    if (Object.values(restParagraphStyle).some((v) => v !== undefined))
+                        actions.push('applied paragraph formatting');
+                    if (bulletPreset !== undefined)
+                        actions.push(bulletPreset === null ? 'removed list bullet' : `applied list formatting (${bulletPreset})`);
+                }
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 // Say it in the result, not just in the doc. A silent inherit is
                 // how 2,500 characters landed in italic behind a "Successfully

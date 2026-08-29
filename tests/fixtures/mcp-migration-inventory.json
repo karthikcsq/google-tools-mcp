@@ -639,6 +639,9 @@
         "file": "tests/legacyAliasAuthRetry.test.js"
       },
       {
+        "file": "tests/linkMismatchDetection.test.js"
+      },
+      {
         "file": "tests/listHeadings.test.js"
       },
       {
@@ -685,6 +688,9 @@
       },
       {
         "file": "tests/publicErrorBoundary.test.js"
+      },
+      {
+        "file": "tests/readDocumentLinkMismatch.test.js"
       },
       {
         "file": "tests/readGoogleDocTabs.test.js"
@@ -906,7 +912,7 @@
       },
       {
         "file": "dist/tools/docs/modifyText.js",
-        "line": 129,
+        "line": 174,
         "match": ".addTool({"
       },
       {

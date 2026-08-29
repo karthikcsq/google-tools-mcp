@@ -271,3 +271,89 @@ describe('buildModifyTextRequests — default text color (issue #14)', () => {
         expect(requests[2].updateTextStyle.range).toEqual({ startIndex: 5, endIndex: 5 + 'longer text'.length });
     });
 });
+
+// --- Issue #120: bulletPreset list control on paragraphStyle ---
+describe('buildModifyTextRequests — bulletPreset (issue #120)', () => {
+    it('emits createParagraphBullets over the inserted range for a pure insertion', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            text: 'New item\n',
+            paragraphStyle: { bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
+        });
+        expect(requests).toHaveLength(2);
+        expect(requests[0]).toHaveProperty('insertText');
+        expect(requests[1]).toEqual({
+            createParagraphBullets: {
+                range: { startIndex: 5, endIndex: 5 + 'New item\n'.length },
+                bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+            },
+        });
+    });
+
+    it('emits createParagraphBullets with a numbered preset', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 1,
+            text: 'First step\n',
+            paragraphStyle: { bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN' },
+        });
+        expect(requests[1].createParagraphBullets.bulletPreset).toBe('NUMBERED_DECIMAL_ALPHA_ROMAN');
+    });
+
+    it('emits deleteParagraphBullets when bulletPreset is explicitly null', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 10,
+            endIndex: 25,
+            paragraphStyle: { bulletPreset: null },
+        });
+        expect(requests).toEqual([{ deleteParagraphBullets: { range: { startIndex: 10, endIndex: 25 } } }]);
+    });
+
+    it('carries tabId on the bullet request', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            text: 'Item\n',
+            paragraphStyle: { bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
+            tabId: 'tab-9',
+        });
+        expect(requests[1].createParagraphBullets.range.tabId).toBe('tab-9');
+    });
+
+    it('emits both the ordinary paragraph style and the bullet request, style first', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 1,
+            text: 'Centered bullet\n',
+            paragraphStyle: { alignment: 'CENTER', bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
+        });
+        const kinds = requests.map((r) => Object.keys(r)[0]);
+        expect(kinds).toEqual(['insertText', 'updateParagraphStyle', 'createParagraphBullets']);
+    });
+
+    it('emits only the bullet request when bulletPreset is the sole paragraphStyle field', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 1,
+            text: 'Item\n',
+            paragraphStyle: { bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
+        });
+        const kinds = requests.map((r) => Object.keys(r)[0]);
+        expect(kinds).toEqual(['insertText', 'createParagraphBullets']);
+    });
+
+    it('applies over the existing range for a style-only (no text) call', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 50,
+            endIndex: 80,
+            paragraphStyle: { bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN' },
+        });
+        expect(requests).toEqual([{
+            createParagraphBullets: { range: { startIndex: 50, endIndex: 80 }, bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN' },
+        }]);
+    });
+
+    it('skips the bullet request when the format range is empty (insert with no endIndex/text)', () => {
+        const requests = buildModifyTextRequests({
+            startIndex: 5,
+            paragraphStyle: { bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
+        });
+        expect(requests).toEqual([]);
+    });
+});
