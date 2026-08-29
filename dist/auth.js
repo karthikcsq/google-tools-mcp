@@ -250,7 +250,7 @@ function getOAuthCallbackPort() {
     return port;
 }
 
-async function authenticate({ forceConsent = false } = {}) {
+async function authenticate() {
     const { client_secret, client_id } = await loadClientSecrets();
     const server = http.createServer();
     const requestedPort = getOAuthCallbackPort();
@@ -262,13 +262,15 @@ async function authenticate({ forceConsent = false } = {}) {
         access_type: 'offline',
         scope: SCOPES.join(' '),
         // Google only guarantees a refresh_token on the FIRST exchange for a
-        // given client/user/scope combination — a returning user who already
-        // granted this client can complete the exchange without one
+        // given client/user/scope combination — without forcing re-consent, a
+        // returning user (stale/deleted token.json, invalid_grant recovery,
+        // a fresh machine reusing the same Google account) can complete the
+        // exchange without one, silently losing persistent offline access
+        // (issue #115). Google always shows the consent screen anyway on a
+        // genuinely first-time authorization, so this costs first-time users
+        // nothing while making every other case obtain a refresh token too
         // (https://developers.google.com/identity/protocols/oauth2/web-server).
-        // forceConsent is set by recovery paths (invalid_grant re-auth) and
-        // explicit `google-tools-mcp auth` re-runs, where a fresh refresh
-        // token is specifically what's needed, not just an access token.
-        ...(forceConsent && { prompt: 'consent' }),
+        prompt: 'consent',
     });
     logger.info('Opening browser for Google authorization...');
     logger.info('If the browser does not open, visit this URL:', authorizeUrl);
@@ -316,16 +318,12 @@ async function authenticate({ forceConsent = false } = {}) {
         // Reporting "Authentication successful!" here would tell the caller
         // persistent offline access exists when it does not — the exact
         // failure mode of issue #115. Fail loudly instead of degrading to a
-        // silently-temporary access-token-only client.
+        // silently-temporary access-token-only client. Consent was already
+        // forced above, so this means Google still didn't mint one — revoking
+        // access is the only remaining lever.
         throw new Error('Google did not return a refresh token, so persistent offline access ' +
-            'could not be saved. This usually means this app already has a prior consent grant ' +
-            'for your account. ' +
-            (forceConsent
-                ? 'Re-consent was already requested and still did not produce one — revoke access ' +
-                    'for this app at https://myaccount.google.com/permissions and run ' +
-                    '`google-tools-mcp auth` again.'
-                : 'Run `google-tools-mcp auth` (which requests re-consent) or revoke access at ' +
-                    'https://myaccount.google.com/permissions first.'));
+            'could not be saved, even with re-consent requested. Revoke access for this app at ' +
+            'https://myaccount.google.com/permissions and run `google-tools-mcp auth` again.');
     }
     await saveCredentials(oAuth2Client);
     logger.info('Authentication successful!');
@@ -363,12 +361,8 @@ export async function authorize() {
                 err.response?.data?.error === 'invalid_grant';
             if (isInvalidGrant) {
                 logger.warn('Saved refresh token is invalid/revoked. Starting re-authentication...');
-                // This path just deleted the old (revoked) token.json, so it MUST come
-                // back with a replacement refresh token or the deletion leaves the user
-                // with nothing durable saved at all. Force re-consent so Google is asked
-                // to mint one rather than possibly completing the exchange without it.
                 try { await fs.unlink(getTokenPath()); } catch {}
-                return authenticate({ forceConsent: true });
+                return authenticate();
             }
             logger.error('Token refresh failed:', err.message || err);
             throw err;
@@ -378,6 +372,6 @@ export async function authorize() {
     return authenticate();
 }
 
-export async function runAuthFlow(options) {
-    return await authenticate(options);
+export async function runAuthFlow() {
+    return await authenticate();
 }

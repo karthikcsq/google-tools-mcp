@@ -522,6 +522,9 @@
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
       },
       {
+        "file": "tests/authConsentFlow.test.js"
+      },
+      {
         "file": "tests/copyFile.test.js"
       },
       {

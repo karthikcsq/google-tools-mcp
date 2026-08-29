@@ -39,10 +39,7 @@ if (process.argv[2] === 'setup') {
 if (process.argv[2] === 'auth') {
     const { runAuthFlow } = await import('./auth.js');
     try {
-        // Explicit `google-tools-mcp auth` is the user asking to (re-)authenticate,
-        // which is exactly the recovery/explicit-reauth case that needs Google to
-        // mint a fresh refresh token rather than silently completing without one.
-        await runAuthFlow({ forceConsent: true });
+        await runAuthFlow();
         logger.info('Authorization complete. You can now start the MCP server.');
         process.exit(0);
     } catch (error) {
