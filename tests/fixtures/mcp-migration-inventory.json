@@ -522,6 +522,9 @@
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
       },
       {
+        "file": "tests/copyFile.test.js"
+      },
+      {
         "file": "tests/createDocument.test.js"
       },
       {
@@ -868,7 +871,7 @@
       },
       {
         "file": "dist/tools/drive/createDocument.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
@@ -918,7 +921,7 @@
       },
       {
         "file": "dist/tools/drive/listFolderContents.js",
-        "line": 20,
+        "line": 46,
         "match": ".addTool({"
       },
       {
