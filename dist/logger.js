@@ -95,14 +95,17 @@ function rotateIfAlreadyOversized(filePath) {
 // only gets its mode set when this logger created it, or when it is the
 // dedicated config directory the logger owns by definition. Privacy for a
 // custom location rests on the 0600 file mode instead.
+// Exported so the rule can be asserted on every platform: Windows chmod is a
+// near no-op, so a mode comparison there cannot distinguish the two branches.
+export function resolveLogDirectoryAction(directory, { exists = fs.existsSync, configDir = getConfigDir() } = {}) {
+    if (!exists(directory)) return 'create';
+    return path.resolve(directory) === path.resolve(configDir) ? 'chmod' : 'leave';
+}
+
 function ensurePrivateDirectory(directory) {
-    const owned = path.resolve(directory) === path.resolve(getConfigDir());
-    let created = false;
-    if (!fs.existsSync(directory)) {
-        fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-        created = true;
-    }
-    if (!created && !owned) return;
+    const action = resolveLogDirectoryAction(directory);
+    if (action === 'leave') return;
+    if (action === 'create') fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(directory, 0o700); } catch (error) { if (process.platform !== 'win32') throw error; }
 }
 

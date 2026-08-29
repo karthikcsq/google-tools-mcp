@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createV2HttpHandler, MCP_PROTOCOL_VERSION, prepareMcpServerFactory } from '../dist/mcpServer.js';
-import { getArgumentShape, getLogFilePath, getStructuredLogFilePath, logToolCall, logger, readRecentToolCalls, resetLoggerForTests, setLogRotationThresholdForTests } from '../dist/logger.js';
+import { getArgumentShape, getLogFilePath, getStructuredLogFilePath, logToolCall, logger, readRecentToolCalls, resetLoggerForTests, resolveLogDirectoryAction, setLogRotationThresholdForTests } from '../dist/logger.js';
 import { publicError, registerSecret } from '../dist/errors.js';
 
 const originalEnv = { ...process.env };
@@ -140,6 +140,18 @@ describe('structured diagnostics', () => {
                 expect((await stat(jsonlPath)).mode & 0o777).toBe(0o600);
             }
         } finally { errorSpy.mockRestore(); await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('only sets a directory mode for a directory it creates or already owns', () => {
+        // Platform-independent statement of the rule: a Windows chmod is close
+        // enough to a no-op that comparing modes there proves nothing.
+        const configDir = join(tmpdir(), 'google-tools-mcp-config');
+        const present = new Set([configDir, tmpdir(), join(tmpdir(), 'shared-logs')]);
+        const exists = (target) => present.has(target);
+        expect(resolveLogDirectoryAction(configDir, { exists, configDir })).toBe('chmod');
+        expect(resolveLogDirectoryAction(tmpdir(), { exists, configDir })).toBe('leave');
+        expect(resolveLogDirectoryAction(join(tmpdir(), 'shared-logs'), { exists, configDir })).toBe('leave');
+        expect(resolveLogDirectoryAction(join(tmpdir(), 'brand-new'), { exists, configDir })).toBe('create');
     });
 
     it('logs into a system-style shared parent it has no permission to chmod', async () => {
