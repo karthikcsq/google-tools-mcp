@@ -222,6 +222,10 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
         self,
         call,
         tryCall,
+        /** Is a tool registered in THIS worktree's build? Several scenarios are
+         *  acceptance checks for a tool that does not exist on the base branch. */
+        hasTool: (toolName) => tools.has(toolName),
+        toolNames: () => [...tools.keys()].sort(),
         track,
         createDoc,
         createFolder,

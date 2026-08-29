@@ -8,3 +8,4 @@ AGENTS.md
 coverage/
 live-smoke-results/
 .env.live-smoke
+.issue-scratch/

@@ -1,0 +1,1 @@
+live-smoke attachment payload: 2026 kickoff packet placeholder.
