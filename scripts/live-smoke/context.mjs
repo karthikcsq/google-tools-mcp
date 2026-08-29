@@ -115,7 +115,20 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
                 error.safety = true;
                 error.cause = rawError;
             } else if (typeof rawError?.message === 'string') {
-                try { rawError.message = stripHint(rawError.message); } catch { /* frozen message */ }
+                const stripped = stripHint(rawError.message);
+                if (stripped !== rawError.message) {
+                    // Public errors are frozen by design, so mutating the message
+                    // silently no-ops and the boilerplate hint ends up quoted in
+                    // a scenario's failure reason. Re-wrap instead.
+                    try {
+                        rawError.message = stripped;
+                    } catch {
+                        error = new Error(stripped);
+                        error.name = rawError.name;
+                        error.cause = rawError;
+                        error.stack = rawError.stack;
+                    }
+                }
             }
             journal.write({
                 kind: 'tool-call',
