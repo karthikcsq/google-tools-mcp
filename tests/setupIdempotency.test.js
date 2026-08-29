@@ -1,7 +1,9 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { spawn } from 'node:child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
 import {
     buildClientEntry, createClientAdapters, reconcileClientEntry, entriesEqual, parseClientEntry,
 } from '../dist/clientAdapters.js';
@@ -9,7 +11,30 @@ import { checkLaunchTarget, inspectToken } from '../dist/setupInspect.js';
 import { persistTokenCredentials, SCOPES } from '../dist/auth.js';
 import { backupClientEntry, backupEnvFile, configureTransport, mergeCredentialEnv, persistTransportSelection, registerClients, runSetup } from '../dist/setup.js';
 
+jest.setTimeout(60_000);
+
+const ENTRYPOINT = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 const desired = { command: 'node', args: ['/installed/google-tools-mcp/dist/index.js'] };
+
+// Launch the shipped entrypoint the way an MCP client would, with nothing in
+// the process environment naming a transport, and report which one it chose.
+function resolvedTransportInFreshProcess(xdgRoot) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [ENTRYPOINT], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...process.env, CI: 'true', XDG_CONFIG_HOME: xdgRoot, GOOGLE_MCP_TRANSPORT: undefined, GOOGLE_MCP_LOG_FILE: '0', GOOGLE_MCP_JSONL_FILE: '0' },
+        });
+        let stderr = '';
+        const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`no transport banner:\n${stderr}`)); }, 40_000);
+        const settle = (value) => { clearTimeout(timer); child.stdin.end(); child.kill('SIGTERM'); resolve(value); };
+        child.on('error', (error) => { clearTimeout(timer); reject(error); });
+        child.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+            if (stderr.includes('running using stdio')) settle('stdio');
+            else if (stderr.includes('running over HTTP') || stderr.includes('Shared HTTP service is already healthy')) settle('http');
+        });
+    });
+}
 
 function adapter(entry, failures = {}) {
     const calls = [];
@@ -76,6 +101,31 @@ describe('setup client reconciliation', () => {
             await persistTransportSelection('http', { configDir });
             expect(await fs.readFile(path.join(configDir, '.env'), 'utf8')).toBe('GOOGLE_MCP_TRANSPORT=http\n');
         } finally { await fs.rm(configDir, { recursive: true, force: true }); }
+    });
+
+    it('persists a stdio selection over a previously persisted HTTP one, down to a fresh process', async () => {
+        const xdgRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-stdio-selection-'));
+        const configDir = path.join(xdgRoot, 'google-tools-mcp');
+        try {
+            // The state a previous "shared HTTP" setup run leaves behind.
+            await fs.mkdir(configDir, { recursive: true });
+            await fs.writeFile(path.join(configDir, '.env'), 'GOOGLE_MCP_TRANSPORT=http\n');
+            expect(await resolvedTransportInFreshProcess(xdgRoot)).toBe('http');
+
+            const env = { GOOGLE_MCP_TRANSPORT: 'http' };
+            const result = await configureTransport({ command: 'node', args: ['index.js'] }, {
+                select: async () => 'stdio', configDir, env,
+                ensureToken: async () => { throw new Error('stdio must not mint an HTTP token'); },
+                startService: async () => { throw new Error('stdio must not start a shared service'); },
+            });
+
+            expect(result).toEqual({ transport: 'stdio' });
+            // Written, not deleted: a lower-priority cwd or package .env could
+            // otherwise reactivate HTTP on the next launch.
+            expect(await fs.readFile(path.join(configDir, '.env'), 'utf8')).toBe('GOOGLE_MCP_TRANSPORT=stdio\n');
+            expect(env.GOOGLE_MCP_TRANSPORT).toBe('stdio');
+            expect(await resolvedTransportInFreshProcess(xdgRoot)).toBe('stdio');
+        } finally { await fs.rm(xdgRoot, { recursive: true, force: true }); }
     });
 
     it('adds a missing entry', async () => {

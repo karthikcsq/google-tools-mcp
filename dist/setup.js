@@ -664,16 +664,23 @@ export async function mergeCredentialEnv(envPath, values, { readFile = fs.readFi
     } finally { await unlink(temporary).catch(() => {}); }
 }
 
+// Both directions are written, and stdio is written explicitly rather than
+// deleted. The user .env is only the highest-priority config file: a leftover
+// GOOGLE_MCP_TRANSPORT=http in the cwd or package .env would otherwise be
+// picked up on the next launch and send the process to HTTP while the client
+// that setup just repaired sits waiting on stdio.
 export async function persistTransportSelection(transport, { configDir = getConfigDir() } = {}) {
-    if (transport !== 'http') return;
-    await mergeCredentialEnv(path.join(configDir, '.env'), { GOOGLE_MCP_TRANSPORT: 'http' });
+    const selected = transport === 'http' ? 'http' : 'stdio';
+    await mergeCredentialEnv(path.join(configDir, '.env'), { GOOGLE_MCP_TRANSPORT: selected });
+    return selected;
 }
 
 export async function configureTransport(launch, {
     select = p.select,
     ensureToken = ensureHttpToken,
     startService = startHttpService,
-    persistTransport = () => persistTransportSelection('http'),
+    configDir = getConfigDir(),
+    persistTransport = (transport) => persistTransportSelection(transport, { configDir }),
     env = process.env,
 } = {}) {
     const answer = await select({
@@ -685,7 +692,14 @@ export async function configureTransport(launch, {
         initialValue: 'stdio',
     });
     if (p.isCancel(answer)) cancelled();
-    if (answer !== 'http') return Object.freeze({ transport: 'stdio' });
+    if (answer !== 'http') {
+        // Switching back from a previous shared-HTTP setup has to undo the
+        // persisted selection, and has to update this process too so anything
+        // later in the same setup run sees the transport it just chose.
+        await persistTransport('stdio');
+        env.GOOGLE_MCP_TRANSPORT = 'stdio';
+        return Object.freeze({ transport: 'stdio' });
+    }
 
     // Establish the server before writing either client entry. If startup,
     // authentication, or discovery fails, setup stops with every client still
@@ -695,7 +709,7 @@ export async function configureTransport(launch, {
     const config = resolveHttpServiceConfig(env);
     const service = await startService({ launch, env });
     if (!service.healthy) throw new Error('Shared HTTP lifecycle did not become healthy; client configuration was not changed.');
-    await persistTransport();
+    await persistTransport('http');
     env.GOOGLE_MCP_TRANSPORT = 'http';
     return Object.freeze({ transport: 'http', url: service.state.url || config.url, token: tokenInfo.token,
         tokenSource: tokenInfo.source, serviceStatus: service.status });
