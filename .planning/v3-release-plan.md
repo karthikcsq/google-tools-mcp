@@ -124,3 +124,80 @@ a new import or code path on another:
 
 The second is the exact reason the standing rule is to read the `Test Suites:` line rather
 than `Tests:`.
+
+---
+
+## PAUSE POINT — 2026-08-29, resume here
+
+Everything is committed and pushed. No agents running, no monitor running, every worktree
+clean. Nothing lives only on this machine.
+
+### Branch heads (all pushed)
+
+| Branch | Head | State |
+|---|---|---|
+| `docs/mcp-plan-client-evidence` (#109) | `45fc243` | closed out |
+| `feat/docs-cluster` (#110) | `37a7686` | **NOT mergeable — see live gaps below** |
+| `feat/gmail-cluster` (#111) | `8a112be` | closed out, one live gap (#73 filenames) |
+| `feat/ops-cluster` (#112) | `5c20ee8` | closed out, all 24 findings answered |
+| `feat/independents` (#113) | `4f76e3f` | closed out |
+| `feat/live-smoke` | `533e5cc` | built, no PR opened yet |
+| `feat/v3-integration` | `3c60eec` | all four clusters merged, 90 suites / 1287 tests |
+| `verify/live-smoke-on-fixes` | `e49833a` | integration + live-smoke, used to run scenarios against the fixed build |
+
+### The live smoke result that changes the plan
+
+Running the 22 scenarios against `verify/live-smoke-on-fixes` (every fix present):
+**11 passed, 7 failed.** Ten scenarios flipped FAIL -> PASS versus the unfixed base, which
+calibrates the harness. The failures below are real and were invisible to unit tests.
+
+Run it again with:
+```
+cd google-tools-mcp-int
+GOOGLE_MCP_TEST_FOLDER_ID=15m5wq1pA8Mn0ETxIaLdN0kaUFwnrfzHN LOG_LEVEL=warn node scripts/live-smoke.mjs docs drive gmail
+```
+Journal from the last run: `google-tools-mcp-int/live-smoke-results/2026-08-29T15-47-14-742-3e7f.jsonl`
+
+**Four real Docs gaps (task #49, brief at `.planning/brief-live-gaps-docs.md`, agent was
+killed mid-way having produced nothing):**
+
+1. **#122** — `backupIfLocallyModified()` only runs inside
+   `if (!diffHandle && writeLocalFile)` in `dist/tools/docs/readGoogleDoc.js`. The v2
+   read-handle path writes the mirror unguarded, so the reporter's exact repro still
+   destroys the unpushed edit with no `.bak`. Hole in a fix committed today (`65deafa`).
+2. **#14** — `replaceDocumentWithMarkdown` writes runs with no `foregroundColor`; the
+   default-colour work only landed on `modifyText`. Check `appendMarkdown` and
+   `replaceRangeWithMarkdown` too.
+3. **#106** — nested list sub-items lose their indent through a mirror round trip. Distinct
+   from #118/#123, which now pass.
+4. **#108** — a title-only rename still blocks an unrelated body edit, and reports
+   `last modified` earlier than `last read`. Same class as the #119 fix (`bf07ba0`), one
+   level out: compare content and revision, not file metadata.
+
+**One Gmail gap (task #50):** #73's non-ASCII subject passes, but a long non-ASCII
+attachment filename returns as `Pr_sentation-du-partenariat-________-...`. RFC 2231
+continuation encoding in `dist/mime.js` does not round-trip.
+
+**Two scenario bugs, not product bugs (task #51):** #107 passes `range` where the parameter
+is `target` (the tool's own `describe()` says "The range to replace", which likely misled the
+author). #105 now refuses with a bounded `PublicToolError` instead of returning 1.36M chars,
+which is arguably the correct fix, with the scenario still asserting the old shape.
+
+### Resume order
+
+1. Finish task #49 (four Docs gaps) — this is what blocks #110.
+2. Task #50 (#73 filenames) on `feat/gmail-cluster`.
+3. Task #51 (recalibrate two scenarios) on `feat/live-smoke`, then open its PR.
+4. Re-run live smoke on a rebuilt `verify/live-smoke-on-fixes`; target is 0 disagreements
+   with `expectedOnBase`.
+5. Merge on GitHub in order #109 -> #110 -> #111 -> #112 -> #113, reusing the conflict
+   resolutions recorded above.
+6. #71 (`@googleapis/*`) as its own PR, last. Partial work in `stash@{0}` on the
+   integration worktree.
+7. Release: #50 environment protection (Elliot, admin-only), version bump, changelog, tag.
+
+### To restart the monitor
+
+Monitor task, persistent, 120s poll, one shared `scan()` for issues + PRs + issue comments +
+review comments since a watermark that advances each cycle, filtering out `ElliotDrel` so my
+own replies do not echo back as events.
