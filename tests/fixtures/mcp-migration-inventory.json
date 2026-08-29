@@ -696,6 +696,9 @@
         "file": "tests/readDocumentLinkMismatch.test.js"
       },
       {
+        "file": "tests/readGoogleDocLocalMirrorConflict.test.js"
+      },
+      {
         "file": "tests/readGoogleDocTabs.test.js"
       },
       {
