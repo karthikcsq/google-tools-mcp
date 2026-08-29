@@ -205,6 +205,32 @@ describe('shared HTTP lifecycle operations', () => {
         }
     });
 
+    // Finding 21: `google-tools-mcp start` spawns the detached `serve` child
+    // with stdio: 'ignore', so the child's own actionable "FATAL: Port ...
+    // GOOGLE_MCP_PORT ..." EADDRINUSE message (proven reachable via `serve`
+    // directly by the test above) never reached the operator through the
+    // documented, normal `start` command -- only a generic readiness-timeout
+    // error did. startHttpService() now redirects the child's stderr to a
+    // temp file it reads back on a readiness failure.
+    it('makes a foreign port collision actionable through the documented `start` command too', async () => {
+        const configDir = await tempConfig();
+        const occupied = http.createServer((_req, res) => { res.writeHead(200); res.end('foreign'); });
+        await new Promise((resolve) => occupied.listen(0, '127.0.0.1', resolve));
+        const { port } = occupied.address();
+        const env = {
+            ...process.env, CI: 'true', XDG_CONFIG_HOME: configDir,
+            GOOGLE_MCP_PORT: String(port), GOOGLE_MCP_TRANSPORT: undefined, GOOGLE_MCP_HTTP_TOKEN: undefined,
+        };
+        try {
+            await expect(execFileAsync(process.execPath, [ENTRYPOINT, 'start'], { env, timeout: 40_000 }))
+                .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('GOOGLE_MCP_PORT') });
+        } finally {
+            await new Promise((resolve) => occupied.close(resolve));
+            await execFileAsync(process.execPath, [ENTRYPOINT, 'stop', '--json'], { env, timeout: 40_000 }).catch(() => {});
+            await fs.rm(configDir, { recursive: true, force: true });
+        }
+    });
+
     it('treats an already-dead recorded pid as stale cleanup, not a stop failure', async () => {
         const configDir = await tempConfig();
         await publishHttpState({

@@ -208,6 +208,33 @@ describe('doctor report and setup inspection', () => {
         expect(report.config.warnings).toHaveLength(1);
     });
 
+    // Finding 20: a persisted GOOGLE_MCP_TRANSPORT=http install used to report
+    // healthy without ever checking the shared service when zero supported
+    // client CLIs were detected on the machine running `doctor` -- the old
+    // `usesHttp = clients.some(client => client.entry?.url)` gate is
+    // vacuously false against an empty `clients` array regardless of what
+    // transport is actually configured. httpExpected lets the caller (which
+    // already resolved the effective transport before calling inspectSetup)
+    // force the HTTP health check independent of client detection.
+    it('inspects shared HTTP health via httpExpected even when no client is detected', async () => {
+        let inspectHttpCalls = 0;
+        const inspectHttp = async () => { inspectHttpCalls += 1; return { healthy: false, diagnostic: 'not-running' }; };
+        const withoutHttpExpected = await inspectSetup({
+            adapters: [], inspectHttp, credentialsCheck: async () => ({ configured: true }), tokenCheck: async () => ({ status: 'valid' }), configWarnings: [],
+        });
+        expect(inspectHttpCalls).toBe(0);
+        expect(withoutHttpExpected.http).toBeNull();
+        expect(withoutHttpExpected.healthy).toBe(true);
+
+        const withHttpExpected = await inspectSetup({
+            adapters: [], inspectHttp, httpExpected: true, credentialsCheck: async () => ({ configured: true }), tokenCheck: async () => ({ status: 'valid' }), configWarnings: [],
+        });
+        expect(inspectHttpCalls).toBe(1);
+        expect(withHttpExpected.http).toMatchObject({ healthy: false, diagnostic: 'not-running' });
+        expect(withHttpExpected.healthy).toBe(false);
+        expect(withHttpExpected.problems).toContain('Shared HTTP service: not-running');
+    });
+
     it('surfaces malformed-config warnings in the troubleshoot report', async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-troubleshoot-warning-'));
         const envPath = path.join(root, '.env');

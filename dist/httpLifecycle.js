@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { isLoopbackHost, resolveHttpAuthConfig } from './httpAuth.js';
 import { connectModernHttpClient } from './httpClient.js';
 import {
@@ -145,6 +149,17 @@ export function assertHttpServiceConfigurationMatch(existing, config, expectedVe
     }
 }
 
+const STARTUP_DIAGNOSTIC_MAX_BYTES = 8 * 1024;
+
+function readStartupDiagnostic(filePath) {
+    try {
+        const content = fs.readFileSync(filePath, 'utf8').trim();
+        return content ? content.slice(-STARTUP_DIAGNOSTIC_MAX_BYTES) : '';
+    } catch {
+        return '';
+    }
+}
+
 export async function startHttpService({
     configDir, env = process.env, launch, spawnImpl = spawn, fetchImpl = globalThis.fetch, timeoutMs = 15_000, expectedVersion = packageVersion,
 } = {}) {
@@ -157,23 +172,45 @@ export async function startHttpService({
     await ensureHttpToken({ configDir, env });
     const command = launch?.command || process.execPath;
     const args = [...(launch?.args || []), 'serve'];
-    const child = spawnImpl(command, args, {
-        detached: true,
-        windowsHide: true,
-        stdio: 'ignore',
-        env: {
-            ...env,
-            GOOGLE_MCP_TRANSPORT: 'http',
-            GOOGLE_MCP_PORT: String(config.port),
-            GOOGLE_MCP_ENDPOINT: config.endpoint,
-            GOOGLE_MCP_HTTP_HOST: config.host,
-        },
-    });
+    // stdio: 'ignore' used to discard the detached child's own startup
+    // diagnostics entirely -- including the actionable "FATAL: Port ... Set
+    // GOOGLE_MCP_PORT ..." message dist/index.js writes straight to stderr on
+    // EADDRINUSE -- so a port collision only ever surfaced here as a generic
+    // readiness-timeout error with no indication of why (finding 21).
+    // Redirect the child's stderr to a private, per-attempt temp file
+    // instead. The OS duplicates the file descriptor into the child at spawn
+    // time, so this process can close its own copy immediately afterward
+    // without touching the child's ability to keep writing to it -- which
+    // matters once the child is unref()'d and expected to keep running as a
+    // long-lived detached service after this process exits.
+    const startupLogPath = path.join(os.tmpdir(), `google-tools-mcp-start-${process.pid}-${randomBytes(6).toString('hex')}.log`);
+    const startupLogFd = fs.openSync(startupLogPath, 'w');
+    let child;
+    try {
+        child = spawnImpl(command, args, {
+            detached: true,
+            windowsHide: true,
+            stdio: ['ignore', 'ignore', startupLogFd],
+            env: {
+                ...env,
+                GOOGLE_MCP_TRANSPORT: 'http',
+                GOOGLE_MCP_PORT: String(config.port),
+                GOOGLE_MCP_ENDPOINT: config.endpoint,
+                GOOGLE_MCP_HTTP_HOST: config.host,
+            },
+        });
+    } finally {
+        fs.closeSync(startupLogFd);
+    }
     const status = await waitForHttpService({ configDir, env, fetchImpl, timeoutMs });
     if (!status.healthy) {
         if (child.exitCode === null && !child.killed) child.kill('SIGTERM');
-        throw new Error(`Shared HTTP service did not become healthy (${status.diagnostic}). See ${HTTP_OPERATIONS_DOC_URL}`);
+        const diagnostic = readStartupDiagnostic(startupLogPath);
+        try { fs.unlinkSync(startupLogPath); } catch { /* best-effort cleanup */ }
+        throw new Error(`Shared HTTP service did not become healthy (${status.diagnostic}).` +
+            (diagnostic ? ` ${diagnostic}` : '') + ` See ${HTTP_OPERATIONS_DOC_URL}`);
     }
+    try { fs.unlinkSync(startupLogPath); } catch { /* best-effort cleanup */ }
     child.unref?.();
     return Object.freeze({ status: 'started', ...status });
 }

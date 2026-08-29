@@ -143,7 +143,7 @@ if (process.argv[2] === 'doctor') {
             ? { transport: 'http', url: httpConfigForDoctor.url, noAuth: httpConfigForDoctor.noAuth }
             : { transport: 'stdio' };
         const desiredEntries = await createDoctorDesiredEntryResolver({ launch, transport, env: process.env });
-        const report = await inspectSetup({ adapters: createClientAdapters(), desiredEntries });
+        const report = await inspectSetup({ adapters: createClientAdapters(), desiredEntries, httpExpected: doctorTransport === 'http' });
         if (json) process.stdout.write(formatDoctorReport(report, true));
         else {
             process.stdout.write(formatDoctorReport(report));

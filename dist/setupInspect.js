@@ -98,7 +98,7 @@ export async function checkGlobalInstall({ run, access = fs.access } = {}) {
     }
 }
 
-export async function inspectSetup({ adapters = [], desiredEntry = null, desiredEntries = null, inspectHttp = getHttpServiceStatus, credentialsCheck = checkCredentials, tokenCheck = inspectToken, configWarnings = getConfigWarnings() } = {}) {
+export async function inspectSetup({ adapters = [], desiredEntry = null, desiredEntries = null, inspectHttp = getHttpServiceStatus, httpExpected = false, credentialsCheck = checkCredentials, tokenCheck = inspectToken, configWarnings = getConfigWarnings() } = {}) {
     const credentials = await credentialsCheck();
     const token = await tokenCheck();
     const clients = [];
@@ -121,7 +121,16 @@ export async function inspectSetup({ adapters = [], desiredEntry = null, desired
             clients.push({ client: adapter.name, status: problem ? 'problem' : current.status, problem, raw: current.raw, recommended });
         }
     }
-    const usesHttp = clients.some(client => client.entry?.url);
+    // The caller already knows the effective transport before any client is
+    // detected -- dist/index.js resolves it via resolveDoctorTransport()
+    // ahead of calling inspectSetup(). Gating the HTTP health check purely on
+    // "does a currently-detected client happen to have a url entry" meant a
+    // persisted GOOGLE_MCP_TRANSPORT=http install reported healthy without
+    // ever checking the shared service when no supported client CLI was
+    // installed on the machine running `doctor` (finding 20): zero detected
+    // clients means an empty `clients` array, so `.some()` is vacuously
+    // false regardless of what transport is actually configured.
+    const usesHttp = httpExpected || clients.some(client => client.entry?.url);
     const http = usesHttp ? await inspectHttp() : null;
     const problems = [
         ...(credentials.configured ? [] : [credentials.source === 'service-account'
