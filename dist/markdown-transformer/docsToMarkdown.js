@@ -324,23 +324,50 @@ function convertTextRun(textRun, options) {
     const content = trailingNewline ? text.slice(0, -1) : text;
     if (!content)
         return text;
-    let formatted = content;
+    // Emphasis delimiters must hug non-whitespace (issue #118).
+    //
+    // Users routinely bold a label AND the space after it, so the Docs run is
+    // "Owner: Andres. " with bold set. Wrapping that whole run gives
+    // `**Owner: Andres. **`, and per CommonMark a closing `**` preceded by
+    // whitespace is not right-flanking, so the delimiters are not emphasis at
+    // all — they stay as four literal asterisks. Re-importing this export
+    // therefore writes visible `**` into the document and loses the bold: a
+    // read-then-write with zero edits corrupts the doc, and because markdown
+    // export cannot tell "bold run including a trailing space" from "literal
+    // asterisks", re-reading as markdown shows the same string and hides it.
+    //
+    // Moving the run's own leading/trailing whitespace OUTSIDE the delimiters
+    // renders identically and parses back as real emphasis. A run that is
+    // nothing but whitespace carries no emphasizable text at all, so it emits
+    // no delimiters rather than the degenerate `** **`.
+    const leadingSpace = content.match(/^\s*/)[0];
+    const trailingSpace = content.length > leadingSpace.length
+        ? content.slice(leadingSpace.length).match(/\s*$/)[0]
+        : '';
+    const core = content.slice(leadingSpace.length, content.length - trailingSpace.length);
+    let formatted = core;
     // Apply inline formatting (bold + italic combined, or individually)
-    if (style.bold && style.italic) {
-        formatted = `***${formatted}***`;
+    if (core) {
+        if (style.bold && style.italic) {
+            formatted = `***${formatted}***`;
+        }
+        else if (style.bold) {
+            formatted = `**${formatted}**`;
+        }
+        else if (style.italic) {
+            formatted = `*${formatted}*`;
+        }
+        if (style.strikethrough) {
+            formatted = `~~${formatted}~~`;
+        }
+        if (options.richMarkdown && style.underline && !style.link) {
+            formatted = `<u>${formatted}</u>`;
+        }
     }
-    else if (style.bold) {
-        formatted = `**${formatted}**`;
-    }
-    else if (style.italic) {
-        formatted = `*${formatted}*`;
-    }
-    if (style.strikethrough) {
-        formatted = `~~${formatted}~~`;
-    }
-    if (options.richMarkdown && style.underline && !style.link) {
-        formatted = `<u>${formatted}</u>`;
-    }
+    // The whitespace goes back on outside the emphasis but still inside the
+    // rich-style span and the link, so neither the styled span nor the link
+    // text loses any character the document actually had.
+    formatted = `${leadingSpace}${formatted}${trailingSpace}`;
     if (options.richMarkdown) {
         formatted = applyRichTextStyle(formatted, style);
     }
