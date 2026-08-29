@@ -16,6 +16,32 @@ function getStatus(error) {
     return Number.isInteger(error?.code) ? error.code : undefined;
 }
 
+// Drive's structured error payload carries a `reason` per sub-error that is
+// far more specific than the bare HTTP status. googleapis clients attach it
+// either directly on the thrown error (`error.errors`) or nested under the
+// gaxios response shape (`error.response.data.error.errors`) depending on
+// version/transport, so both are checked.
+function getErrorReason(error) {
+    const reason = error?.errors?.[0]?.reason ?? error?.response?.data?.error?.errors?.[0]?.reason;
+    return typeof reason === 'string' ? reason : undefined;
+}
+
+// A 403 with one of these reasons is Drive asking the caller to back off, not
+// telling it a folder is inaccessible — Google documents these as quota/rate
+// conditions to retry with backoff, not permission failures to isolate:
+// https://developers.google.com/workspace/drive/api/guides/limits
+const RATE_LIMIT_REASONS = new Set([
+    'rateLimitExceeded',
+    'userRateLimitExceeded',
+    'quotaExceeded',
+    'dailyLimitExceeded',
+    'sharingRateLimitExceeded',
+]);
+
+function isRateLimitStatus(error) {
+    return getStatus(error) === 403 && RATE_LIMIT_REASONS.has(getErrorReason(error));
+}
+
 export function register(server) {
     server.addTool({
         name: 'listFolderContents',
@@ -65,15 +91,24 @@ export function register(server) {
                 let startFolder;
                 try {
                     countApiCall();
-                    const response = await drive.files.get({ fileId: args.folderId, fields: 'id,name', supportsAllDrives: true });
+                    const response = await drive.files.get({ fileId: args.folderId, fields: 'id,name,driveId', supportsAllDrives: true });
                     startFolder = response.data;
                 }
                 catch (error) {
                     if (error?.message === 'API_CALL_BUDGET_EXHAUSTED') throw error;
                     if (getStatus(error) === 404) throw publicError('Folder not found. Check the folder ID.');
+                    if (isRateLimitStatus(error)) throw publicError('Google Drive rate limit or quota exceeded while accessing this folder. Wait and retry with backoff (see https://developers.google.com/workspace/drive/api/guides/limits).');
                     if (getStatus(error) === 403) throw publicError('Permission denied. Make sure you have access to this folder.');
                     throw wrapOperationError('get folder details', error, { status: getStatus(error) });
                 }
+                // For a shared-drive root, scope every recursive files.list call to
+                // that drive. Without this, files.list defaults to corpora='user'
+                // (files the caller has personally accessed) even with
+                // includeItemsFromAllDrives:true, so descendants the caller has
+                // access to via the shared drive but never individually opened are
+                // silently omitted from a traversal that reports truncated: false —
+                // see https://developers.google.com/workspace/drive/api/guides/enable-shareddrives#search_for_content_on_a_shared_drive
+                const sharedDriveId = startFolder.driveId || undefined;
 
                 const entries = [];
                 const entriesById = new Map();
@@ -98,11 +133,17 @@ export function register(server) {
                     entriesById.set(entry.id, entry);
                     return { entry, added: true };
                 };
-                const listParentChunk = async (parentNodes) => {
+                // Pages are handed to `onPage` as soon as each arrives (instead of
+                // being buffered for the whole chunk before anything downstream
+                // sees them) so that a maxItems cap already satisfied by an
+                // earlier page can stop pagination before the next page is
+                // requested — a 1-item request must not still page through
+                // thousands of children first (PR #113 review finding 2).
+                const listParentChunk = async (parentNodes, onPage) => {
                     const query = `(${parentNodes.map((parent) => `'${escapeDriveQueryValue(parent.id)}' in parents`).join(' or ')}) and trashed=false`;
-                    const files = [];
                     let pageToken;
                     let budgetExhausted = false;
+                    let stopped = false;
                     do {
                         try {
                             countApiCall();
@@ -116,48 +157,59 @@ export function register(server) {
                             q: query, pageSize: RECURSIVE_PAGE_SIZE, pageToken, orderBy: 'folder,name',
                             fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,parents,shortcutDetails)',
                             supportsAllDrives: true, includeItemsFromAllDrives: true,
+                            ...(sharedDriveId ? { corpora: 'drive', driveId: sharedDriveId } : {}),
                         });
-                        files.push(...(response.data.files || []));
                         pageToken = response.data.nextPageToken || undefined;
-                    } while (pageToken);
-                    return { files, budgetExhausted };
+                        stopped = onPage(response.data.files || []) === true;
+                    } while (pageToken && !stopped);
+                    return { budgetExhausted, stopped };
                 };
-                const listWithIsolation = async (parentNodes) => {
-                    try { return await listParentChunk(parentNodes); }
+                const listWithIsolation = async (parentNodes, onPage) => {
+                    try { return await listParentChunk(parentNodes, onPage); }
                     catch (error) {
+                        // Drive uses 403 for both "you can't read this folder" and
+                        // "you're over quota/rate limit right now" — the latter is
+                        // Google explicitly documenting exponential backoff, not a
+                        // per-folder access problem, so it must never be fabricated
+                        // into an `unreadable` entry or trigger isolation bisection
+                        // (which would only spend more calls while the service is
+                        // asking the client to back off) (finding 1).
+                        if (isRateLimitStatus(error)) throw error;
                         if (getStatus(error) !== 403 && getStatus(error) !== 404) throw error;
                         if (parentNodes.length === 1) {
                             const parent = parentNodes[0];
                             unreadable.push({ id: parent.id, path: parent.path, reason: getStatus(error) === 404 ? 'Folder not found or no longer available.' : 'Permission denied or folder unavailable.' });
-                            return { files: [], budgetExhausted: false };
+                            return { budgetExhausted: false, stopped: false };
                         }
                         const midpoint = Math.ceil(parentNodes.length / 2);
-                        const first = await listWithIsolation(parentNodes.slice(0, midpoint));
-                        if (first.budgetExhausted) return first;
-                        const second = await listWithIsolation(parentNodes.slice(midpoint));
-                        return { files: [...first.files, ...second.files], budgetExhausted: second.budgetExhausted };
+                        const first = await listWithIsolation(parentNodes.slice(0, midpoint), onPage);
+                        if (first.budgetExhausted || first.stopped) return first;
+                        const second = await listWithIsolation(parentNodes.slice(midpoint), onPage);
+                        return { budgetExhausted: second.budgetExhausted, stopped: second.stopped };
                     }
                 };
 
                 const maxDepth = depth === 'all' ? Infinity : depth;
                 while (currentLevel.length > 0 && currentLevel[0].depth < maxDepth && !truncated) {
                     const nextLevel = [];
-                    for (let index = 0; index < currentLevel.length && !truncated; index += PARENT_CHUNK_SIZE) {
-                        let chunkResult;
-                        try { chunkResult = await listWithIsolation(currentLevel.slice(index, index + PARENT_CHUNK_SIZE)); }
-                        catch (error) { throw error; }
-                        const { files, budgetExhausted } = chunkResult;
+                    const onPage = (files) => {
                         for (const file of files) {
                             if (file.mimeType !== FOLDER_MIME_TYPE && !includeFiles) continue;
                             const result = addEntry(file, currentLevel);
                             if (!result.entry && entries.length >= maxItems) {
                                 truncated = true;
                                 truncationReason = `maxItems (${maxItems}) reached at depth ${currentLevel[0].depth + 1}; ${nextLevel.length} discovered folders not expanded`;
-                                break;
+                                return true;
                             }
                             if (file.mimeType === FOLDER_MIME_TYPE && result.added && visitedFolders.add(file.id)) nextLevel.push({ id: file.id, path: result.entry.path, depth: currentLevel[0].depth + 1 });
                         }
-                        if (!truncated && budgetExhausted) {
+                        return false;
+                    };
+                    for (let index = 0; index < currentLevel.length && !truncated; index += PARENT_CHUNK_SIZE) {
+                        let chunkResult;
+                        try { chunkResult = await listWithIsolation(currentLevel.slice(index, index + PARENT_CHUNK_SIZE), onPage); }
+                        catch (error) { throw error; }
+                        if (!truncated && chunkResult.budgetExhausted) {
                             truncated = true;
                             truncationReason = `API call budget (${API_CALL_BUDGET}) exhausted`;
                         }
@@ -174,6 +226,7 @@ export function register(server) {
                 if (isPublicError(error)) throw error;
                 log.error('Error listing folder contents.');
                 if (getStatus(error) === 404) throw publicError('Folder not found. Check the folder ID.');
+                if (isRateLimitStatus(error)) throw publicError('Google Drive rate limit or quota exceeded while listing folder contents. Wait and retry with backoff (see https://developers.google.com/workspace/drive/api/guides/limits).');
                 if (getStatus(error) === 403) throw publicError('Permission denied. Make sure you have access to this folder.');
                 throw wrapOperationError('list folder contents', error, { status: getStatus(error) });
             }
