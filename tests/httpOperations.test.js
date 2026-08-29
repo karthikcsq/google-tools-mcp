@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { getHttpServiceStatus, restartHttpService, startHttpService, stopHttpService } from '../dist/httpLifecycle.js';
+import { getHttpServiceStatus, resolveHttpServiceConfig, restartHttpService, startHttpService, stopHttpService } from '../dist/httpLifecycle.js';
 import { ensureHttpToken, publishHttpState, readHttpState } from '../dist/httpState.js';
 import { prepareMcpServerFactory, startV2HttpServer } from '../dist/mcpServer.js';
 
@@ -123,6 +123,61 @@ describe('shared HTTP lifecycle operations', () => {
         const spawnImpl = jest.fn();
         try { await expect(startHttpService({ configDir, env, spawnImpl })).rejects.toThrow(expected); expect(spawnImpl).not.toHaveBeenCalled(); }
         finally { await runtime.close(); await fs.rm(configDir, { recursive: true, force: true }); }
+    });
+
+    // Finding 23: the HTTP facade routes by comparing an incoming request's
+    // *parsed* pathname (new URL(request.url).pathname, which every real
+    // HTTP client -- including this project's own readiness probe --
+    // normalizes before the request hits the wire) against the configured
+    // endpoint used raw. A non-canonical endpoint (dot-segments, internal
+    // whitespace, repeated slashes, ...) would therefore route/probe against
+    // two strings that describe the same resource on paper but never match
+    // at request time, so the service could bind the port and then fail its
+    // own readiness probe. resolveHttpServiceConfig() now rejects any
+    // endpoint that doesn't already equal its own canonical URL pathname,
+    // failing closed before a service is ever spawned.
+    it.each([
+        ['a dot-segment path', '/a/../mcp', '/mcp'],
+        ['internal whitespace', '/mcp test', '/mcp%20test'],
+        ['a doubled leading slash', '//mcp', '/'],
+    ])('rejects an endpoint with %s instead of accepting a value that would route inconsistently', (_label, raw, canonical) => {
+        expect(() => resolveHttpServiceConfig({ GOOGLE_MCP_ENDPOINT: raw }))
+            .toThrow(new RegExp(`does not match its own canonical URL path \\('${canonical.replace(/[/.]/g, '\\$&')}'\\)`));
+    });
+
+    it('accepts an endpoint that is already in canonical form, including a non-default custom path', () => {
+        expect(resolveHttpServiceConfig({ GOOGLE_MCP_ENDPOINT: '/mcp' }).endpoint).toBe('/mcp');
+        expect(resolveHttpServiceConfig({ GOOGLE_MCP_ENDPOINT: '/custom-endpoint' }).endpoint).toBe('/custom-endpoint');
+    });
+
+    it('a non-canonical GOOGLE_MCP_ENDPOINT never reaches spawn and never binds a broken service', async () => {
+        const configDir = await tempConfig();
+        const spawnImpl = jest.fn();
+        try {
+            await expect(startHttpService({
+                configDir, env: { GOOGLE_MCP_ENDPOINT: '/a/../mcp' }, spawnImpl,
+            })).rejects.toThrow(/does not match its own canonical URL path/);
+            expect(spawnImpl).not.toHaveBeenCalled();
+        } finally { await fs.rm(configDir, { recursive: true, force: true }); }
+    });
+
+    it('a canonical custom endpoint binds and passes its own readiness probe end to end', async () => {
+        const configDir = await tempConfig();
+        const port = await freePort();
+        const env = {
+            ...process.env, CI: 'true', XDG_CONFIG_HOME: configDir,
+            GOOGLE_MCP_PORT: String(port), GOOGLE_MCP_ENDPOINT: '/custom-mcp',
+            GOOGLE_MCP_TRANSPORT: undefined, GOOGLE_MCP_HTTP_TOKEN: undefined,
+        };
+        try {
+            const { stdout } = await execFileAsync(process.execPath, [ENTRYPOINT, 'start', '--json'], { env, timeout: 40_000 });
+            const started = JSON.parse(stdout);
+            expect(started).toMatchObject({ status: 'started', healthy: true });
+            expect(started.state.url).toBe(`http://127.0.0.1:${port}/custom-mcp`);
+        } finally {
+            await execFileAsync(process.execPath, [ENTRYPOINT, 'stop', '--json'], { env, timeout: 40_000 }).catch(() => {});
+            await fs.rm(configDir, { recursive: true, force: true });
+        }
     });
 
     it('refuses attach when the expected version differs', async () => {
@@ -338,6 +393,54 @@ describe('shared HTTP lifecycle operations', () => {
             // answers with no token at all, exactly as before.
             const health = await fetch(new URL('/healthz', `http://127.0.0.1:${port}`));
             expect(health.ok).toBe(true);
+        } finally {
+            await runtime.close();
+            await fs.rm(configDir, { recursive: true, force: true });
+        }
+    });
+
+    it('refuses to attach when the running instance\'s allowed-origins policy no longer matches the request', async () => {
+        // Finding 18, matching its exact scenario: tighten
+        // GOOGLE_MCP_HTTP_ALLOWED_ORIGINS to drop a previously-allowed
+        // Origin, then run `start` again. The live handler answers a plain
+        // authenticated readiness probe successfully either way (probes
+        // don't carry a browser Origin header), so only comparing the
+        // persisted, canonicalized origin list -- not the probe's outcome --
+        // can catch that the live process is still enforcing the old policy.
+        const configDir = await tempConfig();
+        const token = 'origin-policy-token';
+        const factory = await prepareMcpServerFactory({
+            registerTools: async (server) => server.addTool({
+                name: 'noop', description: 'noop', parameters: z.object({}), execute: async () => 'ok',
+            }),
+        });
+        const runtime = await startV2HttpServer(factory, {
+            auth: { token, allowedOrigins: ['https://old.example'] }, host: '127.0.0.1', port: 0, profile: 'default',
+        });
+        const port = runtime.server.address().port;
+        await publishHttpState({
+            pid: process.pid, port, host: '127.0.0.1', endpoint: '/mcp', profile: 'default',
+            version: '2.0.0', startedAt: new Date().toISOString(), noAuth: false, allowedOrigins: ['https://old.example'],
+        }, { configDir });
+        const spawnImpl = jest.fn();
+        try {
+            // Requests a configuration that no longer allows the old Origin.
+            await expect(startHttpService({
+                configDir, env: { GOOGLE_MCP_PORT: String(port), GOOGLE_MCP_HTTP_TOKEN: token, GOOGLE_MCP_HTTP_ALLOWED_ORIGINS: 'https://new.example' }, spawnImpl,
+            })).rejects.toThrow(/allowed origins: running \[https:\/\/old\.example\], requested \[https:\/\/new\.example\]/);
+            expect(spawnImpl).not.toHaveBeenCalled();
+            // Confirms the mismatch was caught by comparing state, not by the
+            // live server actually rejecting the old Origin -- it still
+            // answers a request carrying it, exactly as before the refused
+            // "start".
+            const stillAccepted = await fetch(new URL('/healthz', `http://127.0.0.1:${port}`), {
+                headers: { origin: 'https://old.example', authorization: `Bearer ${token}` },
+            });
+            expect(stillAccepted.ok).toBe(true);
+            const nowDisallowedElsewhere = await fetch(new URL('/healthz', `http://127.0.0.1:${port}`), {
+                headers: { origin: 'https://new.example', authorization: `Bearer ${token}` },
+            });
+            expect(nowDisallowedElsewhere.status).toBe(403);
         } finally {
             await runtime.close();
             await fs.rm(configDir, { recursive: true, force: true });

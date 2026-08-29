@@ -46,6 +46,22 @@ export function resolveHttpAuthConfig(env = process.env) {
 }
 
 /**
+ * Normalize an allowed-origins list into a deduplicated, sorted array so two
+ * independently-constructed lists (e.g. a freshly resolved config vs. one
+ * read back out of persisted state) compare equal regardless of input order
+ * or duplicate entries. Used both to persist the effective origin allowlist
+ * in managed HTTP state and to compare it against a new request's
+ * configuration (finding 18: the live handler's origin policy must not be
+ * able to drift from what a later `start`/config check believes is running).
+ * @param {string[]|undefined} origins
+ * @returns {string[]}
+ */
+export function canonicalizeOrigins(origins) {
+    if (!Array.isArray(origins)) return [];
+    return [...new Set(origins.map((origin) => String(origin || '').trim()).filter(Boolean))].sort();
+}
+
+/**
  * Refuse configurations that would expose the authenticated Google Workspace
  * tool surface (Gmail, Drive, Calendar, Docs, ...) with no way to keep out an
  * unauthenticated remote caller.

@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { isLoopbackHost, resolveHttpAuthConfig } from './httpAuth.js';
+import { canonicalizeOrigins, isLoopbackHost, resolveHttpAuthConfig } from './httpAuth.js';
 import { connectModernHttpClient } from './httpClient.js';
 import {
     ensureHttpToken, getHttpStatePaths, isProcessAlive, publishHttpState,
@@ -28,6 +28,24 @@ function validEndpoint(value) {
     const endpoint = String(value || DEFAULT_HTTP_ENDPOINT).trim();
     if (!endpoint.startsWith('/') || endpoint.includes('?') || endpoint.includes('#')) {
         throw new Error('GOOGLE_MCP_ENDPOINT must be an absolute URL path without a query or fragment.');
+    }
+    // The HTTP facade routes by comparing an incoming request's *parsed*
+    // pathname (new URL(request.url).pathname, which every real HTTP client
+    // -- including this project's own probeMcpIdentity/waitForHttpService --
+    // already normalizes before the request ever hits the wire) against this
+    // configured endpoint used raw. A value that isn't already in its own
+    // canonical form (dot-segments like "/a/../mcp", internal whitespace,
+    // double slashes, ...) would route and probe against two different
+    // strings that happen to describe the same resource on paper but never
+    // match at request time: the service would bind the port successfully
+    // and then fail its own readiness probe with a 404, or a real client
+    // could get routed to the wrong place. Reject anything that doesn't
+    // already equal its own canonical URL pathname instead of silently
+    // rewriting it, so an accepted value is guaranteed to work end to end
+    // (finding 23).
+    const canonical = new URL(endpoint, 'http://placeholder').pathname;
+    if (canonical !== endpoint) {
+        throw new Error(`GOOGLE_MCP_ENDPOINT '${endpoint}' does not match its own canonical URL path ('${canonical}'). Use the canonical form directly (no dot-segments, internal whitespace, or repeated slashes).`);
     }
     return endpoint;
 }
@@ -132,6 +150,17 @@ export function getHttpServiceConfigurationDifferences(existing, config, expecte
     // a request outcome. See finding 12.
     if (Boolean(existing.state?.noAuth) !== Boolean(config.noAuth)) {
         differences.push(`auth mode: running ${existing.state?.noAuth ? 'no-auth' : 'bearer-token'}, requested ${config.noAuth ? 'no-auth' : 'bearer-token'}`);
+    }
+    // The live handler's browser-Origin allowlist is applied once at
+    // startup and never reread; a request outcome can't reveal it (a
+    // no-auth or still-correctly-authenticated server answers the
+    // readiness probe either way), so only comparing the persisted,
+    // canonicalized list catches a stale origin policy still being
+    // enforced by an otherwise-healthy running process (finding 18).
+    const existingOrigins = canonicalizeOrigins(existing.state?.allowedOrigins);
+    const requestedOrigins = canonicalizeOrigins(config.allowedOrigins);
+    if (existingOrigins.join(' ') !== requestedOrigins.join(' ')) {
+        differences.push(`allowed origins: running [${existingOrigins.join(', ') || '(none)'}], requested [${requestedOrigins.join(', ') || '(none)'}]`);
     }
     if (existing.identity?.name !== 'google-tools-mcp') {
         differences.push(`identity: running ${existing.identity?.name || 'unknown'}`);
@@ -272,7 +301,10 @@ export async function restartHttpService(options = {}) {
 }
 
 export function createPublishedState(config, { pid = process.pid, version, startedAt = new Date().toISOString() } = {}) {
-    return { pid, port: config.port, host: config.host, endpoint: config.endpoint, startedAt, version, profile: config.profile, noAuth: Boolean(config.noAuth) };
+    return {
+        pid, port: config.port, host: config.host, endpoint: config.endpoint, startedAt, version, profile: config.profile,
+        noAuth: Boolean(config.noAuth), allowedOrigins: canonicalizeOrigins(config.allowedOrigins),
+    };
 }
 
 export { getHttpStatePaths, publishHttpState };
