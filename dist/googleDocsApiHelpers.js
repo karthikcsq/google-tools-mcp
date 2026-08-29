@@ -99,6 +99,35 @@ export function createWriteControlChain(revisionId) {
         },
     };
 }
+// --- Partial-batch progress tracking (PR #113 review finding 3) ---
+// executeBatchUpdateWithSplitting sends delete/insert/format requests across
+// multiple non-atomic documents.batchUpdate calls; once a batch succeeds its
+// changes are committed to the live document with no rollback across calls.
+// When a LATER batch throws, callers (createDocument, and anything else that
+// wraps insertMarkdown) need to know whether anything already landed so they
+// can tell the caller "partially applied, go inspect the document" instead
+// of "nothing was added" — and so they don't blindly re-send content that is
+// already there.
+//
+// This is a WeakMap side-channel keyed on the very error object that gets
+// thrown/rethrown, rather than a wrapper class replacing it. Several callers
+// (appendMarkdownToGoogleDoc, replaceDocumentWithMarkdown) branch on
+// `error instanceof UserError` to decide whether the underlying error's own
+// message is safe to surface directly (e.g. the revision-conflict message
+// from executeBatchUpdate). Swapping in a new error type here would silently
+// break those existing, tested paths; tagging the original error via WeakMap
+// changes nothing about its identity or `instanceof` behavior.
+const batchUpdateProgress = new WeakMap();
+
+/**
+ * Best-effort progress info attached to an error thrown mid-way through
+ * executeBatchUpdateWithSplitting, or undefined if not available/applicable
+ * (e.g. the very first batch failed, or the error didn't come from there).
+ * @returns {{ completedRequests: number, totalRequests: number, phase: 'delete'|'insert'|'format' } | undefined}
+ */
+export function getBatchUpdateProgress(error) {
+    return typeof error === 'object' && error !== null ? batchUpdateProgress.get(error) : undefined;
+}
 /**
  * Executes batch updates with automatic splitting for large request arrays.
  * Separates insert and format operations, executing inserts first.
@@ -148,10 +177,23 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     // (PR #42 review). Only chain when we started guarded, so legacy flows that
     // never captured a revision stay unguarded.
     let chainedWriteControl = writeControl;
-    const executeBatch = async (batch) => {
-        const data = await executeBatchUpdate(docs, documentId, batch, chainedWriteControl);
-        if (chainedWriteControl && data?.writeControl) {
-            chainedWriteControl = data.writeControl;
+    let completedRequests = 0;
+    const executeBatch = async (batch, phase) => {
+        try {
+            const data = await executeBatchUpdate(docs, documentId, batch, chainedWriteControl);
+            if (chainedWriteControl && data?.writeControl) {
+                chainedWriteControl = data.writeControl;
+            }
+            completedRequests += batch.length;
+        }
+        catch (error) {
+            // Tag (don't wrap) the error with how much already landed before
+            // this batch failed, so a caller can tell "nothing applied" apart
+            // from "some earlier batch in this same call already committed".
+            if (typeof error === 'object' && error !== null) {
+                batchUpdateProgress.set(error, { completedRequests, totalRequests: requests.length, phase });
+            }
+            throw error;
         }
     };
     // Execute delete batches first (must happen before inserts)
@@ -165,7 +207,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
             if (log) {
                 log.info(`Delete batch content: ${JSON.stringify(batch)}`);
             }
-            await executeBatch(batch);
+            await executeBatch(batch, 'delete');
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -183,7 +225,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (insertRequests.length > 0) {
         for (let i = 0; i < insertRequests.length; i += MAX_BATCH) {
             const batch = insertRequests.slice(i, i + MAX_BATCH);
-            await executeBatch(batch);
+            await executeBatch(batch, 'insert');
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -198,7 +240,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (formatRequests.length > 0) {
         for (let i = 0; i < formatRequests.length; i += MAX_BATCH) {
             const batch = formatRequests.slice(i, i + MAX_BATCH);
-            await executeBatch(batch);
+            await executeBatch(batch, 'format');
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;

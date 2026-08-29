@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { executeBatchUpdateWithSplitting } from '../dist/googleDocsApiHelpers.js';
 
 let fakeDrive;
 let fakeDocs;
@@ -77,6 +78,46 @@ describe('createDocument', () => {
         expect(result.warnings).toEqual(['Document created but initial content failed.']);
         expect(result.warningNote).toBe('The document was created, but its initial content could not be added.');
         expect(JSON.stringify(result)).not.toContain('internal transport detail');
+    });
+
+    // Review finding 3: insertMarkdown's markdown path is NOT atomic (separate
+    // documents.batchUpdate calls per delete/insert/format phase, and batches
+    // of 50 within each) — a batch that already succeeded stays committed even
+    // if a later batch in the same call throws. The "could not be added"
+    // message is only true when NOTHING landed; when something did, the
+    // response must say so and point the caller at the document instead of
+    // implying it's safe to blindly resend initialContent.
+    it('distinguishes a partially-applied batch failure from a total one and tells the caller to inspect the document', async () => {
+        setSuccessfulClients();
+        // Produce a REAL progress-tagged error via the actual splitting helper
+        // (not a hand-rolled stand-in) so this exercises the true mechanism
+        // createDocument relies on: batch 1 (50 of 60 insertText requests)
+        // succeeds against fakeDocs, batch 2 fails.
+        let batchUpdateCalls = 0;
+        fakeDocs.documents.batchUpdate = jest.fn(async () => {
+            batchUpdateCalls += 1;
+            if (batchUpdateCalls === 2) throw Object.assign(new Error('backend hiccup'), { code: 500 });
+            return { data: {} };
+        });
+        const manyInsertRequests = Array.from({ length: 60 }, (_, i) => ({ insertText: { location: { index: 1 }, text: `line ${i}\n` } }));
+        let partialProgressError;
+        try {
+            await executeBatchUpdateWithSplitting(fakeDocs, 'doc-123', manyInsertRequests, undefined, undefined);
+        } catch (error) {
+            partialProgressError = error;
+        }
+        expect(partialProgressError).toBeDefined();
+        expect(batchUpdateCalls).toBe(2);
+
+        insertMarkdown.mockRejectedValue(partialProgressError);
+        const result = JSON.parse(await getTool().execute({ title: 'Roadmap', initialContent: '# Heading' }, { log }));
+
+        expect(result.warnings).toEqual(['Document created but initial content was only partially applied before a later operation failed.']);
+        expect(result.warningNote).toMatch(/50 of 60 content operation/);
+        expect(result.warningNote).toMatch(/insert phase/);
+        expect(result.warningNote).toMatch(/inspect the document/i);
+        expect(result.warningNote).not.toBe('The document was created, but its initial content could not be added.');
+        expect(JSON.stringify(result)).not.toContain('backend hiccup');
     });
 
     it('maps Drive 404 and 403 failures to public folder errors', async () => {
