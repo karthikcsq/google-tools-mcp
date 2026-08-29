@@ -205,6 +205,24 @@ async function main() {
             }
         }
 
+        // Same check for drafts, and done by id rather than by search: the
+        // Gmail drafts.list response carries no subject, so the only honest
+        // verification is to ask for each draft this run created and confirm it
+        // is gone.
+        let leftoverDrafts = null;
+        if (!keep) {
+            const draftIds = registry.filter((item) => item.kind === 'draft').map((item) => item.id);
+            leftoverDrafts = [];
+            for (const id of draftIds) {
+                try {
+                    await tools.get('getDraft').execute({ id }, { log: { debug() {}, info() {}, warn() {}, error() {} } });
+                    leftoverDrafts.push(id);
+                } catch {
+                    // Gone, which is what cleanup was supposed to achieve.
+                }
+            }
+        }
+
         // --- summary (the only thing that goes to stdout) ------------------
         const nameWidth = Math.max(18, ...results.map((r) => r.slug.length));
         const lines = [];
@@ -236,6 +254,9 @@ async function main() {
                 const remaining = (leftover.folders?.length ?? 0) + (leftover.files?.length ?? 0);
                 lines.push(`Test folder after cleanup: ${remaining} item(s)${remaining ? ` — ${[...(leftover.folders || []), ...(leftover.files || [])].map((f) => `${f.name} (${f.id})`).join(', ')}` : ''}.`);
             }
+            if (leftoverDrafts) {
+                lines.push(`Drafts this run created and did not delete: ${leftoverDrafts.length}${leftoverDrafts.length ? ` — ${leftoverDrafts.join(', ')}` : ''}.`);
+            }
         }
         lines.push(`Stdout leaks from tool code paths: ${journal.stdoutLeaks}.`);
         lines.push(`Guard: ${guard.stats.parentLookups} containment lookup(s), ${guard.stats.denials.length} refusal(s), ${guard.stats.quota.waits} quota wait(s), ${guard.stats.quota.retries} rate-limit retry(ies).`);
@@ -247,7 +268,7 @@ async function main() {
         journal.write({ kind: 'run-end', passed, failed, skipped, cleanup: { cleaned: cleanup.cleaned, attempted: cleanup.attempted, failures: cleanup.failures }, stdoutLeaks: journal.stdoutLeaks });
         await journal.close();
 
-        process.exitCode = failed > 0 || cleanup.failures.length > 0 ? 1 : 0;
+        process.exitCode = failed > 0 || cleanup.failures.length > 0 || (leftoverDrafts?.length ?? 0) > 0 ? 1 : 0;
     }
     return process.exitCode ?? 0;
 }
