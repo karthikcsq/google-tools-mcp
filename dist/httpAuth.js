@@ -46,17 +46,30 @@ export function resolveHttpAuthConfig(env = process.env) {
 }
 
 /**
+ * Normalize an allowed-origins list into a deduplicated, sorted array so two
+ * independently-constructed lists (e.g. a freshly resolved config vs. one
+ * read back out of persisted state) compare equal regardless of input order
+ * or duplicate entries. Used both to persist the effective origin allowlist
+ * in managed HTTP state and to compare it against a new request's
+ * configuration (finding 18: the live handler's origin policy must not be
+ * able to drift from what a later `start`/config check believes is running).
+ * @param {string[]|undefined} origins
+ * @returns {string[]}
+ */
+export function canonicalizeOrigins(origins) {
+    if (!Array.isArray(origins)) return [];
+    return [...new Set(origins.map((origin) => String(origin || '').trim()).filter(Boolean))].sort();
+}
+
+/**
  * Refuse configurations that would expose the authenticated Google Workspace
  * tool surface (Gmail, Drive, Calendar, Docs, ...) with no way to keep out an
  * unauthenticated remote caller.
  *
- * Two things are unsafe on their own and must stop startup, not just log a
- * warning after the fact:
- *   1. `GOOGLE_MCP_HTTP_NO_AUTH=1` (no bearer token) combined with a bind host
- *      that is not strictly loopback (e.g. `0.0.0.0`, `::`, a LAN IP, or a
- *      hostname). That is a remotely reachable server with zero
- *      authentication.
- *   2. An empty or whitespace-only host after trimming. `env.HOST || '...'`
+ * Shared service operation is loopback-only until the project provides TLS
+ * and a supported remote-deployment authentication boundary. A non-loopback
+ * bind therefore stops startup in every token mode.
+ * An empty or whitespace-only host after trimming is also refused. `env.HOST || '...'`
  *      treats a whitespace string as truthy, so `GOOGLE_MCP_HTTP_HOST="  "`
  *      previously resolved to `''`, which Node's http server can bind as "all
  *      interfaces" instead of the intended loopback default.
@@ -64,7 +77,7 @@ export function resolveHttpAuthConfig(env = process.env) {
  * @param {{ host: string, noAuth: boolean }} config result of resolveHttpAuthConfig
  * @throws {Error} with an operator-facing message if the combination is unsafe
  */
-export function assertSafeHttpBinding({ host, noAuth }) {
+export function assertSafeHttpBinding({ host }) {
     const trimmedHost = typeof host === 'string' ? host.trim() : '';
     if (!trimmedHost) {
         throw new Error(
@@ -73,13 +86,11 @@ export function assertSafeHttpBinding({ host, noAuth }) {
             'Unset GOOGLE_MCP_HTTP_HOST to use the 127.0.0.1 default, or set it to a real host.'
         );
     }
-    if (noAuth && !isLoopbackHost(trimmedHost)) {
+    if (!isLoopbackHost(trimmedHost)) {
         throw new Error(
-            `Refusing to start: GOOGLE_MCP_HTTP_NO_AUTH is set and GOOGLE_MCP_HTTP_HOST is ` +
-            `'${trimmedHost}', which is not loopback. That combination starts a remotely ` +
-            'reachable server with zero authentication in front of every Google Workspace tool ' +
-            '(Gmail, Drive, Docs, Calendar, ...). Either remove GOOGLE_MCP_HTTP_NO_AUTH so the ' +
-            'bearer token stays required, or bind to a loopback host (127.0.0.1, localhost, ::1).'
+            `Refusing to start: GOOGLE_MCP_HTTP_HOST is '${trimmedHost}', which is not loopback. ` +
+            'Shared HTTP service mode is loopback-only until TLS and supported remote deployment ' +
+            'authentication exist. Bind to 127.0.0.1, localhost, or ::1.'
         );
     }
 }

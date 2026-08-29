@@ -82,8 +82,8 @@ describe('httpAuth', () => {
             expect(() => assertSafeHttpBinding({ host: '::1', noAuth: true })).not.toThrow();
         });
 
-        it('allows a non-loopback host when auth is required', () => {
-            expect(() => assertSafeHttpBinding({ host: '0.0.0.0', noAuth: false })).not.toThrow();
+        it('rejects a non-loopback host even when auth is required until TLS exists', () => {
+            expect(() => assertSafeHttpBinding({ host: '0.0.0.0', noAuth: false })).toThrow(/loopback-only/);
         });
 
         it('rejects noAuth combined with a non-loopback IPv4 host', () => {

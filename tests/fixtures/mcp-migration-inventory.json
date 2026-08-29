@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "inventoryScope": {
-    "runtime": "Git-tracked dist/**/*.js and dist/**/*.mjs files",
-    "tests": "Git-tracked tests/**/*.js and tests/**/*.mjs files"
+    "runtime": "Tracked and non-ignored untracked dist/**/*.js and dist/**/*.mjs files",
+    "tests": "Tracked and non-ignored untracked tests/**/*.js and tests/**/*.mjs files"
   },
   "files": {
     "runtime": [
@@ -10,7 +10,13 @@
         "file": "dist/auth.js"
       },
       {
+        "file": "dist/clientAdapters.js"
+      },
+      {
         "file": "dist/clients.js"
+      },
+      {
+        "file": "dist/config.js"
       },
       {
         "file": "dist/docsChangePrecision.js"
@@ -26,6 +32,9 @@
       },
       {
         "file": "dist/docsStructure.js"
+      },
+      {
+        "file": "dist/doctor.js"
       },
       {
         "file": "dist/errors.js"
@@ -44,6 +53,15 @@
       },
       {
         "file": "dist/httpAuth.js"
+      },
+      {
+        "file": "dist/httpClient.js"
+      },
+      {
+        "file": "dist/httpLifecycle.js"
+      },
+      {
+        "file": "dist/httpState.js"
       },
       {
         "file": "dist/index.js"
@@ -77,6 +95,12 @@
       },
       {
         "file": "dist/setup.js"
+      },
+      {
+        "file": "dist/setupInspect.js"
+      },
+      {
+        "file": "dist/shellSafe.js"
       },
       {
         "file": "dist/tools/calendar/getBusy.js"
@@ -546,10 +570,16 @@
         "file": "tests/comments.test.js"
       },
       {
+        "file": "tests/config.test.js"
+      },
+      {
         "file": "tests/createFlowsReadSeeding.test.js"
       },
       {
         "file": "tests/defaultTextColor.test.js"
+      },
+      {
+        "file": "tests/diagnosticsLogging.test.js"
       },
       {
         "file": "tests/docsChangePrecision.test.js"
@@ -576,6 +606,9 @@
         "file": "tests/docsWriteControl.test.js"
       },
       {
+        "file": "tests/doctorSetupInspection.test.js"
+      },
+      {
         "file": "tests/documentationConsistency.test.js"
       },
       {
@@ -586,6 +619,9 @@
       },
       {
         "file": "tests/extraDocsToolsWriteControl.test.js"
+      },
+      {
+        "file": "tests/feedbackDraftBinding.test.js"
       },
       {
         "file": "tests/findTextRangeDiagnostics.test.js"
@@ -622,6 +658,12 @@
       },
       {
         "file": "tests/httpAuth.test.js"
+      },
+      {
+        "file": "tests/httpOperations.test.js"
+      },
+      {
+        "file": "tests/httpState.test.js"
       },
       {
         "file": "tests/insertImageGuardBeforeUpload.test.js"
@@ -741,7 +783,13 @@
         "file": "tests/setupFastLaunch.test.js"
       },
       {
+        "file": "tests/setupIdempotency.test.js"
+      },
+      {
         "file": "tests/setupUpdateCommand.test.js"
+      },
+      {
+        "file": "tests/shellSafeExecution.test.js"
       },
       {
         "file": "tests/textNormalization.test.js"
@@ -751,6 +799,9 @@
       },
       {
         "file": "tests/toolRegistration.test.js"
+      },
+      {
+        "file": "tests/twoClientHttpE2E.test.js"
       },
       {
         "file": "tests/types.test.js"
@@ -1245,22 +1296,22 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 242,
+        "line": 265,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 266,
+        "line": 289,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 287,
+        "line": 310,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 415,
+        "line": 458,
         "match": ".addTool({"
       },
       {
