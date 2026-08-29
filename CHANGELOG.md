@@ -145,6 +145,28 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   client would take down the wrong error path.
 - `Access-Control-Allow-Origin` and `Vary: Origin` are attached to real
   responses, not just the CORS preflight.
+- **Gmail messages are now standards-compliant MIME** (#73, closing #54). All
+  header and body construction moved into a new `dist/mime.js`, and every send,
+  draft, reply, and forward path routes through it:
+  - Non-ASCII Subjects and To/Cc/Bcc display names become RFC 2047 base64
+    encoded-words, chunked on UTF-8 character boundaries and separated by
+    folding whitespace, so a wordless CJK or emoji subject now folds legally
+    instead of shipping as one line past the 998-octet limit. Addr-specs,
+    Message-IDs, and unsupported address shapes are never encoded.
+  - Attachment `Content-Type` and `Content-Disposition` use RFC 2231/6266
+    `filename*` with numbered continuations for long or Unicode names, plus a
+    sanitized quoted ASCII fallback. A filename or `mimeType` can no longer
+    inject a header: CR/LF never survive, and `mimeType` is validated against
+    the RFC 2045 grammar and rejected outright when it does not match.
+  - `Content-Transfer-Encoding: quoted-printable` is now true. Text and HTML
+    single-part bodies are really quoted-printable encoded (8-bit octets, `=`,
+    control bytes, and trailing whitespace escaped; CRLF normalized; no line
+    over 76 characters). Multipart body and attachment payloads are base64
+    wrapped at 76 per RFC 2045 §6.8.
+  - Multipart boundaries are derived from the content they delimit and verified
+    not to occur in it, replacing a timestamp-plus-random string nothing ever
+    checked. The same message now produces the same bytes.
+  - ASCII-only messages are otherwise byte-compatible.
 
 ### Removed (internal)
 
@@ -158,6 +180,12 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   `createHttpAuthenticate` hook. One `checkHttpAuth` middleware now runs ahead
   of routing and covers every method and path.
 - The `server.on('disconnect')` session-cleanup handlers.
+- `dist/tools/drafts.js`, `labels.js`, `messages.js`, `settings.js`,
+  `threads.js` — pre-consolidation Gmail tool forks left over from the
+  `dist/tools/gmail/*` consolidation. Never imported (`dist/tools/index.js`
+  always loaded Gmail tools via explicit `./gmail/*.js` paths); nobody could
+  have been depending on a deep import of these paths, since none of the
+  five ever registered a tool the server actually exposed. (#74)
 
 
 ## 2.0.0
