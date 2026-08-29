@@ -6,7 +6,7 @@ import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown, checkMarkdownFidelity, detectLinkMismatches } from '../../markdown-transformer/index.js';
 import { trackRead, getLastReadContent } from '../../readTracker.js';
-import { writeWorkspaceFile } from '../../workspace.js';
+import { writeWorkspaceFile, getWorkspacePath, backupIfLocallyModified } from '../../workspace.js';
 import { mintDocsReadHandle } from '../../docsHandles.js';
 import {
     DEFAULT_INDEX_MAX_RESPONSE_CHARS,
@@ -32,6 +32,27 @@ function stripInheritedStyleKeys(value) {
         out[key] = stripInheritedStyleKeys(child);
     }
     return out;
+}
+
+// Writes the legacy shared mirror file for (documentId, tabId), backing up
+// whatever is already on disk first if it looks like it holds an unpushed
+// local edit (issue #122). Used by both the diffFromLastRead path and the
+// full-content path below, which otherwise duplicated this exact sequence.
+// Never throws for a backup failure — that is reported back to the caller as
+// `backupError` instead, because a housekeeping step must never block the
+// read that triggered it; an actual write failure DOES throw, same as before
+// this existed, so callers keep their existing try/catch around this.
+async function writeLegacyMirrorGuarded(documentId, tabId, content, log) {
+    const targetPath = getWorkspacePath(documentId, tabId);
+    const { backedUp, backupPath, backupError } = await backupIfLocallyModified(targetPath);
+    if (backedUp) {
+        log.info(`Local mirror at ${targetPath} had edits newer than this tool's last write to it; backed up to ${backupPath} before overwriting.`);
+    }
+    else if (backupError) {
+        log.info(`Could not back up local mirror at ${targetPath} before overwriting: ${backupError}`);
+    }
+    const written = await writeWorkspaceFile(documentId, content, tabId);
+    return { written, backedUp, backupPath };
 }
 
 async function fetchModifiedTime(documentId) {
@@ -103,6 +124,13 @@ export function register(server) {
                 .describe('For Google Docs markdown output only. If true, suppresses rich HTML-style formatting extensions and returns cleaner portable markdown. ' +
                     'The local working-copy file and diff/conflict tracking always keep the rich version — for lossless editing, edit the working-copy file, not this plain text. ' +
                     'Ignored (with a note) when diffFromLastRead is true.'),
+            writeLocalFile: z
+                .boolean()
+                .optional()
+                .default(true)
+                .describe("For Google Docs markdown output only (format='markdown'). If false, this read does not touch the on-disk local mirror file at all — no overwrite, no backup, response text is unaffected. " +
+                    'Use this to run a diffFromLastRead staleness check (or any read you do not intend to edit locally) without risking the mirror. ' +
+                    "When true (the default) and the SDK v2 runtime's per-handle capability system is not in play, this read overwrites the shared mirror at the path from a previous read of this document/tab; if that file's on-disk content is newer than this process's own last write to it (a local edit readDocument told you to make, still unpushed), it is backed up to '<path>.bak' first and the result says so — the overwrite still proceeds, so recover from the .bak file, not from a re-read."),
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -227,6 +255,11 @@ export function register(server) {
                     return jsonContent;
                 }
                 if (args.format === 'markdown') {
+                    // Default true (issue #122): compared with !== false, not truthiness,
+                    // so an internal caller that invokes execute() directly and omits the
+                    // field entirely (bypassing zod's own `.default(true)`) still gets the
+                    // default behavior instead of silently skipping the local mirror write.
+                    const writeLocalFile = args.writeLocalFile !== false;
                     // Canonical rich markdown. This is what mints the read handle,
                     // seeds the working-copy file, and feeds trackRead/diffing —
                     // never the plain variant, so a plainMarkdown=true read can never
@@ -285,14 +318,25 @@ export function register(server) {
                             // subsequent edit-and-push starts from the current document state.
                             // On the v2 runtime that copy is this handle's own editable file
                             // (already written when the handle was minted); off it, the legacy
-                            // shared per-(documentId, tabId) copy.
+                            // shared per-(documentId, tabId) copy — unless writeLocalFile=false,
+                            // which exists precisely so a staleness check like this one can run
+                            // without touching the mirror at all (issue #122).
+                            let localMirrorNotice = '';
                             const diffHandle = await mintHandle(markdownContent);
-                            if (!diffHandle) {
+                            if (!diffHandle && writeLocalFile) {
                                 try {
-                                    await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
+                                    const { backedUp, backupPath } = await writeLegacyMirrorGuarded(args.documentId, args.tabId, markdownContent, log);
+                                    if (backedUp) {
+                                        localMirrorNotice = `\n\n---\n⚠️ LOCAL MIRROR CONFLICT: the working copy on disk had edits newer than this tool's ` +
+                                            `last write to it (an unpushed local edit). It was backed up to ${backupPath.replace(/\\/g, '/')} before being ` +
+                                            'overwritten with the current document content — recover any unpushed edits from that file.\n---';
+                                    }
                                 } catch (e) {
                                     log.info(`Could not update workspace on diff read: ${e.message}`);
                                 }
+                            }
+                            else if (!diffHandle) {
+                                log.info('writeLocalFile=false: left the local mirror file untouched for this diff read.');
                             }
                             // The diff can be silent about content the converter has no
                             // representation for: an image or footnote another editor added
@@ -303,7 +347,7 @@ export function register(server) {
                             const plainMarkdownIgnoredNotice = args.plainMarkdown
                                 ? '\n\n---\nNote: plainMarkdown was ignored for this diff. Diffs are always computed from rich markdown so they stay comparable across reads regardless of flag usage.\n---'
                                 : '';
-                            return patch + plainMarkdownIgnoredNotice + fidelityNotice + linkMismatchNotice;
+                            return patch + plainMarkdownIgnoredNotice + fidelityNotice + linkMismatchNotice + localMirrorNotice;
                         }
                         log.info('diffFromLastRead requested but no prior snapshot exists; returning full content');
                     }
@@ -317,13 +361,23 @@ export function register(server) {
                     // editable files. Off it, the legacy shared copy.
                     const readHandleResult = await mintHandle(markdownContent);
                     let localPath = readHandleResult?.editablePath ?? null;
-                    if (!localPath) {
+                    let localMirrorNotice = '';
+                    if (!localPath && writeLocalFile) {
                         try {
-                            localPath = await writeWorkspaceFile(args.documentId, markdownContent, args.tabId);
+                            const written = await writeLegacyMirrorGuarded(args.documentId, args.tabId, markdownContent, log);
+                            localPath = written.written;
+                            if (written.backedUp) {
+                                localMirrorNotice = `\n\n---\n⚠️ LOCAL MIRROR CONFLICT: the working copy on disk had edits newer than this tool's ` +
+                                    `last write to it (an unpushed local edit). It was backed up to ${written.backupPath.replace(/\\/g, '/')} before being ` +
+                                    'overwritten with the current document content — recover any unpushed edits from that file.\n---';
+                            }
                         } catch (e) {
                             log.info(`Could not save to workspace: ${e.message}`);
                             localPath = null;
                         }
+                    }
+                    else if (!localPath) {
+                        log.info('writeLocalFile=false: skipped writing the local mirror file for this read.');
                     }
                     if (localPath) log.info(`Saved to ${localPath}`);
                     // Apply length limit to markdown if specified. Computed against
@@ -341,6 +395,7 @@ export function register(server) {
                     // replaceDocumentWithMarkdown would permanently destroy.
                     output += fidelityNotice;
                     output += linkMismatchNotice;
+                    output += localMirrorNotice;
                     if (localPath) {
                         // Use forward slashes in the advice string so the path is valid JSON
                         // regardless of OS (backslashes in Windows paths break JSON encoding).

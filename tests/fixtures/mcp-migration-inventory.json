@@ -672,6 +672,9 @@
         "file": "tests/modifyText.test.js"
       },
       {
+        "file": "tests/modifyTextBulletPreset.test.js"
+      },
+      {
         "file": "tests/modifyTextClearStyle.test.js"
       },
       {
@@ -917,7 +920,7 @@
       },
       {
         "file": "dist/tools/docs/readGoogleDoc.js",
-        "line": 52,
+        "line": 73,
         "match": ".addTool({"
       },
       {

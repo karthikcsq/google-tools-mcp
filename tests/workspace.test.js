@@ -30,7 +30,7 @@ import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { getWorkspaceDir, getWorkspacePath, writeWorkspaceFile } from '../dist/workspace.js';
+import { getWorkspaceDir, getWorkspacePath, writeWorkspaceFile, backupIfLocallyModified } from '../dist/workspace.js';
 
 const isWin = process.platform === 'win32';
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -194,5 +194,100 @@ describe('writeWorkspaceFile', () => {
             await fs.rm(linkPath, { force: true }).catch(() => {});
             await fs.rm(victim, { force: true }).catch(() => {});
         }
+    });
+});
+
+// Issue #122: readDocument used to overwrite the local mirror unconditionally,
+// silently destroying an in-progress local edit. backupIfLocallyModified is
+// the guard: called right before the next writeWorkspaceFile, it copies
+// whatever is currently on disk to `<path>.bak` when that content looks like
+// something OTHER than this process's own last write to it.
+describe('backupIfLocallyModified (#122)', () => {
+    let sandboxDir;
+    let previousEnvValue;
+
+    beforeAll(async () => {
+        previousEnvValue = process.env.GOOGLE_MCP_WORKSPACE_DIR;
+        sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gtm-workspace-backup-test-'));
+        process.env.GOOGLE_MCP_WORKSPACE_DIR = sandboxDir;
+    });
+
+    afterAll(async () => {
+        if (previousEnvValue === undefined) {
+            delete process.env.GOOGLE_MCP_WORKSPACE_DIR;
+        } else {
+            process.env.GOOGLE_MCP_WORKSPACE_DIR = previousEnvValue;
+        }
+        await fs.rm(sandboxDir, { recursive: true, force: true });
+    });
+
+    it('does nothing when there is no file on disk yet', async () => {
+        const id = `doc-${uid()}`;
+        const result = await backupIfLocallyModified(getWorkspacePath(id));
+        expect(result).toEqual({ backedUp: false });
+    });
+
+    it('does not back up immediately after writeWorkspaceFile itself wrote the file', async () => {
+        const id = `doc-${uid()}`;
+        await writeWorkspaceFile(id, 'fresh from a read');
+        const result = await backupIfLocallyModified(getWorkspacePath(id));
+        expect(result).toEqual({ backedUp: false });
+    });
+
+    it('backs up when the on-disk file was modified after this process last wrote it', async () => {
+        const id = `doc-${uid()}`;
+        const p = await writeWorkspaceFile(id, 'original read content');
+        // Simulate a human editing the working copy readDocument told them to edit.
+        await fs.writeFile(p, 'MY UNPUSHED LOCAL EDIT', 'utf-8');
+        const future = new Date(Date.now() + 10_000);
+        await fs.utimes(p, future, future);
+
+        const result = await backupIfLocallyModified(p);
+        expect(result.backedUp).toBe(true);
+        expect(result.backupPath).toBe(`${p}.bak`);
+        expect(await fs.readFile(result.backupPath, 'utf-8')).toBe('MY UNPUSHED LOCAL EDIT');
+        // The original file is untouched by the backup step itself — only the
+        // NEXT writeWorkspaceFile call overwrites it, which the caller controls.
+        expect(await fs.readFile(p, 'utf-8')).toBe('MY UNPUSHED LOCAL EDIT');
+    });
+
+    it('errs toward a backup for a file this process never wrote (no record, e.g. after a restart)', async () => {
+        const id = `doc-${uid()}`;
+        const p = getWorkspacePath(id);
+        // Written directly, bypassing writeWorkspaceFile — no in-memory record
+        // of this path exists, exactly like a mirror left over from a previous
+        // process. There is no way to prove it is safe to clobber.
+        await fs.mkdir(path.dirname(p), { recursive: true });
+        await fs.writeFile(p, 'pre-existing content, unknown origin', 'utf-8');
+
+        const result = await backupIfLocallyModified(p);
+        expect(result.backedUp).toBe(true);
+        expect(await fs.readFile(result.backupPath, 'utf-8')).toBe('pre-existing content, unknown origin');
+    });
+
+    it('a subsequent writeWorkspaceFile still succeeds normally after a backup', async () => {
+        const id = `doc-${uid()}`;
+        const p = await writeWorkspaceFile(id, 'v1');
+        await fs.writeFile(p, 'local edit', 'utf-8');
+        const future = new Date(Date.now() + 10_000);
+        await fs.utimes(p, future, future);
+        await backupIfLocallyModified(p);
+
+        const written = await writeWorkspaceFile(id, 'v2 from the new read');
+        expect(await fs.readFile(written, 'utf-8')).toBe('v2 from the new read');
+    });
+
+    it('does not back up a second time in a row once its own write is the most recent one', async () => {
+        const id = `doc-${uid()}`;
+        const p = await writeWorkspaceFile(id, 'v1');
+        await fs.writeFile(p, 'local edit', 'utf-8');
+        const future = new Date(Date.now() + 10_000);
+        await fs.utimes(p, future, future);
+        const first = await backupIfLocallyModified(p);
+        expect(first.backedUp).toBe(true);
+
+        await writeWorkspaceFile(id, 'v2, our own fresh write');
+        const second = await backupIfLocallyModified(p);
+        expect(second).toEqual({ backedUp: false });
     });
 });
