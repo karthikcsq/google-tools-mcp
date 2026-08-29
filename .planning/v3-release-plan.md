@@ -84,3 +84,43 @@ checks is there too.
 Codex-only delegation (terra default, luna quick fixes, sol hairy). Brief via Write tool,
 stdin `-`. Verify every worker's diff and run gates myself. Reply to every review comment
 and resolve the thread in the same pass.
+
+---
+
+## Merge rehearsal results (2026-08-29)
+
+`feat/v3-integration` rebuilt from current heads and all four cluster branches merged:
+**90 suites / 1287 tests green** at `3c60eec`. Heads proven to combine: docs `37a7686`,
+gmail `8a112be`, ops `5c20ee8`, independents `4f76e3f`, on `docs/mcp-plan-client-evidence`
+`45fc243`.
+
+Conflicts and their resolutions, for reuse when merging on GitHub in order
+#109 -> #110 -> #111 -> #112 -> #113:
+
+| File | Resolution |
+|---|---|
+| `tests/fixtures/mcp-migration-inventory.json` | ALWAYS regenerate over the merged tree, after staging everything else. Never take a side. `git checkout --theirs`, `git add`, run the script, `git add` again. |
+| `tests/toolRegistration.test.js` | Keep the ops branch's startup-timing and feedback-default assertions, at the docs branch's count of 160. Either side alone drops assertions or the count. |
+| `dist/tools/docs/modifyText.js` | `normalizeEscapes(args.text)` from independents, plus the #14 default-colour and #121 inherited-style blocks from docs. |
+| `dist/tools/drive/createDocument.js` | Union of both import sets. Catch block keeps the #87 document-id warning AND the `getBatchUpdateProgress` partial-apply branch, with the caught API error server-side only. Result keeps `warningNote: contentWarningNote ?? <docs generic text>` AND `readHandleNote`. Keep the `...(contentWarnings ?? [])` spread on both branches so an earlier colour warning is not clobbered. |
+| `scripts/inventory-mcp-migration.mjs` | Take HEAD (`--exclude-standard`, which honours global and repo-local excludes) over `--exclude-from=.gitignore`. Keep the independents comment above the `ls-files` call; it is the only explanation of why `--others` is there. |
+| `tests/modifyText.test.js`, `tests/packageContents.test.js` | Keep both sides' blocks in one file. packageContents ends with one import block, one `beforeAll` running `npm pack --dry-run --json` once, and four `it`s. |
+
+### Two merge-induced test breaks that WILL recur on GitHub
+
+Neither is a conflict, so git will not flag them. Both are a test mock on one branch meeting
+a new import or code path on another:
+
+1. `tests/authConsentFlow.test.js` (independents) mocks `fs/promises` with only
+   `readFile`/`writeFile`/`mkdir`/`unlink`. The docs/migration side's `persistTokenCredentials`
+   writes token.json atomically via `open` -> `writeFile` -> `sync` -> `rename` -> `chmod`,
+   so the mock throws `TypeError: chmod is not a function`. Extend the mock with `chmod`,
+   `rename`, and an `open` returning a handle that records into `writeFileCalls`.
+2. `tests/createDocument.test.js` (independents) mocks
+   `../dist/markdown-transformer/index.js` without `docsJsonToMarkdown`, which the #87
+   read-seeding imports. The whole suite then fails to LINK, which reports zero failed tests
+   and looks green. Add `docsJsonToMarkdown` to the mock and give the fake clients
+   `documents.get` / `files.get` so seeding succeeds.
+
+The second is the exact reason the standing rule is to read the `Test Suites:` line rather
+than `Tests:`.
