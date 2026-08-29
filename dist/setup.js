@@ -596,15 +596,41 @@ export async function runFirstInstallSetup() {
     p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' You\'re ready to use google-tools-mcp.'));
 }
 
+// Captured client config is secret-bearing by default (finding 6): a key-name
+// heuristic like /token|secret|password|authorization/ misses common
+// credential values such as GOOGLE_MAPS_API_KEY, plain API_KEY, or
+// AWS_ACCESS_KEY_ID. Rather than trying to enumerate every provider's naming
+// convention, every value nested under `env` (the launch environment we
+// captured from an existing stdio entry) or `headers` (HTTP auth headers) is
+// blanket-redacted regardless of its key name. Top-level fields such as
+// `command`, `args`, `url`, `type`, and `bearer_token_env_var` are not
+// credential values themselves (the last one is only the *name* of an
+// environment variable, never its value) and are kept for readability.
 function redactEntry(value) {
     if (Array.isArray(value)) return value.map(redactEntry);
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /token|secret|password|authorization/i.test(key) ? '[REDACTED]' : redactEntry(item)]));
-    return value;
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+        if ((key === 'env' || key === 'headers') && item && typeof item === 'object' && !Array.isArray(item)) {
+            return [key, Object.fromEntries(Object.keys(item).map((inner) => [inner, '[REDACTED]']))];
+        }
+        return [key, /token|secret|password|authorization/i.test(key) ? '[REDACTED]' : redactEntry(item)];
+    }));
 }
 
-export async function backupClientEntry(adapter, entry, { configDir = getConfigDir(), appendFile = fs.appendFile, mkdir = fs.mkdir } = {}) {
-    await mkdir(configDir, { recursive: true });
-    await appendFile(path.join(configDir, 'client-config-backups.log'), `${JSON.stringify({ timestamp: new Date().toISOString(), client: adapter.name, entry: redactEntry(entry) })}\n`);
+export async function backupClientEntry(adapter, entry, { configDir = getConfigDir(), appendFile = fs.appendFile, mkdir = fs.mkdir, chmod = fs.chmod, open = fs.open } = {}) {
+    // A pre-fix config directory can already exist at a looser mode (e.g.
+    // 0755): `mkdir`'s `mode` only applies when it actually creates the
+    // directory, so a returning upgrade needs an explicit chmod too.
+    await mkdir(configDir, { recursive: true, mode: 0o700 });
+    await chmod(configDir, 0o700).catch((error) => { if (process.platform !== 'win32') throw error; });
+    const logPath = path.join(configDir, 'client-config-backups.log');
+    // Same reasoning for the file: `open(..., 'a', mode)` only sets the mode
+    // on creation, so an existing pre-fix log (created with the platform's
+    // default umask) needs its own chmod before anything else is appended to it.
+    const handle = await open(logPath, 'a', 0o600);
+    await handle.close();
+    await chmod(logPath, 0o600).catch((error) => { if (process.platform !== 'win32') throw error; });
+    await appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), client: adapter.name, entry: redactEntry(entry) })}\n`);
 }
 
 export async function backupEnvFile(envPath, { readFile = fs.readFile, open = fs.open, readdir = fs.readdir, unlink = fs.unlink, lstat = fs.lstat } = {}) {

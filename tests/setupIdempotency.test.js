@@ -487,6 +487,35 @@ describe('setup backups', () => {
         } finally { await fs.rm(root, { recursive: true, force: true }); }
     });
 
+    it('redacts every env/header value regardless of key name and repairs a pre-existing loose config directory', async () => {
+        // GOOGLE_MAPS_API_KEY and API_KEY do not match /token|secret|password|
+        // authorization/, so the old key-name heuristic let them through. And a
+        // config directory created before this fix (or by another tool) can
+        // still be 0755; a returning stdio setup must not leave the backup
+        // file world-readable inside it.
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-backup-secrets-'));
+        try {
+            if (process.platform !== 'win32') await fs.chmod(root, 0o755);
+            await backupClientEntry({ name: 'Fake' }, {
+                command: 'node', args: ['server.js'],
+                env: { GOOGLE_MAPS_API_KEY: 'maps-secret-value', API_KEY: 'plain-secret-value' },
+            }, { configDir: root });
+            const log = await fs.readFile(path.join(root, 'client-config-backups.log'), 'utf8');
+            expect(log).toContain('[REDACTED]');
+            expect(log).not.toContain('maps-secret-value');
+            expect(log).not.toContain('plain-secret-value');
+            const parsed = JSON.parse(log.trim());
+            expect(parsed.entry).toMatchObject({
+                command: 'node', args: ['server.js'],
+                env: { GOOGLE_MAPS_API_KEY: '[REDACTED]', API_KEY: '[REDACTED]' },
+            });
+            if (process.platform !== 'win32') {
+                expect((await fs.stat(root)).mode & 0o777).toBe(0o700);
+                expect((await fs.stat(path.join(root, 'client-config-backups.log'))).mode & 0o777).toBe(0o600);
+            }
+        } finally { await fs.rm(root, { recursive: true, force: true }); }
+    });
+
     it('creates token.json and its config directory privately without OAuth or home access', async () => {
         const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-token-mode-'));
         const configDir = path.join(parent, 'config');

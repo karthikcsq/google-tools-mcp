@@ -34,6 +34,11 @@ const { version: packageVersion } = require('../package.json');
 const entrypointPath = fileURLToPath(import.meta.url);
 const subcommand = process.argv[2];
 
+// The only `stop` outcomes where the requested action actually completed (or
+// there was nothing to stop). Everything else -- including any future status
+// -- means the recorded process is still there and must exit non-zero.
+const STOP_SUCCESS_STATUSES = new Set(['stopped', 'stale-state-removed', 'not-running']);
+
 function statusOutput(report, json) {
     if (json) return `${JSON.stringify(report, null, 2)}\n`;
     if (!report.healthy) return `Shared HTTP service is not healthy (${report.diagnostic}).\n`;
@@ -65,12 +70,27 @@ if (['start', 'status', 'restart', 'stop'].includes(subcommand)) {
         if (subcommand === 'stop') {
             const result = await stopHttpService();
             process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : `Shared HTTP service: ${result.status}.\n`);
-            await exitOperationsCli(result.status === 'stop-timeout' ? 1 : 0);
+            // Anything other than a confirmed stop (or nothing having been
+            // running to begin with) means the requested action did not
+            // happen -- e.g. 'foreign-or-unverified' or 'auth-mismatch' leave
+            // the recorded process alive and untouched. Callers such as shell
+            // scripts and service managers must see a non-zero exit code in
+            // that case, not just a status string they may not parse. New
+            // statuses default to failure here rather than success. See finding 11.
+            await exitOperationsCli(STOP_SUCCESS_STATUSES.has(result.status) ? 0 : 1);
         }
         const result = subcommand === 'restart'
             ? await restartHttpService({ launch })
             : await startHttpService({ launch });
         const state = result.state || result.started?.state;
+        if (!state) {
+            // restartHttpService can return a 'stop-timeout'/'stop-incomplete'
+            // result with no started state when the previous process was not
+            // confirmed stopped (finding 8). That is a failed restart, not a
+            // silent success.
+            process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : `Shared HTTP service ${subcommand}: ${result.status}.\n`);
+            await exitOperationsCli(1);
+        }
         process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` :
             `Shared HTTP service ${result.status} at ${state.url}.\n`);
         await exitOperationsCli(0);

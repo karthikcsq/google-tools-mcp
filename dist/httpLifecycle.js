@@ -122,6 +122,13 @@ export function getHttpServiceConfigurationDifferences(existing, config, expecte
             differences.push(`${key}: running ${existing.state?.[key] ?? 'unknown'}, requested ${config[key]}`);
         }
     }
+    // The live process may keep answering requests either way -- a no-auth
+    // server ignores a bearer token instead of rejecting it -- so this can
+    // only be caught by comparing the published, non-secret auth mode, not by
+    // a request outcome. See finding 12.
+    if (Boolean(existing.state?.noAuth) !== Boolean(config.noAuth)) {
+        differences.push(`auth mode: running ${existing.state?.noAuth ? 'no-auth' : 'bearer-token'}, requested ${config.noAuth ? 'no-auth' : 'bearer-token'}`);
+    }
     if (existing.identity?.name !== 'google-tools-mcp') {
         differences.push(`identity: running ${existing.identity?.name || 'unknown'}`);
     }
@@ -179,6 +186,19 @@ export async function stopHttpService({ configDir, env = process.env, fetchImpl 
         return Object.freeze({ status: 'stale-state-removed', state });
     }
     const ownership = await getHttpServiceStatus({ configDir, env, fetchImpl, kill });
+    // A live, still-recorded process whose *authenticated* probe fails --
+    // as opposed to one we never had any credential to try -- is most likely
+    // our own managed server still running under a bearer token that changed
+    // underneath it (rotation), not a foreign process. Deleting the state
+    // record here would strand a healthy process with no PID/URL record left
+    // to stop or restart it by. Preserve the record instead so the operator
+    // can retry with the right token. See finding 8; contrast with the
+    // 'never signals a live foreign or unauthenticated pid' test below, which
+    // has no token at all (diagnostic 'token-missing') and keeps the original
+    // deletion behavior because there is nothing to indicate the process is ours.
+    if (!ownership.healthy && ownership.diagnostic === 'unreachable-or-unauthorized' && ownership.state?.pid === state.pid) {
+        return Object.freeze({ status: 'auth-mismatch', state, diagnostic: ownership.diagnostic });
+    }
     if (!ownership.healthy || ownership.state?.pid !== state.pid) {
         await removeHttpState({ configDir, expectedPid: state.pid });
         return Object.freeze({ status: 'foreign-or-unverified', state, diagnostic: ownership.diagnostic });
@@ -197,15 +217,25 @@ export async function stopHttpService({ configDir, env = process.env, fetchImpl 
     return Object.freeze({ status: stopped ? 'stopped' : 'stop-timeout', state });
 }
 
+const CONFIRMED_STOPPED_STATUSES = new Set(['stopped', 'stale-state-removed', 'not-running']);
+
 export async function restartHttpService(options = {}) {
     const stopped = await stopHttpService(options);
-    if (stopped.status === 'stop-timeout') return Object.freeze({ status: 'stop-timeout', stopped });
+    // Only start a replacement once the previous process is confirmed gone.
+    // 'auth-mismatch' and 'foreign-or-unverified' both mean the requested stop
+    // did not happen (see finding 8); starting anyway on top of an
+    // unconfirmed stop could spawn a second instance or silently attach to
+    // the wrong one. Preserve the well-known 'stop-timeout' status for that
+    // specific case and use 'stop-incomplete' for the others.
+    if (!CONFIRMED_STOPPED_STATUSES.has(stopped.status)) {
+        return Object.freeze({ status: stopped.status === 'stop-timeout' ? 'stop-timeout' : 'stop-incomplete', stopped });
+    }
     const started = await startHttpService(options);
     return Object.freeze({ status: 'restarted', stopped, started });
 }
 
 export function createPublishedState(config, { pid = process.pid, version, startedAt = new Date().toISOString() } = {}) {
-    return { pid, port: config.port, host: config.host, endpoint: config.endpoint, startedAt, version, profile: config.profile };
+    return { pid, port: config.port, host: config.host, endpoint: config.endpoint, startedAt, version, profile: config.profile, noAuth: Boolean(config.noAuth) };
 }
 
 export { getHttpStatePaths, publishHttpState };

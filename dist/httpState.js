@@ -103,6 +103,13 @@ function normalizeState(value) {
     const profile = String(value.profile || '').trim();
     const startedAt = String(value.startedAt || '');
     const version = String(value.version || '');
+    // Whether the running instance requires a bearer token. Not a secret --
+    // just the effective auth mode -- but it has to be part of the published
+    // state so a later start/restart can detect that the live process's auth
+    // mode no longer matches what was requested. See finding 12: without this,
+    // flipping GOOGLE_MCP_HTTP_NO_AUTH off could attach to a still-unauthenticated
+    // running server and report success.
+    const noAuth = Boolean(value.noAuth);
     if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('HTTP service state has an invalid pid.');
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error('HTTP service state has an invalid port.');
     if (!host || !endpoint.startsWith('/') || !profile || !version || !Number.isFinite(Date.parse(startedAt))) {
@@ -110,7 +117,7 @@ function normalizeState(value) {
     }
     const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
     const url = new URL(`http://${urlHost}:${port}${endpoint}`).toString();
-    return Object.freeze({ pid, port, host, endpoint, url, startedAt, version, profile });
+    return Object.freeze({ pid, port, host, endpoint, url, startedAt, version, profile, noAuth });
 }
 
 export async function readHttpState({ configDir = getConfigDir() } = {}) {
@@ -133,6 +140,7 @@ export async function publishHttpState(state, { configDir = getConfigDir() } = {
         pid: normalized.pid, port: normalized.port, host: normalized.host,
         endpoint: normalized.endpoint, startedAt: normalized.startedAt,
         version: normalized.version, profile: normalized.profile,
+        noAuth: normalized.noAuth,
     };
     await atomicWrite(statePath, `${JSON.stringify(serializable, null, 2)}\n`);
     return normalized;
