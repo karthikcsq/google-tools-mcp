@@ -669,6 +669,9 @@
         "file": "tests/modifyText.test.js"
       },
       {
+        "file": "tests/modifyTextClearStyle.test.js"
+      },
+      {
         "file": "tests/modifyTextNoOpLeaseRelease.test.js"
       },
       {
