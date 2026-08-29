@@ -215,6 +215,19 @@ describe('address display names', () => {
         expect(encodeDisplayName('Alice Smith <alice@example.com>')).toBe('Alice Smith <alice@example.com>');
     });
 
+    it('encodes an overlong ASCII display name so recipient header lines stay legal', () => {
+        const name = 'A'.repeat(1000);
+        const address = `${name} <alice@example.com>`;
+        const encoded = encodeDisplayName(address);
+
+        expect(encoded).toMatch(/^=\?UTF-8\?B\?/);
+        for (const headerName of ['To', 'Cc', 'Bcc']) {
+            const folded = foldHeader(headerName, encoded);
+            for (const line of folded.split('\r\n')) expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
+            expect(decodeEncodedWords(unfold(folded))).toBe(`${headerName}: ${address}`);
+        }
+    });
+
     it('leaves a bare addr-spec unchanged, encoded or not', () => {
         expect(encodeDisplayName('alice@example.com')).toBe('alice@example.com');
         // An internationalized addr-spec must NOT become an encoded-word:
@@ -330,6 +343,15 @@ describe('header folding', () => {
         expect(headerBlock).toContain('Content-Transfer-Encoding: quoted-printable');
         expect(headerBlock).toContain('MIME-Version: 1.0');
         expect(body).toBe('body');
+    });
+
+    it('does not emit an empty line when one whitespace byte precedes a long continuation token', () => {
+        const value = `${'A'.repeat(69)} ${'B'.repeat(78)}`;
+        const folded = foldHeader('Subject', value);
+
+        expect(folded.split('\r\n')).not.toContain('');
+        expect(unfold(folded)).toBe(`Subject: ${value}`);
+        for (const line of folded.split('\r\n')) expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
     });
 
     it('keeps adversarial whitespace and encoded unbreakable values fold-safe', () => {
@@ -656,6 +678,23 @@ describe('constructRawMessageWithAttachments', () => {
         expect(Buffer.from(payloadLines.join(''), 'base64').toString('utf8')).toBe('x'.repeat(400));
     });
 
+    it.each([
+        ['text/plain', false, 'line one\nline two'],
+        ['text/html', true, '<p>one</p>\n<p>two</p>'],
+    ])('canonicalizes multiline %s body bytes before base64 encoding', (_type, htmlMode, body) => {
+        const raw = assembleMultipart(['To: a@b.com'], body, htmlMode, [attachment]);
+        const boundary = raw.match(/boundary="([^"]+)"/)[1];
+        const bodyPart = raw.split(`--${boundary}`)[1];
+        const payload = bodyPart.split('\r\n\r\n')[1].trim();
+        const decoded = Buffer.from(payload.replace(/\r\n/g, ''), 'base64');
+
+        expect(decoded.toString('utf8')).toBe(body.replace(/\n/g, '\r\n'));
+        for (let index = 0; index < decoded.length; index += 1) {
+            if (decoded[index] === 13) expect(decoded[index + 1]).toBe(10);
+            if (decoded[index] === 10) expect(decoded[index - 1]).toBe(13);
+        }
+    });
+
     it('wraps the multipart body part at 76 as well', async () => {
         const raw = await constructRawMessageWithAttachments(null, {
             to: ['a@b.com'],
@@ -707,6 +746,22 @@ describe('shared assemblers', () => {
             'MIME-Version: 1.0',
             '',
             'h=C3=A9llo',
+        ].join('\r\n'));
+    });
+
+    it('emits a header/body separator for an empty body', () => {
+        const raw = assembleSinglePart(['To: a@b.com'], '', false);
+        const separator = raw.indexOf('\r\n\r\n');
+
+        expect(separator).toBe(raw.lastIndexOf('\r\n\r\n'));
+        expect(raw.slice(separator + 4)).toBe('');
+        expect(raw).toBe([
+            'To: a@b.com',
+            'Content-Type: text/plain; charset="UTF-8"',
+            'Content-Transfer-Encoding: quoted-printable',
+            'MIME-Version: 1.0',
+            '',
+            '',
         ].join('\r\n'));
     });
 
@@ -842,6 +897,21 @@ describe('tool execution: raw payload on the wire', () => {
         });
         const { headerBlock } = splitMessage(lastRaw());
         expect(decodeEncodedWords(unfold(logicalHeader(headerBlock, 'Subject')))).toBe('Subject: Ünicode');
+    });
+
+    it.each(['sendMessage', 'createDraft', 'updateDraft'])('%s preserves literal equals signs in HTML bodies through the wire encoding path', async (toolName) => {
+        const body = '<a href="https://example.com/page?tab=t.0#heading=h.abc">link</a>\n'
+            + '<a href="https://www.linkedin.com/feed/update/urn:li:share:7495913127058976769/?actorCompanyId=106734664">post</a>';
+        await tools.get(toolName).execute({
+            ...(toolName === 'updateDraft' ? { id: 'draft-1' } : {}),
+            to: ['a@b.com'],
+            subject: 'HTML',
+            body,
+        }, { log: { info() {} } });
+        const { headerBlock, body: wireBody } = splitMessage(lastRaw());
+
+        expect(headerBlock).toContain('Content-Type: text/html; charset="UTF-8"');
+        expect(qpDecode(wireBody)).toBe(body.replace(/\n/g, '\r\n'));
     });
 
     it('replyMessage encodes the Re: subject, encodes the sender display name, and leaves the addr-spec and Message-ID alone', async () => {

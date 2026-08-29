@@ -108,7 +108,7 @@ export const foldHeader = (name, value) => {
                 if (beforeWhitespace) {
                     lines.push(beforeWhitespace);
                     line = whitespace;
-                } else if (byteLen(line) + byteLen(segment) > SOFT_LINE_LIMIT) {
+                } else if (line.length > 1) {
                     // The line is entirely an existing whitespace run. Keep
                     // one byte with the token so its continuation is nonempty,
                     // and emit the rest as its own legal whitespace line.
@@ -231,7 +231,13 @@ export const encodeDisplayName = (address) => {
     const name = entry.slice(0, split).trim();
     const addrSpec = entry.slice(split);
     if (!name || name.includes('<')) return entry;
-    if (!needsEncoding(name)) return entry;
+    // Address headers may be To, Cc, or Bcc. Bcc has the longest field-name,
+    // so use its prefix for the conservative hard-line budget. A display-name
+    // run can be safely represented as RFC 2047 encoded-words; the addr-spec
+    // cannot, and remains literal below.
+    const hasUnfoldableLongRun = (name.match(/\S+/g) || [])
+        .some((run) => byteLen(run) > HARD_LINE_LIMIT - byteLen('Bcc: '));
+    if (!needsEncoding(name) && !hasUnfoldableLongRun) return entry;
     // Strip a surrounding quoted-string and its backslash escapes before
     // encoding: an encoded-word is an atom and must not itself be quoted
     // (RFC 2047 §5 rule 1 — encoded-words are not valid inside a
@@ -555,7 +561,7 @@ export const assembleSinglePart = (headerLines, bodyText, htmlMode) => {
     message.push('Content-Transfer-Encoding: quoted-printable');
     message.push('MIME-Version: 1.0');
     message.push('');
-    if (bodyText) message.push(qpEncodeBody(bodyText));
+    message.push(qpEncodeBody(bodyText));
     return message.join('\r\n');
 };
 
@@ -565,7 +571,11 @@ export const assembleSinglePart = (headerLines, bodyText, htmlMode) => {
  * goes through RFC 2231 encoding, and every base64 payload is wrapped at 76.
  */
 export const assembleMultipart = (headerLines, bodyText, htmlMode, attachments) => {
-    const bodyBase64 = Buffer.from(String(bodyText ?? ''), 'utf8').toString('base64');
+    // RFC 2046 \u00a74.1.1 requires MIME text parts to use CRLF line endings
+    // before transfer encoding. Base64 preserves every source byte verbatim,
+    // so normalize before encoding rather than after decoding at the receiver.
+    const canonicalBodyText = String(bodyText ?? '').replace(/(?:\r\n?|\n)/g, '\r\n');
+    const bodyBase64 = Buffer.from(canonicalBodyText, 'utf8').toString('base64');
     const parsedAttachments = (attachments || []).map((attachment) => ({
         filename: attachment.filename,
         mimeType: validateMimeType(attachment.mimeType),
@@ -573,7 +583,7 @@ export const assembleMultipart = (headerLines, bodyText, htmlMode, attachments) 
     }));
     const boundary = makeBoundary([
         ...headerLines,
-        String(bodyText ?? ''),
+        canonicalBodyText,
         bodyBase64,
         ...parsedAttachments.map((attachment) => attachment.data),
         ...parsedAttachments.map((attachment) => String(attachment.filename ?? '')),
