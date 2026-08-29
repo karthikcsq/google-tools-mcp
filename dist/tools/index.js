@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { runArgv } from '../shellSafe.js';
 import { getTokenPath, SCOPES } from '../auth.js';
 import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config.js';
@@ -16,6 +17,25 @@ import { google } from 'googleapis';
 import { registerLegacyAliases } from './legacyAliases.js';
 
 const REPO = 'karthikcsq/google-tools-mcp';
+
+// feedback's review step and its publish step are two independent tool calls
+// with no protocol-level session binding them together. Without server-side
+// state, a caller could review one draft (e.g. diagnostics off) and then
+// publish a second, unreviewed call's title/description/diagnostics -- the
+// publish call would just recompute `body` fresh and trust confirmPublicPost
+// on its own (finding 13). So the review step stores the exact reviewed
+// title/body/label in memory keyed by a random draftId, and the publish step
+// is required to name that draftId and always publishes the stored content,
+// never anything recomputed from the publish call's own arguments. Entries
+// expire so an abandoned review can't be replayed indefinitely.
+const FEEDBACK_DRAFT_TTL_MS = 15 * 60 * 1000;
+const feedbackDrafts = new Map();
+
+function pruneFeedbackDrafts(now = Date.now()) {
+    for (const [id, draft] of feedbackDrafts) {
+        if (now - draft.createdAt > FEEDBACK_DRAFT_TTL_MS) feedbackDrafts.delete(id);
+    }
+}
 
 // The issue title is caller-supplied MCP tool input. It is never rendered into
 // a shell command string: every `gh` invocation below is an argv array handed
@@ -438,16 +458,63 @@ export async function registerAllTools(server) {
     server.addTool({
         name: 'feedback',
         description:
-            'Draft feedback or a bug report for google-tools-mcp. Review the generated draft, then set confirmPublicPost to true to publish it. Recent activity requires explicit includeDiagnostics opt-in.',
+            'Draft feedback or a bug report for google-tools-mcp. Review the generated draft, then call again with confirmPublicPost: true and the returned draftId to publish exactly that reviewed draft. Recent activity requires explicit includeDiagnostics opt-in.',
         parameters: z.object({
             type: z.enum(['bug', 'feature']).describe('Type of feedback'),
             title: z.string().describe('Short summary'),
             description: z.string().describe('Detailed description of the issue or feature request'),
             includeDiagnostics: z.boolean().optional().default(false).describe('Include a privacy-safe recent activity summary. Review it before public submission.'),
             confirmPublicPost: z.boolean().optional().default(false).describe('Set true only after reviewing the generated draft to allow public submission.'),
+            draftId: z.string().optional().describe('The draftId returned by the prior review call. Required when confirmPublicPost is true: publication always uses the exact reviewed title/body/label for that draftId, never any new text or diagnostics passed on this call.'),
         }),
         execute: async (args) => {
-            // Collect diagnostics
+            pruneFeedbackDrafts();
+
+            // Publishing never recomputes the draft from this call's own
+            // arguments -- it only ever replays the exact title/body/label
+            // that were returned for review under draftId. That is what
+            // prevents a second call from smuggling in unreviewed text or
+            // diagnostics under cover of confirmPublicPost: true (finding 13).
+            if (args.confirmPublicPost) {
+                const draft = args.draftId ? feedbackDrafts.get(args.draftId) : undefined;
+                if (!draft) {
+                    throw publicError('No matching reviewed draft found for that draftId. Call feedback with confirmPublicPost: false first to generate a fresh draft, then resubmit confirmPublicPost: true with the exact draftId returned from that call.');
+                }
+                feedbackDrafts.delete(args.draftId);
+
+                const ghResult = await tryGhCli(draft.title, draft.body, draft.label);
+                if (ghResult.ok) {
+                    return JSON.stringify({
+                        method: 'gh-cli',
+                        issueUrl: ghResult.issueUrl,
+                        note: 'Issue filed successfully via GitHub CLI.',
+                    }, null, 2);
+                }
+
+                // Fallback: open pre-filled GitHub issue URL in the user's browser
+                const params = new URLSearchParams({
+                    title: draft.title,
+                    body: draft.body,
+                    labels: draft.label,
+                });
+                const url = `https://github.com/${REPO}/issues/new?${params.toString()}`;
+                const opened = await openBrowser(url);
+
+                return JSON.stringify({
+                    method: 'browser-fallback',
+                    ghCliUnavailableReason: ghResult.reason,
+                    url,
+                    browserOpened: opened,
+                    markdown: draft.body,
+                    note: url.length > 8000
+                        ? 'The URL may be too long for some browsers. Use the markdown body to create the issue manually.'
+                        : opened
+                            ? 'Opened the pre-filled GitHub issue in your browser. Click "Submit new issue" to file it.'
+                            : 'Could not auto-open browser. Please open the URL manually.',
+                }, null, 2);
+            }
+
+            // Not publishing yet: build a fresh draft to review. Collect diagnostics
             const __dirname = path.dirname(fileURLToPath(import.meta.url));
             let pkgVersion = 'unknown';
             try {
@@ -506,44 +573,13 @@ export async function registerAllTools(server) {
 
             const label = args.type === 'bug' ? 'bug' : 'enhancement';
 
-            if (!args.confirmPublicPost) {
-                return JSON.stringify({
-                    method: 'review-required',
-                    markdown: body,
-                    note: 'Review this draft. Call feedback again with confirmPublicPost: true to publish it publicly.',
-                }, null, 2);
-            }
-
-            // Try gh CLI first
-            const ghResult = await tryGhCli(args.title, body, label);
-            if (ghResult.ok) {
-                return JSON.stringify({
-                    method: 'gh-cli',
-                    issueUrl: ghResult.issueUrl,
-                    note: 'Issue filed successfully via GitHub CLI.',
-                }, null, 2);
-            }
-
-            // Fallback: open pre-filled GitHub issue URL in the user's browser
-            const params = new URLSearchParams({
-                title: args.title,
-                body,
-                labels: label,
-            });
-            const url = `https://github.com/${REPO}/issues/new?${params.toString()}`;
-            const opened = await openBrowser(url);
-
+            const draftId = randomUUID();
+            feedbackDrafts.set(draftId, { title: args.title, body, label, createdAt: Date.now() });
             return JSON.stringify({
-                method: 'browser-fallback',
-                ghCliUnavailableReason: ghResult.reason,
-                url,
-                browserOpened: opened,
+                method: 'review-required',
+                draftId,
                 markdown: body,
-                note: url.length > 8000
-                    ? 'The URL may be too long for some browsers. Use the markdown body to create the issue manually.'
-                    : opened
-                        ? 'Opened the pre-filled GitHub issue in your browser. Click "Submit new issue" to file it.'
-                        : 'Could not auto-open browser. Please open the URL manually.',
+                note: 'Review this draft. Call feedback again with confirmPublicPost: true and this exact draftId to publish it. Changing the title, description, type, or includeDiagnostics on the publish call has no effect -- only the reviewed draft is ever published.',
             }, null, 2);
         },
     });

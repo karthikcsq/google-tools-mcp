@@ -579,6 +579,9 @@
         "file": "tests/extraDocsToolsWriteControl.test.js"
       },
       {
+        "file": "tests/feedbackDraftBinding.test.js"
+      },
+      {
         "file": "tests/fixtures/mcpSdkV2Fixture.js"
       },
       {
@@ -1207,22 +1210,22 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 245,
+        "line": 265,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 269,
+        "line": 289,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 290,
+        "line": 310,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 438,
+        "line": 458,
         "match": ".addTool({"
       },
       {
