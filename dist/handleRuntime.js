@@ -24,7 +24,7 @@ import * as path from 'node:path';
 import { createReadHandleStore } from './readHandles.js';
 import { getRequestContext } from './requestContext.js';
 import { NODE_KINDS, walkDocument } from './docsStructure.js';
-import { ensureSafeDirectory, getWorkspaceDir, writeFileSecurely } from './workspace.js';
+import { ensureSafeDirectory, getWorkspaceDir, writeEditableWorkspaceFile, writeFileSecurely } from './workspace.js';
 import { logger as defaultLogger } from './logger.js';
 
 const V2_SUBDIR = 'v2-handles';
@@ -221,6 +221,7 @@ async function releaseBaselineReference(baselineId, workspaceId) {
  */
 export async function createHandleWorkspace({
     profile, fileId, tabId = null, revisionId = null, fingerprint = null, content, expiresAt = null,
+    workspaceId: suppliedWorkspaceId, ownershipManifest: suppliedOwnershipManifest,
 }) {
     const baselineId = baselineIdFor({ profile, fileId, tabId, revisionId, fingerprint, content });
     const baselinePath = baselinePathFor(baselineId);
@@ -234,12 +235,16 @@ export async function createHandleWorkspace({
         baselineShared = false;
     }
 
-    const workspaceId = newInternalId();
-    const ownershipManifest = newInternalId();
+    // Optional deterministic IDs are an internal test seam for exercising a
+    // pre-existing editable path. Production callers omit both and retain the
+    // random, collision-resistant identities.
+    const workspaceId = suppliedWorkspaceId ?? newInternalId();
+    const ownershipManifest = suppliedOwnershipManifest ?? newInternalId();
     const dir = workspaceDirFor(workspaceId);
     const editablePath = path.join(dir, EDITABLE_FILE);
     const manifestPath = path.join(dir, MANIFEST_FILE);
     let baselineCreatedHere = false;
+    let editableWrite;
 
     // Every write below is fallible (disk full, permissions, temp I/O), and
     // `ownedWorkspaces.set` — the ONLY thing cleanup ever consults (plan §3,
@@ -254,8 +259,10 @@ export async function createHandleWorkspace({
             baselineCreatedHere = true;
         }
         // Copy, never link or share: handle A's edits must never appear in B's file.
+        // It is still a user-facing editable file, so use the same guard as the
+        // legacy mirror before any overwrite.
         await ensureSafeDirectory(dir);
-        await writeFileSecurely(editablePath, content);
+        editableWrite = await writeEditableWorkspaceFile(editablePath, content);
 
         const manifest = {
             workspaceId,
@@ -283,6 +290,8 @@ export async function createHandleWorkspace({
     return {
         baselineShared,
         editablePath,
+        backedUp: editableWrite.backedUp,
+        backupPath: editableWrite.backupPath,
         workspace: {
             workspaceId,
             ownershipManifest,

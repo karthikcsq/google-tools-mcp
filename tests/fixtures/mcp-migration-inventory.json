@@ -627,6 +627,9 @@
         "file": "tests/handleRuntimeStructuralFingerprint.test.js"
       },
       {
+        "file": "tests/handleWorkspaceMirrorConflict.test.js"
+      },
+      {
         "file": "tests/helpers.test.js"
       },
       {

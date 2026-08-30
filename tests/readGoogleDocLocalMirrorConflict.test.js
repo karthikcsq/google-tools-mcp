@@ -87,8 +87,6 @@ describe('readDocument local mirror conflict handling (#122)', () => {
         // A human edits the working copy readDocument told them to edit, and
         // does NOT push it yet.
         await fs.writeFile(localPath, 'MY UNPUSHED SECTION, NOT YET PUSHED', 'utf-8');
-        const future = new Date(Date.now() + 10_000);
-        await fs.utimes(localPath, future, future);
 
         documentsGet.mockResolvedValueOnce(paraDoc('Original document content'));
         const result = await readOnce(server, documentId);
@@ -130,8 +128,6 @@ describe('readDocument local mirror conflict handling (#122)', () => {
         await readOnce(server, documentId);
 
         await fs.writeFile(localPath, 'unpushed local section', 'utf-8');
-        const future = new Date(Date.now() + 10_000);
-        await fs.utimes(localPath, future, future);
 
         // The exact repro from the issue: diffFromLastRead=true as a "safe"
         // pre-push staleness check, with nothing changed on the server.

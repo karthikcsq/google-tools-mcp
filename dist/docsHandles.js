@@ -174,6 +174,8 @@ export async function mintDocsReadHandle({ documentId, tabId = null, revisionId 
         readHandle: issued.readHandle,
         expiresAt: issued.expiresAt,
         editablePath: created.editablePath,
+        backedUp: created.backedUp,
+        backupPath: created.backupPath,
         structuralFingerprint,
     };
 }

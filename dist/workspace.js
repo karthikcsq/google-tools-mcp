@@ -19,6 +19,7 @@ import * as fs from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'node:crypto';
 
 // Restrict an id to characters that are always safe in a filename. documentId
 // and tabId are Google-issued opaque ids, but sanitizing is cheap defense in
@@ -135,13 +136,16 @@ export async function writeFileSecurely(filePath, content) {
 // it cannot protect a file across a process restart, so backupIfLocallyModified
 // treats "no record" the same as "modified" — see there for why that is the
 // safe default rather than a gap.
-const mirrorWriteTimes = new Map();
+const mirrorWriteFingerprints = new Map();
 
-// Filesystem mtime resolution/clock jitter between "we finished writing" and
-// "we read Date.now() to record it" is usually sub-millisecond but is not
-// guaranteed to be zero on every OS/filesystem combination; a small tolerance
-// avoids a false "locally modified" verdict on the write that just happened.
-const MTIME_CLOCK_TOLERANCE_MS = 500;
+function fingerprintContent(content) {
+    return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+/** Record one known-good write to an editable workspace file. */
+export function recordWorkspaceFileWrite(filePath, content) {
+    mirrorWriteFingerprints.set(filePath, fingerprintContent(content));
+}
 
 // Write content to the shared workspace file for documentId/tabId. Returns the
 // absolute path written. Throws on any failure (callers decide whether that is
@@ -157,8 +161,20 @@ export async function writeWorkspaceFile(documentId, content, tabId = null) {
     // file counts as legitimate here — readDocument seeding/refreshing the
     // mirror, and replaceDocumentWithMarkdown echoing a push back into it —
     // both are the tool's own hand, not a conflict to protect against.
-    mirrorWriteTimes.set(written, Date.now());
+    recordWorkspaceFileWrite(written, content);
     return written;
+}
+
+/**
+ * Guard and write any per-user editable workspace file, including SDK v2
+ * handle copies. The legacy wrapper above derives its path from document/tab;
+ * the handle runtime already owns an exact per-handle path and uses this form.
+ */
+export async function writeEditableWorkspaceFile(filePath, content) {
+    const backup = await backupIfLocallyModified(filePath);
+    const written = await writeFileSecurely(filePath, content);
+    recordWorkspaceFileWrite(written, content);
+    return { written, ...backup };
 }
 
 /**
@@ -182,22 +198,21 @@ export async function writeWorkspaceFile(documentId, content, tabId = null) {
  * @returns {Promise<{backedUp: boolean, backupPath?: string, backupError?: string}>}
  */
 export async function backupIfLocallyModified(filePath) {
-    let stat;
+    let content;
     try {
-        stat = await fs.stat(filePath);
+        content = await fs.readFile(filePath, 'utf-8');
     }
     catch {
         return { backedUp: false }; // nothing on disk yet — nothing to protect
     }
-    const recordedWriteMs = mirrorWriteTimes.get(filePath);
-    const locallyModified = recordedWriteMs === undefined
-        || stat.mtimeMs > recordedWriteMs + MTIME_CLOCK_TOLERANCE_MS;
+    const recordedFingerprint = mirrorWriteFingerprints.get(filePath);
+    const locallyModified = recordedFingerprint === undefined
+        || fingerprintContent(content) !== recordedFingerprint;
     if (!locallyModified) {
         return { backedUp: false };
     }
     const backupPath = `${filePath}.bak`;
     try {
-        const content = await fs.readFile(filePath, 'utf-8');
         await writeFileSecurely(backupPath, content);
         return { backedUp: true, backupPath };
     }

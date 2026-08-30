@@ -323,7 +323,12 @@ export function register(server) {
                             // without touching the mirror at all (issue #122).
                             let localMirrorNotice = '';
                             const diffHandle = await mintHandle(markdownContent);
-                            if (!diffHandle && writeLocalFile) {
+                            if (diffHandle?.backedUp) {
+                                localMirrorNotice = `\n\n---\nâš ï¸ LOCAL MIRROR CONFLICT: the working copy on disk had edits newer than this tool's ` +
+                                    `last write to it (an unpushed local edit). It was backed up to ${diffHandle.backupPath.replace(/\\/g, '/')} before being ` +
+                                    'overwritten with the current document content â€” recover any unpushed edits from that file.\n---';
+                            }
+                            else if (!diffHandle && writeLocalFile) {
                                 try {
                                     const { backedUp, backupPath } = await writeLegacyMirrorGuarded(args.documentId, args.tabId, markdownContent, log);
                                     if (backedUp) {
@@ -362,7 +367,12 @@ export function register(server) {
                     const readHandleResult = await mintHandle(markdownContent);
                     let localPath = readHandleResult?.editablePath ?? null;
                     let localMirrorNotice = '';
-                    if (!localPath && writeLocalFile) {
+                    if (readHandleResult?.backedUp) {
+                        localMirrorNotice = `\n\n---\nâš ï¸ LOCAL MIRROR CONFLICT: the working copy on disk had edits newer than this tool's ` +
+                            `last write to it (an unpushed local edit). It was backed up to ${readHandleResult.backupPath.replace(/\\/g, '/')} before being ` +
+                            'overwritten with the current document content â€” recover any unpushed edits from that file.\n---';
+                    }
+                    else if (!localPath && writeLocalFile) {
                         try {
                             const written = await writeLegacyMirrorGuarded(args.documentId, args.tabId, markdownContent, log);
                             localPath = written.written;
