@@ -440,3 +440,37 @@ After #127 merges, `git diff main verify/live-smoke-on-fixes -- dist tests scrip
 empty. `5e5d0e6` on that branch is the independently verified combined tree (91 suites green four
 times, live smoke 22/22), so an empty diff proves the six GitHub merges reproduced it exactly.
 `.gitignore` and `.planning/` will differ and that is expected.
+
+### Sequence complete — 2026-08-30
+
+All six merged. `main` is at `42cb95b`, zero open PRs.
+
+| PR | Merge commit |
+|---|---|
+| #109 | `40db6eb` |
+| #110 | `49d5764` |
+| #111 | `a734543` |
+| #112 | `61a68b0` |
+| #113 | `8c785a7` |
+| #127 | `65a80b1` |
+
+**Final gate passed.** `git diff main verify/live-smoke-on-fixes -- dist tests scripts live`
+returned one file and two lines: the explanatory comment added while resolving #112's
+`toolRegistration.test.js` conflict. No behavioural difference, so the six GitHub merges reproduced
+the independently verified rehearsal tree exactly.
+
+`npm test` on main: **91 suites passed, 1303 passed / 2 skipped of 1305**.
+
+One trap worth remembering: the main worktree's `node_modules` still predated #109's
+fastmcp-to-`@modelcontextprotocol/sdk` swap, so 23 suites failed to *load* with
+`Cannot find module '@modelcontextprotocol/server'` until `npm install`. Same failure signature as
+the mock-factory class (suites fail to load, `Tests:` line looks fine), different cause. **Run
+`npm install` in a worktree after a merge that changes dependencies.**
+
+### What is left for 3.0.0
+
+1. **#71** — swap `googleapis` for per-API `@googleapis/*`. Own PR, lands last. Partial work sits
+   in `stash@{0}` on the integration worktree.
+2. **#50** — Elliot must add a required reviewer on the npm-publish environment. Admin-only, blocks
+   tagging.
+3. Release prep — version bump to 3.0.0, changelog, docs sweep, RELEASING.md, tag.
