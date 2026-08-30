@@ -69,6 +69,10 @@ jest.unstable_mockModule('../dist/workspace.js', () => ({
         await fs.writeFile(filePath, content, 'utf-8');
         return filePath;
     },
+    writeEditableWorkspaceFile: async (filePath, content) => {
+        await fs.writeFile(filePath, content, 'utf-8');
+        return { written: filePath, backedUp: false };
+    },
     writeWorkspaceFile: async (documentId, content, tabId) => {
         await fs.mkdir(WORKSPACE_ROOT, { recursive: true });
         const filePath = path.join(
