@@ -372,3 +372,71 @@ still pass, so nothing regressed.
 
 The integration rehearsal is complete. Remaining gate before the merge sequence is the landing-split
 decision recorded above.
+
+## MERGE SEQUENCE — executed 2026-08-30 (strategy A)
+
+Elliot chose **strategy A**: merge `origin/main` into each branch, verify there, then merge the
+branch to main. Merge commits only, never squash.
+
+### Two discoveries that shaped it
+
+1. **All five feature PRs were stacked on #109's branch, not on main.** Their
+   `MERGEABLE/CLEAN` status was computed against `docs/mcp-plan-client-evidence` and said nothing
+   about main. It also explains why only #109 ever had CI: `.github/workflows/test.yml` triggers on
+   `pull_request: branches: [main]`. After #109 merged, all five were retargeted with
+   `gh pr edit <n> --base main`, and CI started covering them.
+2. **Squash would have corrupted the series.** #110-#113 physically contain #109's commits.
+   Squashing #109 into a new single commit would make git treat those same changes as unrelated
+   when the feature branches merged, manufacturing conflicts across the 177 files #109 touched.
+
+### Status
+
+| PR | Branch | Merge commit on main | Local suite before merge |
+|---|---|---|---|
+| #109 | docs/mcp-plan-client-evidence | `40db6eb` | 47 suites / 702 tests |
+| #110 | feat/docs-cluster | `49d5764` | 74 suites / 1035 tests |
+| #111 | feat/gmail-cluster | `a734543` | 77 suites / 1127 tests |
+| #112 | feat/ops-cluster | `61a68b0` | 86 suites / 1255 tests |
+| #113 | feat/independents | `8c785a7` | 91 suites / 1305 tests |
+| #127 | feat/live-smoke | **NOT YET MERGED** | 91 suites / 1305 tests |
+
+CI passed on Node 20 and 22 for every one of them before merging.
+
+### #127 — exactly where it stands
+
+Worktree `google-tools-mcp-smoke`, branch `feat/live-smoke`, local HEAD **`08eb2d4`**
+("Merge remote-tracking branch 'origin/main' into feat/live-smoke"). Conflicts were `.gitignore`
+and `tests/entrypointSmoke.test.js`; both resolved, inventory regenerated, committed, and
+`npm test` is green at 91 suites / 1305 tests.
+
+**NOT PUSHED YET.** Remaining steps, in order:
+1. `git push origin HEAD:feat/live-smoke` from that worktree
+2. wait for CI on #127
+3. `gh pr merge 127 --merge`
+4. fast-forward local main
+
+### Conflict resolutions used
+
+- Inventory snapshot `tests/fixtures/mcp-migration-inventory.json` conflicted on #111, #112, #113,
+  #127. Never hand-resolved: `git checkout --theirs`, `git add`, regenerate with
+  `node scripts/inventory-mcp-migration.mjs --write-snapshot ...`, `git add` again.
+- `tests/toolRegistration.test.js` on #112: ops asserted 156, main asserted 160. Kept ops' logger
+  spy and feedback-default assertions, took main's 160 (ops adds no tools; 160 = 156 + the four
+  docs-cluster tools). Confirmed by the passing suite, not assumed.
+- #113's seven conflicts were the same set the rehearsal already resolved. Lifted eight files
+  verbatim from `verify/live-smoke-on-fixes` (`modifyText.js`, `createDocument.js`,
+  `inventory-mcp-migration.mjs`, `mcpMigrationInventory.test.js`, `modifyText.test.js`,
+  `packageContents.test.js`, plus the two repair files `createDocument.test.js` and
+  `authConsentFlow.test.js`). Safe because `feat/live-smoke` touches none of those eight, verified
+  by diffing it against its merge-base first.
+- #127: lifted `.gitignore` and `tests/entrypointSmoke.test.js` from the rehearsal. **The rehearsal's
+  `.gitignore` predates main's `.planning/out-*.md` rule**, so lifting it wholesale silently dropped
+  that rule. Caught by diffing against main's version and re-appending. Worth remembering: the
+  rehearsal branch is not a superset of main.
+
+### Final gate, still to run
+
+After #127 merges, `git diff main verify/live-smoke-on-fixes -- dist tests scripts live` must be
+empty. `5e5d0e6` on that branch is the independently verified combined tree (91 suites green four
+times, live smoke 22/22), so an empty diff proves the six GitHub merges reproduced it exactly.
+`.gitignore` and `.planning/` will differ and that is expected.
