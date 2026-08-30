@@ -3,6 +3,7 @@ import expectedInventory from './fixtures/mcp-migration-inventory.json' with { t
 import { collectMigrationInventory } from '../scripts/inventory-mcp-migration.mjs';
 
 describe('MCP migration inventory baseline', () => {
+    // Registering the full runtime catalog can exceed Jest's default timeout under parallel CI load.
     it('matches the tracked runtime/test dependency and registration baseline', async () => {
         const actualInventory = await collectMigrationInventory();
         const inventoryTestPath = 'tests/mcpMigrationInventory.test.js';
@@ -25,5 +26,5 @@ describe('MCP migration inventory baseline', () => {
         };
 
         expect(comparableActual).toEqual(comparableExpected);
-    });
+    }, 120_000);
 });

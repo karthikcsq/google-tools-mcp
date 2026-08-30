@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('published package contents', () => {
+    // npm pack uses a fresh cache, so package-manager startup can exceed Jest's default timeout under load.
     it('contains only package metadata and runtime JavaScript', async () => {
         const cache = await mkdtemp(join(tmpdir(), 'google-tools-mcp-npm-cache-'));
         try {
@@ -35,5 +36,5 @@ describe('published package contents', () => {
         } finally {
             await rm(cache, { recursive: true, force: true });
         }
-    });
+    }, 120_000);
 });
