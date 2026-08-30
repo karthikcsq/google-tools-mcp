@@ -5,15 +5,17 @@ import * as fs from 'fs/promises';
 import { getWorkspacePath } from '../dist/workspace.js';
 
 const documentsGet = jest.fn();
+let driveModifiedTime = null;
 
 jest.unstable_mockModule('../dist/clients.js', () => ({
     getDocsClient: async () => ({ documents: { get: documentsGet } }),
     getDriveClient: async () => ({
-        files: { get: async () => ({ data: { modifiedTime: null } }) },
+        files: { get: async () => ({ data: { modifiedTime: driveModifiedTime } }) },
     }),
 }));
 
 const { register } = await import('../dist/tools/docs/readGoogleDoc.js');
+const { getLastReadContent, guardMutation } = await import('../dist/readTracker.js');
 
 function createServer() {
     const tools = new Map();
@@ -41,6 +43,28 @@ afterEach(async () => {
 });
 
 describe('readDocument local workspace + fidelity warnings', () => {
+    it('allows a title-only modifiedTime change after a text read because the body is unchanged (#108)', async () => {
+        const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        driveModifiedTime = '2026-08-29T10:00:00.000Z';
+        documentsGet.mockResolvedValueOnce(
+            docWithBody([{ paragraph: { elements: [{ textRun: { content: 'Doors open at six.\n' } }] } }])
+        );
+
+        const server = createServer();
+        register(server);
+        await server.getTool('readDocument').execute(
+            { documentId, format: 'text', diffFromLastRead: false },
+            { log }
+        );
+
+        expect(getLastReadContent(documentId)).toBe('Doors open at six.');
+        driveModifiedTime = '2026-08-29T10:01:00.000Z';
+        await expect(guardMutation(documentId, {
+            contentFetcher: async () => ({ content: 'Doors open at six.', revisionId: 'body-unchanged-title-renamed' }),
+        })).resolves.toBeUndefined();
+        driveModifiedTime = null;
+    });
+
     it('saves the markdown to a local workspace file and advises pushing it back', async () => {
         const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         documentsGet.mockResolvedValueOnce(

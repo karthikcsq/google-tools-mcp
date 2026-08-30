@@ -452,7 +452,11 @@ export function register(server) {
                         });
                     }
                 });
-                trackRead(args.documentId, modifiedTime, undefined, res.data.revisionId);
+                // A text-format read still authorizes a later mutation. Keep a
+                // canonical body snapshot for the stale guard even though the
+                // caller asked to receive plain text: Drive title changes move
+                // modifiedTime but do not alter this body representation.
+                trackRead(args.documentId, modifiedTime, docsJsonToMarkdown(contentSource), res.data.revisionId);
                 await mintHandle(textContent);
                 if (!textContent.trim())
                     return 'Document found, but appears empty.';
