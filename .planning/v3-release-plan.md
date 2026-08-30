@@ -171,14 +171,44 @@ GOOGLE_MCP_TEST_FOLDER_ID=15m5wq1pA8Mn0ETxIaLdN0kaUFwnrfzHN LOG_LEVEL=warn \
 
 Baseline to beat: `npm test` at 91 suites / 1295 tests, live at 19 passed / 3 failed of 22.
 
-### Open decision for Elliot
+### #126, investigated and reframed — 2026-08-30
 
-**Does #126 block 3.0?** `listFolderContents` returns empty for ~30 subfolders in a row with no
-error while `getFileInfo` on the same folders succeeds. It is the same tool as the headline #99
-recursive-listing feature in PR #113. My recommendation is yes, block, because shipping recursive
-listing on an enumerator that silently returns nothing is worse than shipping neither. Unverified
-hypothesis: missing `supportsAllDrives` / `includeItemsFromAllDrives` on the `files.list` call.
-Tracked as task #53.
+**The filed claim is not reproducible.** Those subfolders are genuinely empty. Evidence:
+
+1. The symptom reproduces exactly: `{"folders": [], "files": []}` for the three named folders.
+2. But three independent implementations agree they are empty: the depth-1 listing, the batched
+   depth-2 traversal, and a separate third-party Drive client with its own auth token.
+3. **Control passes.** `listFolderContents(depth: 2)` on My Drive returned 15 correct second-level
+   folders with correct paths and `parentIds`. Recursion works.
+4. My shared-drive-flags hypothesis was **wrong**. `dist/tools/drive/listFolderContents.js:71`
+   already passes `supportsAllDrives` and `includeItemsFromAllDrives`, and the recursive path
+   already scopes `driveId`, with a comment citing the Google doc on the `corpora='user'` trap.
+5. The parent is named "Check and MAYBE DELETE" and now holds the Team Meeting 7 and 9 docs
+   directly. The contents were moved out, which is what a recent `modifiedTime` reflects.
+
+**The real defect it surfaced:** depth 1 passes `pageSize: maxResults`, takes one page, ignores
+`nextPageToken`, and returns a bare `{folders, files}`. Proven live: `maxResults: 5` on a folder
+holding hundreds returned exactly 5 with no truncation signal. Depth > 1 already reports
+`truncated` / `truncationReason` / `unreadable` / `apiCalls`; depth 1 reported none of it. That
+inconsistency is the reporter's actual stated harm.
+
+Fixed on `feat/independents` as `b1b23a2`: `nextPageToken` added to the `fields` mask (without it
+Drive never returns the token and the flag would always be false), plus additive `truncated` and
+`truncationReason`, no auto-pagination, corrected `.describe()` text, three unit tests. Verified
+independently: diff read, full suite run.
+
+**Verdict: not a 3.0 blocker as filed.** Reply to #126 with this evidence and narrow it to the
+truncation gap rather than closing outright.
+
+### Flaky test found while verifying the above (task #54)
+
+`tests/packageContents.test.js:11` throws `Exceeded timeout of 5000 ms` on roughly one full-suite
+run in three. Not an assertion failure: it shells out to `npm pack --dry-run --json` with a
+freshly `mkdtemp`'d npm cache, which blows Jest's 5s default under parallel load. Confirmed over
+six runs, 4 green / 2 failed, same test each time. Stray untracked files ruled out as a cause.
+
+This matters for the merge sequence below, which uses `npm test` as the gate after each of five
+merges. A gate that reddens at random trains everyone to re-run until green.
 
 ---
 
