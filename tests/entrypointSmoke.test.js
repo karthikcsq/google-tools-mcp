@@ -40,7 +40,12 @@ function startServer(env) {
     const configRoot = path.join(os.tmpdir(), `google-tools-mcp-entrypoint-${process.pid}-${configSequence}`);
     const child = spawn(process.execPath, [ENTRYPOINT], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, CI: 'true', XDG_CONFIG_HOME: configRoot, GOOGLE_MCP_TRANSPORT: undefined, ...env },
+        // LOG_LEVEL is pinned rather than inherited: every readiness check below
+        // waits on an info-level line from the child, so a developer with
+        // LOG_LEVEL=warn exported in their shell (which docs/live-smoke.md
+        // suggests for a live run) would see these tests time out for a reason
+        // that has nothing to do with the entrypoint.
+        env: { ...process.env, CI: 'true', XDG_CONFIG_HOME: configRoot, GOOGLE_MCP_TRANSPORT: undefined, LOG_LEVEL: 'info', ...env },
     });
     let stderr = '';
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
