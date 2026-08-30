@@ -1247,7 +1247,7 @@ function finalizeFormatting(context) {
     const mergedListRanges = [];
     for (const item of validListItems) {
         const last = mergedListRanges[mergedListRanges.length - 1];
-        if (last && last.bulletPreset === item.bulletPreset && last.nestingLevel === item.nestingLevel && item.startIndex <= last.endIndex + 1) {
+        if (last && last.bulletPreset === item.bulletPreset && item.startIndex <= last.endIndex + 1) {
             last.endIndex = Math.max(last.endIndex, item.endIndex);
         }
         else {
