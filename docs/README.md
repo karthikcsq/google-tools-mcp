@@ -10,6 +10,7 @@ The main README is the user-facing guide: install, configure, tool reference, tr
 - [Shared HTTP mode](http-mode.md) — running one long-lived server for many clients, the 3.0.0 stateless-HTTP breaking change (removed `/sse`, `/messages`, `/ping`, session routes, and `Mcp-Session-Id`), the `readHandle` contract for edits over HTTP, and exact Claude Code / Codex reconfiguration steps.
 - [Remote OAuth tunnel](remote-oauth-tunnel.md) — completing the OAuth flow when the server runs on a machine with no browser.
 - [Startup performance](startup-performance.md) — why the server has to boot inside Claude Code's fixed 30s MCP timeout, measured cost of each launch path, where the time actually goes, and how to measure it yourself before adding a dependency.
+- [Live smoke](live-smoke.md) — running the real tools against a real Google account before a merge: the one-shot `live-call` an agent uses to exercise its own worktree's `dist/` without restarting its MCP client, the scenario runner and its per-issue repros, the safety boundaries the runner enforces in code, and the rule that a PR touching a cluster carries a passing run in its description.
 - [Common workflows](workflows.md) — safe, minimal examples for email, Docs, Sheets, Slides, and Tasks.
 - [Execution plans](plans/README.md) — one root-cause implementation plan per open issue, with suggested ordering and dependencies.
 

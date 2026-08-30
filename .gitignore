@@ -6,6 +6,8 @@ token.json
 CLAUDE.md
 AGENTS.md
 coverage/
+live-smoke-results/
+.env.live-smoke
 
 # Raw Codex agent transcripts. Briefs are tracked; streaming output is not.
 .planning/out-*.md
