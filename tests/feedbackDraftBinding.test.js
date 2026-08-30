@@ -8,11 +8,13 @@
 // never anything recomputed from the publish call's own arguments.
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
 
-// Mock the only external-process boundary feedback's publish path can reach,
-// so a successful "publish" in these tests never spawns gh or a browser.
+// Mock both external-process boundaries feedback's publish path can reach, so
+// a successful "publish" in these tests never spawns gh or opens a browser.
 const runArgvMock = jest.fn();
+const openBrowserMock = jest.fn();
 jest.unstable_mockModule('../dist/shellSafe.js', () => ({
     runArgv: (...args) => runArgvMock(...args),
+    openBrowser: (...args) => openBrowserMock(...args),
     shellQuote: (value) => JSON.stringify(value),
     formatShellCommand: (argv) => argv.join(' '),
 }));
@@ -33,9 +35,9 @@ let feedback;
 beforeEach(async () => {
     jest.resetModules();
     runArgvMock.mockReset();
-    // gh CLI unavailable in the test environment -> every publish falls
-    // through to the browser-fallback branch, which also runs through the
-    // mocked runArgv above instead of a real process.
+    openBrowserMock.mockReset();
+    // gh CLI is unavailable in this test environment, so every successful
+    // publish falls through to the separately mocked browser-fallback boundary.
     runArgvMock.mockRejectedValue(new Error('gh CLI not installed'));
 
     const server = createMockServer();
@@ -58,6 +60,7 @@ describe('feedback draft binding (finding 13)', () => {
         expect(review.markdown).toContain('Description A');
         expect(review.markdown).not.toContain('Recent Activity');
         expect(runArgvMock).not.toHaveBeenCalled();
+        expect(openBrowserMock).not.toHaveBeenCalled();
     });
 
     it('publishing without a draftId is refused and never reaches gh/browser', async () => {
@@ -65,6 +68,7 @@ describe('feedback draft binding (finding 13)', () => {
             type: 'bug', title: 'Title A', description: 'Description A', confirmPublicPost: true,
         })).rejects.toThrow(/no matching reviewed draft/i);
         expect(runArgvMock).not.toHaveBeenCalled();
+        expect(openBrowserMock).not.toHaveBeenCalled();
     });
 
     it('publishing with an unknown/stale draftId is refused and never reaches gh/browser', async () => {
@@ -73,6 +77,7 @@ describe('feedback draft binding (finding 13)', () => {
             confirmPublicPost: true, draftId: 'not-a-real-draft-id',
         })).rejects.toThrow(/no matching reviewed draft/i);
         expect(runArgvMock).not.toHaveBeenCalled();
+        expect(openBrowserMock).not.toHaveBeenCalled();
     });
 
     it('a reviewed draftId cannot be used to publish different text or newly opted-in diagnostics', async () => {
@@ -119,6 +124,7 @@ describe('feedback draft binding (finding 13)', () => {
         const publish = JSON.parse(publishRaw);
         expect(publish.method).toBe('browser-fallback');
         expect(publish.markdown).toBe(review.markdown);
+        expect(openBrowserMock).toHaveBeenCalledWith(publish.url);
 
         // The same draftId cannot be replayed to publish a second time.
         await expect(feedback.execute({
