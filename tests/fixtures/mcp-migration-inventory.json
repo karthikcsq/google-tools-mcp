@@ -64,6 +64,9 @@
         "file": "dist/mcpServer.js"
       },
       {
+        "file": "dist/mime.js"
+      },
+      {
         "file": "dist/readHandles.js"
       },
       {
@@ -185,9 +188,6 @@
       },
       {
         "file": "dist/tools/docs/replaceRangeWithMarkdown.js"
-      },
-      {
-        "file": "dist/tools/drafts.js"
       },
       {
         "file": "dist/tools/drive/addPermission.js"
@@ -316,9 +316,6 @@
         "file": "dist/tools/index.js"
       },
       {
-        "file": "dist/tools/labels.js"
-      },
-      {
         "file": "dist/tools/legacyAliases.js"
       },
       {
@@ -344,12 +341,6 @@
       },
       {
         "file": "dist/tools/maps/searchPlaces.js"
-      },
-      {
-        "file": "dist/tools/messages.js"
-      },
-      {
-        "file": "dist/tools/settings.js"
       },
       {
         "file": "dist/tools/sheets/addConditionalFormatting.js"
@@ -520,9 +511,6 @@
         "file": "dist/tools/tasks/updateTask.js"
       },
       {
-        "file": "dist/tools/threads.js"
-      },
-      {
         "file": "dist/tools/utils/appendMarkdownToGoogleDoc.js"
       },
       {
@@ -612,6 +600,9 @@
         "file": "tests/gmailConsolidation.test.js"
       },
       {
+        "file": "tests/gmailDispatchExtraction.test.js"
+      },
+      {
         "file": "tests/gmailThreads.test.js"
       },
       {
@@ -672,6 +663,9 @@
         "file": "tests/mcpServerFacade.test.js"
       },
       {
+        "file": "tests/mime.test.js"
+      },
+      {
         "file": "tests/modifyText.test.js"
       },
       {
@@ -688,6 +682,9 @@
       },
       {
         "file": "tests/oauthCallbackPort.test.js"
+      },
+      {
+        "file": "tests/packageContents.test.js"
       },
       {
         "file": "tests/packageScripts.test.js"
@@ -940,36 +937,6 @@
         "match": ".addTool({"
       },
       {
-        "file": "dist/tools/drafts.js",
-        "line": 8,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/drafts.js",
-        "line": 48,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/drafts.js",
-        "line": 89,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/drafts.js",
-        "line": 102,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/drafts.js",
-        "line": 119,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/drafts.js",
-        "line": 149,
-        "match": ".addTool({"
-      },
-      {
         "file": "dist/tools/drive/addPermission.js",
         "line": 5,
         "match": ".addTool({"
@@ -1171,52 +1138,52 @@
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 7,
+        "line": 8,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 47,
+        "line": 48,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 164,
+        "line": 140,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 280,
+        "line": 230,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 300,
+        "line": 247,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 343,
+        "line": 287,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 362,
+        "line": 306,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 376,
+        "line": 320,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 402,
+        "line": 346,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/messages.js",
-        "line": 431,
+        "line": 372,
         "match": ".addTool({"
       },
       {
@@ -1251,32 +1218,32 @@
       },
       {
         "file": "dist/tools/gmail/threads.js",
-        "line": 77,
+        "line": 92,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/threads.js",
-        "line": 108,
+        "line": 116,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/threads.js",
-        "line": 177,
+        "line": 176,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/threads.js",
-        "line": 233,
+        "line": 223,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/threads.js",
-        "line": 249,
+        "line": 239,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/gmail/threads.js",
-        "line": 262,
+        "line": 252,
         "match": ".addTool({"
       },
       {
@@ -1297,36 +1264,6 @@
       {
         "file": "dist/tools/index.js",
         "line": 415,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/labels.js",
-        "line": 6,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/labels.js",
-        "line": 25,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/labels.js",
-        "line": 38,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/labels.js",
-        "line": 51,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/labels.js",
-        "line": 62,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/labels.js",
-        "line": 83,
         "match": ".addTool({"
       },
       {
@@ -1367,256 +1304,6 @@
       {
         "file": "dist/tools/maps/searchPlaces.js",
         "line": 5,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 7,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 47,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 163,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 278,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 295,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 321,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 339,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 352,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 365,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 378,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 391,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 409,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/messages.js",
-        "line": 435,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 8,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 19,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 34,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 45,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 60,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 71,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 84,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 95,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 109,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 120,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 141,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 154,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 167,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 180,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 193,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 221,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 234,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 247,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 260,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 273,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 286,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 299,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 312,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 330,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 343,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 356,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 367,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 386,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 405,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 420,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 434,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 448,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 463,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 476,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 492,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 503,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/settings.js",
-        "line": 518,
         "match": ".addTool({"
       },
       {
@@ -1887,41 +1574,6 @@
       {
         "file": "dist/tools/tasks/updateTask.js",
         "line": 6,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/threads.js",
-        "line": 7,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/threads.js",
-        "line": 29,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/threads.js",
-        "line": 60,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/threads.js",
-        "line": 91,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/threads.js",
-        "line": 107,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/threads.js",
-        "line": 120,
-        "match": ".addTool({"
-      },
-      {
-        "file": "dist/tools/threads.js",
-        "line": 133,
         "match": ".addTool({"
       },
       {
