@@ -7,26 +7,20 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as http from 'http';
-import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
+import { getConfigDir, loadConfigFiles } from './config.js';
+import { openBrowser as openBrowserSafely } from './shellSafe.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRootDir = path.resolve(__dirname, '..');
+const cwd = process.cwd();
 const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
-function getConfigDir() {
-    const xdg = process.env.XDG_CONFIG_HOME;
-    const base = xdg || path.join(os.homedir(), '.config');
-    const baseDir = path.join(base, 'google-tools-mcp');
-    const profile = process.env.GOOGLE_MCP_PROFILE;
-    return profile ? path.join(baseDir, profile) : baseDir;
-}
-
 function getTokenPath() {
     return path.join(getConfigDir(), 'token.json');
 }
@@ -62,44 +56,14 @@ const SCOPES = [
 ];
 
 // ---------------------------------------------------------------------------
-// .env file loader
-// ---------------------------------------------------------------------------
-async function loadEnvFile(filePath) {
-    try {
-        const content = await fs.readFile(filePath, 'utf8');
-        for (const line of content.split('\n')) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-            const eqIdx = trimmed.indexOf('=');
-            if (eqIdx === -1) continue;
-            const key = trimmed.slice(0, eqIdx).trim();
-            let value = trimmed.slice(eqIdx + 1).trim();
-            if ((value.startsWith('"') && value.endsWith('"')) ||
-                (value.startsWith("'") && value.endsWith("'"))) {
-                value = value.slice(1, -1);
-            }
-            if (!process.env[key]) {
-                process.env[key] = value;
-            }
-        }
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Client secrets resolution
 // ---------------------------------------------------------------------------
-async function loadClientSecrets() {
+export async function loadClientSecrets() {
+    loadConfigFiles();
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
     }
     const configDir = getConfigDir();
-    const cwd = process.cwd();
-    await loadEnvFile(path.join(configDir, '.env'));
-    await loadEnvFile(path.join(cwd, '.env'));
-    await loadEnvFile(path.join(projectRootDir, '.env'));
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         logger.info('Loaded client credentials from .env file.');
         return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
@@ -199,38 +163,37 @@ async function loadSavedCredentialsIfExist() {
 
 async function saveCredentials(client) {
     const { client_secret, client_id } = await loadClientSecrets();
-    const configDir = getConfigDir();
-    await fs.mkdir(configDir, { recursive: true });
-    const tokenPath = getTokenPath();
-    const payload = JSON.stringify({
-        type: 'authorized_user',
-        client_id,
-        client_secret,
-        refresh_token: client.credentials.refresh_token,
-        scopes: SCOPES,
-    }, null, 2);
-    await fs.writeFile(tokenPath, payload);
+    const tokenPath = await persistTokenCredentials({ clientId: client_id, clientSecret: client_secret,
+        refreshToken: client.credentials.refresh_token });
     logger.info('Token stored to', tokenPath);
 }
 
-// ---------------------------------------------------------------------------
-// Browser opener
-// ---------------------------------------------------------------------------
-function openBrowser(url) {
-    const platform = process.platform;
-    let cmd;
-    if (platform === 'win32') {
-        cmd = `start "" "${url}"`;
-    } else if (platform === 'darwin') {
-        cmd = `open "${url}"`;
-    } else {
-        cmd = `xdg-open "${url}"`;
+export async function persistTokenCredentials({ clientId, clientSecret, refreshToken, scopes = SCOPES }, {
+    configDir = getConfigDir(), mkdir = fs.mkdir, chmod = fs.chmod, open = fs.open,
+    rename = fs.rename, unlink = fs.unlink,
+} = {}) {
+    await mkdir(configDir, { recursive: true, mode: 0o700 });
+    await chmod(configDir, 0o700);
+    const tokenPath = path.join(configDir, 'token.json');
+    const payload = JSON.stringify({
+        type: 'authorized_user', client_id: clientId, client_secret: clientSecret,
+        refresh_token: refreshToken, scopes,
+    }, null, 2);
+    const temporary = `${tokenPath}.tmp-${process.pid}-${Date.now()}`;
+    let handle;
+    try {
+        handle = await open(temporary, 'wx', 0o600);
+        await handle.writeFile(payload, 'utf8');
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        await rename(temporary, tokenPath);
+        await chmod(tokenPath, 0o600);
+    } finally {
+        await handle?.close().catch(() => {});
+        await unlink(temporary).catch(() => {});
     }
-    exec(cmd, (err) => {
-        if (err) {
-            logger.warn('Could not auto-open browser. Please open this URL manually.');
-        }
-    });
+    return tokenPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +227,9 @@ async function authenticate() {
     });
     logger.info('Opening browser for Google authorization...');
     logger.info('If the browser does not open, visit this URL:', authorizeUrl);
-    openBrowser(authorizeUrl);
+    void openBrowserSafely(authorizeUrl).then((opened) => {
+        if (!opened) logger.warn('Could not auto-open browser. Please open this URL manually.');
+    });
     const OAUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
     const code = await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {

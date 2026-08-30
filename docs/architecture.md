@@ -95,9 +95,15 @@ Mind the startup cost: a new top-level import is paid by every user on every lau
 
 ## Auth and config
 
-`dist/auth.js` exports `getConfigDir`, `getTokenPath`, `SCOPES`, `authorize`, and `runAuthFlow`.
+`dist/config.js` exports the snapshotted `getConfigDir`; `dist/auth.js` exports
+`getTokenPath`, `SCOPES`, `authorize`, and `runAuthFlow`.
 
-Everything lives in one directory, `~/.config/google-tools-mcp/`:
+The startup config loader reads the user `.env` first, then `cwd/.env`, then
+the package-root `.env`; defined process environment values, including empty
+strings, win over every file. `GOOGLE_MCP_PROFILE` is read only from the real
+environment, then the resulting config directory remains fixed for the process.
+
+Persistent user files live in `~/.config/google-tools-mcp/`:
 
 - `.env` — `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, written by the setup wizard
 - `token.json` — the refresh token and granted scopes

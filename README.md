@@ -283,7 +283,9 @@ Launching directly (`node dist/index.js`, or the global-install path below) is f
 - **macOS:** `~/Library/Caches/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl`: the `claude-cli-nodejs` cache root and per-server log folder are corroborated by an independent user report ([anthropics/claude-code#18869](https://github.com/anthropics/claude-code/issues/18869)), though not confirmed with this exact server name
 - **Linux:** `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-google/*.jsonl` (same convention as macOS, under the XDG cache dir, and unconfirmed; if it's not there, check wherever `claude doctor` / your Claude Code version reports its cache directory)
 
-Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. google-tools-mcp itself also logs its own startup time on the server's first ready line (e.g. `MCP Server running using stdio in 1123ms`), so if the server logs a fast startup but the client still reports a near-30000ms connection time, the delay is happening before the server process even starts, i.e. in `npx`, not in the server.
+Look for lines like `"Connection timeout triggered after ...ms"` or `"Successfully connected ... in ...ms"`. Claude Code captures the pre-handshake category line, such as `Loaded all 12 categories in 1123ms.`, which measures server startup before the connection completes. The later ready line remains useful when you run the server directly. If startup is fast but the client still reports a near-30000ms connection time, the delay is before the server process starts, commonly in `npx`.
+
+For per-tool failures, see the [diagnostics runbook](docs/troubleshooting-runbook.md). It documents the redacted JSONL records written by default and how `troubleshoot` summarizes them.
 
 **Fix:** Install the package globally and point your MCP client directly at it instead of using `npx`:
 
@@ -448,6 +450,31 @@ If the document contains content markdown can't represent (images, footnotes, a 
 
 These files live in a per-user directory under the OS temp dir (`google-tools-mcp-<user>`), created with restrictive permissions and checked on every write so a planted symlink is refused rather than followed. Set `GOOGLE_MCP_WORKSPACE_DIR` to use a different directory instead.
 
+## Configuration
+
+On startup, configuration is loaded from these locations in order. A value is
+used from the first source that defines it:
+
+| Priority | Source |
+|---|---|
+| 1 | Real process environment, including an explicitly empty value |
+| 2 | User config: `~/.config/google-tools-mcp/.env` (or `$XDG_CONFIG_HOME/google-tools-mcp/.env`) |
+| 3 | `.env` in the server's current working directory |
+| 4 | `.env` at the installed package root |
+
+`GOOGLE_MCP_PROFILE` selects the user config directory and must be set in the
+real process environment. It is ignored if placed in a `.env` file, with a
+startup warning. Missing config files are normal; an unreadable config file
+produces a warning naming its path.
+
+This user-scoped file is particularly useful on Windows. MCP clients launched
+over stdio may not inherit a Windows user environment variable set after the
+client was started, while they can still read this file. Environment variables
+present in the spawned server always take precedence.
+
+Keep `.env` readable only by your user: use `chmod 600` on POSIX. On Windows,
+the default user-profile ACL is sufficient.
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -459,12 +486,13 @@ These files live in a per-user directory under the OS temp dir (`google-tools-mc
 | `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients) and [docs/http-mode.md](docs/http-mode.md)) |
 | `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
 | `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
-| `GOOGLE_MCP_HTTP_TOKEN` | No | Bearer token required by HTTP clients. If unset in HTTP mode, a one-time token is generated and printed to stderr at startup. Set a fixed value to keep it stable across restarts |
-| `GOOGLE_MCP_HTTP_HOST` | No | Bind address for HTTP transport (default `127.0.0.1`, loopback only). Change only if you deliberately need remote access |
+| `GOOGLE_MCP_HTTP_TOKEN` | No | Overrides the private persistent HTTP token. Normally generated once at `<configDir>/http-token` and reused across restarts; never printed |
+| `GOOGLE_MCP_HTTP_HOST` | No | Bind address for HTTP transport (default `127.0.0.1`). Only loopback hosts are accepted until supported TLS deployment exists |
 | `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` | No | Comma-separated extra `Origin` values to accept (loopback origins are always allowed). Requests with a foreign browser `Origin` are otherwise rejected |
 | `GOOGLE_MCP_HTTP_NO_AUTH` | No | Set to `1` to disable the bearer-token requirement. Only safe when you fully trust every process on the machine |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`, or `silent` |
-| `GOOGLE_MCP_LOG_FILE` | No | Set to `1` to log to `~/.config/google-tools-mcp/server.log`, or set to a custom file path |
+| `GOOGLE_MCP_LOG_FILE` | No | Plain log path. Defaults to `~/.config/google-tools-mcp/server.log`; set `0`, `false`, or `off` to disable, or set a custom path |
+| `GOOGLE_MCP_JSONL_FILE` | No | Structured tool-call JSONL path. Defaults to `~/.config/google-tools-mcp/server.jsonl` (or alongside a custom plain log); set `0`, `false`, or `off` to disable |
 | `GOOGLE_MCP_ENABLE_LEGACY_ALIASES` | No | Set to `true` to register the deprecated snake_case tool aliases (off by default; see [Gmail tool migration](#gmail-tool-migration-snake_case--camelcase)) |
 | `GOOGLE_MCP_WORKSPACE_DIR` | No | Overrides where local working copies of Google Docs are saved (see [Local working copies](#local-working-copies)). Defaults to a per-user directory under the OS temp dir |
 | `SERVICE_ACCOUNT_PATH` | No | Path to service account JSON key (alternative to OAuth) |
@@ -483,28 +511,28 @@ By default the server uses **stdio** transport: each MCP client spawns its own
 `google-tools-mcp` process. If you run several clients at once (e.g. many editor
 or agent sessions), that's one Node process per session, each holding memory.
 
-Set `GOOGLE_MCP_TRANSPORT=http` to instead run a **single long-lived server**
-that every client shares over a loopback URL — one process regardless of how
-many clients connect:
+Run setup and choose **One shared loopback server**, or manage it directly with
+the supported lifecycle commands:
 
 ```bash
-# start one shared server (keep it running; e.g. a login item or service)
-GOOGLE_MCP_TRANSPORT=http GOOGLE_MCP_PORT=3939 GOOGLE_MCP_HTTP_TOKEN=your-secret google-tools-mcp
+google-tools-mcp start
+google-tools-mcp status
+google-tools-mcp restart
+google-tools-mcp stop
 ```
 
-Then point each client at the URL, sending the token as a bearer header:
+`start` attaches when the configured profile already has a healthy managed
+instance. `serve` is the foreground command for login items and service
+managers. State is published atomically to `<configDir>/http-server.json`; the
+stable 0600 bearer token lives at `<configDir>/http-token`. An occupied foreign
+port fails with a `GOOGLE_MCP_PORT` remedy instead of silently changing URLs.
 
-```json
-{
-  "mcpServers": {
-    "google": {
-      "type": "http",
-      "url": "http://127.0.0.1:3939/mcp",
-      "headers": { "Authorization": "Bearer your-secret" }
-    }
-  }
-}
-```
+Setup writes the different native client shapes: Claude Code gets an HTTP URL
+and authorization header, while Codex gets the URL plus
+`--bearer-token-env-var GOOGLE_MCP_HTTP_TOKEN`. Setup probes authenticated MCP
+discovery before changing either entry, so it never reports success over a dead
+server. See [the operations reference](docs/http-mode.md) for native manual
+registration and start-at-login examples.
 
 ### Breaking change in 3.0.0: HTTP is stateless
 
@@ -547,31 +575,27 @@ processes or by web pages on your machine:
   `Authorization: Bearer <token>`. One middleware runs ahead of routing, so the
   MCP endpoint, `/healthz`, and the `404` for every other path are all gated
   identically — an unauthenticated caller can't even probe which paths exist.
-  Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a random one-time token is
-  generated and printed to stderr at startup (printed directly, so it still
-  appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`). Requests without a
-  valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables this — only on a
-  fully trusted machine.)
+  A random token is generated once in the private config directory and reused;
+  it is never printed or logged. `GOOGLE_MCP_HTTP_TOKEN` overrides that file.
+  Requests without a valid token get `401`.
 - **Loopback only.** Binds to `127.0.0.1` by default, so the port isn't reachable
-  from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need
-  to. Startup refuses to run (and exits non-zero) if `GOOGLE_MCP_HTTP_NO_AUTH=1` is
-  combined with a non-loopback host such as `0.0.0.0` or `::` — that combination
-  would be a remotely reachable, completely unauthenticated server — and refuses an
-  empty or whitespace-only host as well.
+  from the network. Non-loopback hosts are refused in every token mode until a
+  supported TLS deployment boundary exists. Empty or whitespace-only hosts are
+  refused too.
 - **Origin checked.** Requests carrying a non-loopback browser `Origin` are
   rejected (DNS-rebinding protection). Add trusted origins via
   `GOOGLE_MCP_HTTP_ALLOWED_ORIGINS` if needed.
 
 Notes:
-- The shared server does **not** start or stop with your clients — you manage
-  its lifecycle (start it at login / run it as a service).
+- Use `google-tools-mcp serve` in a login item or user service. Cross-platform
+  examples and failure recovery are in [docs/http-mode.md](docs/http-mode.md).
 - Read-before-edit state is scoped to a single HTTP request and dies with it, so
   clients can't satisfy or clobber each other's guard state. They still share one
   process and one OAuth/token state, so a crash or token expiry affects everyone.
 - One process serves one configured Google profile and one effective service
   principal. Multiple profiles or horizontal scale are out of scope for this
   release.
-- Auth (`google-tools-mcp auth` / `setup`) is unchanged and still uses stdio.
+- stdio remains the setup default; shared HTTP is explicit opt-in.
 
 ## Migrating from gdrive-tools-mcp / gmail-tools-mcp
 
