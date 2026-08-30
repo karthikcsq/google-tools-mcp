@@ -13,6 +13,7 @@ import { buildClientEntry, createClientAdapters, reconcileClientEntry } from './
 import { checkCredentials, inspectToken } from './setupInspect.js';
 import { HTTP_OPERATIONS_DOC_URL, resolveHttpServiceConfig, startHttpService } from './httpLifecycle.js';
 import { ensureHttpToken } from './httpState.js';
+import { openBrowser } from './shellSafe.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -55,19 +56,6 @@ let backupSequence = 0;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function openBrowser(url) {
-    const platform = process.platform;
-    let cmd;
-    if (platform === 'win32') {
-        cmd = `start "" "${url}"`;
-    } else if (platform === 'darwin') {
-        cmd = `open "${url}"`;
-    } else {
-        cmd = `xdg-open "${url}"`;
-    }
-    exec(cmd, () => {});
-}
-
 function hasCli(name) {
     try {
         execSync(`${name} --version`, { stdio: 'ignore' });

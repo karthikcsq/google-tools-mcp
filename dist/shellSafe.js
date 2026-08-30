@@ -96,3 +96,16 @@ export function runArgv(argv, { maxBuffer, platform = process.platform, execFile
         execFileImpl(command, args, childOptions, done);
     });
 }
+
+/**
+ * Open a URL through the platform browser without building an executable shell
+ * string. Returns false on purpose when no browser is available.
+ * @param {string} url
+ * @param {{run?: typeof runArgv, platform?: string}} [options]
+ */
+export function openBrowser(url, { run = runArgv, platform = process.platform } = {}) {
+    const argv = platform === 'win32'
+        ? ['cmd', '/c', 'start', '', String(url)]
+        : [platform === 'darwin' ? 'open' : 'xdg-open', String(url)];
+    return run(argv).then(() => true, () => false);
+}

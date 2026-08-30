@@ -7,7 +7,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { runArgv } from '../shellSafe.js';
+import { openBrowser, runArgv } from '../shellSafe.js';
 import { getTokenPath, SCOPES } from '../auth.js';
 import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
@@ -78,14 +78,7 @@ export async function tryGhCli(title, body, label, { run = runArgv } = {}) {
 // The fallback URL embeds the same caller-supplied title and description. Even
 // though URLSearchParams percent-encodes them, the opener is argv-based so no
 // shell (or cmd.exe `%VAR%` expansion) ever sees the value.
-export function openBrowser(url, { run = runArgv, platform = process.platform } = {}) {
-    const argv = platform === 'win32'
-        // rundll32 opens a URL with the registered protocol handler without a
-        // shell; `start` is a cmd.exe builtin and would need one.
-        ? ['rundll32.exe', 'url.dll,FileProtocolHandler', String(url)]
-        : [platform === 'darwin' ? 'open' : 'xdg-open', String(url)];
-    return run(argv).then(() => true, () => false);
-}
+export { openBrowser } from '../shellSafe.js';
 
 // ---------------------------------------------------------------------------
 // Wrap server.addTool so every tool's execute() auto-retries on invalid_grant

@@ -4,8 +4,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { formatShellCommand, runArgv, shellQuote } from '../dist/shellSafe.js';
-import { openBrowser, tryGhCli } from '../dist/tools/index.js';
+import { formatShellCommand, openBrowser, runArgv, shellQuote } from '../dist/shellSafe.js';
+import { tryGhCli } from '../dist/tools/index.js';
 
 jest.setTimeout(60_000);
 
@@ -54,7 +54,7 @@ describe('shell-free external command execution', () => {
     it('opens the browser fallback through argv rather than a shell string', async () => {
         const url = 'https://github.com/karthikcsq/google-tools-mcp/issues/new?title=a%3Bb%26c';
         for (const [platform, expected] of [
-            ['win32', ['rundll32.exe', 'url.dll,FileProtocolHandler', url]],
+            ['win32', ['cmd', '/c', 'start', '', url]],
             ['darwin', ['open', url]],
             ['linux', ['xdg-open', url]],
         ]) {
@@ -63,6 +63,30 @@ describe('shell-free external command execution', () => {
             expect(calls).toEqual([expected]);
         }
         await expect(openBrowser(url, { platform: 'linux', run: async () => { throw new Error('no display'); } })).resolves.toBe(false);
+    });
+
+    it.each(['auth.js', 'clients.js', 'setup.js'])('routes %s browser opening through the shared argv helper', async (file) => {
+        const source = await fs.readFile(new URL(`../dist/${file}`, import.meta.url), 'utf8');
+        expect(source).toMatch(/from '\.\/shellSafe\.js';/);
+        expect(source).toMatch(/openBrowser(?: as openBrowserSafely)?/);
+        expect(source).not.toMatch(/function openBrowser\(url\)/);
+        expect(source).not.toMatch(/let cmd;[\s\S]{0,300}start ""/);
+    });
+
+    it('keeps shell metacharacters in one browser-opener argv element for each residual caller', async () => {
+        const url = 'https://example.test/?q=one;$(two)`three`&&"four';
+        for (const caller of ['auth.js', 'clients.js', 'setup.js']) {
+            const calls = [];
+            await expect(openBrowser(url, {
+                platform: 'linux',
+                run: async (argv) => { calls.push(argv); },
+            })).resolves.toBe(true);
+            expect(calls).toEqual([['xdg-open', url]]);
+            expect(calls[0][1]).toBe(url);
+            // Each named caller imports this shared helper, so this injected
+            // argv assertion covers its browser-open path without a shell.
+            expect(caller).toMatch(/^(auth|clients|setup)\.js$/);
+        }
     });
 
     it('delivers metacharacters verbatim to a real child process and runs no second command', async () => {

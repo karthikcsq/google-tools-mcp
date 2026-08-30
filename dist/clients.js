@@ -2,9 +2,9 @@
 // Lazy-loads all Google API clients (Docs, Drive, Sheets, Script, Gmail) on first use.
 import { google } from 'googleapis';
 import { publicError, isPublicError, wrapOperationError } from './errors.js';
-import { exec } from 'child_process';
 import { authorize } from './auth.js';
 import { logger } from './logger.js';
+import { openBrowser } from './shellSafe.js';
 
 let authClient = null;
 let googleDocs = null;
@@ -166,15 +166,6 @@ function extractApiEnableInfo(error) {
     }
     if (!api && !enableUrl) return null;
     return { api, projectId, enableUrl };
-}
-
-function openBrowser(url) {
-    const platform = process.platform;
-    let cmd;
-    if (platform === 'win32') cmd = `start "" "${url}"`;
-    else if (platform === 'darwin') cmd = `open "${url}"`;
-    else cmd = `xdg-open "${url}"`;
-    exec(cmd, () => { });
 }
 
 // Track APIs we've auto-opened this session so we don't spam the browser.

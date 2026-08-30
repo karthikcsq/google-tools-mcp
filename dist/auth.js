@@ -7,10 +7,10 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as http from 'http';
-import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 import { getConfigDir, loadConfigFiles } from './config.js';
+import { openBrowser as openBrowserSafely } from './shellSafe.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -197,26 +197,6 @@ export async function persistTokenCredentials({ clientId, clientSecret, refreshT
 }
 
 // ---------------------------------------------------------------------------
-// Browser opener
-// ---------------------------------------------------------------------------
-function openBrowser(url) {
-    const platform = process.platform;
-    let cmd;
-    if (platform === 'win32') {
-        cmd = `start "" "${url}"`;
-    } else if (platform === 'darwin') {
-        cmd = `open "${url}"`;
-    } else {
-        cmd = `xdg-open "${url}"`;
-    }
-    exec(cmd, (err) => {
-        if (err) {
-            logger.warn('Could not auto-open browser. Please open this URL manually.');
-        }
-    });
-}
-
-// ---------------------------------------------------------------------------
 // Interactive OAuth browser flow
 // ---------------------------------------------------------------------------
 function getOAuthCallbackPort() {
@@ -247,7 +227,9 @@ async function authenticate() {
     });
     logger.info('Opening browser for Google authorization...');
     logger.info('If the browser does not open, visit this URL:', authorizeUrl);
-    openBrowser(authorizeUrl);
+    void openBrowserSafely(authorizeUrl).then((opened) => {
+        if (!opened) logger.warn('Could not auto-open browser. Please open this URL manually.');
+    });
     const OAUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
     const code = await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
