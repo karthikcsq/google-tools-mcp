@@ -127,6 +127,61 @@ than `Tests:`.
 
 ---
 
+## PAUSE POINT 2 — 2026-08-29 evening, stopped for usage. Resume here.
+
+Nothing lives only on this machine. No agents running, no monitors running.
+
+**Codex Terra xHigh (`btfwj39t7`) was stopped mid-flight.** It had made uncommitted changes to
+four files; I rescued them as commit `ae23783` on `verify/live-smoke-on-fixes`:
+
+| File | What it was doing |
+|---|---|
+| `dist/googleDocsApiHelpers.js` (+11) | #14, threading default colour into the markdown write path |
+| `dist/markdown-transformer/docsToMarkdown.js` (+50) | #106, list nesting |
+| `tests/defaultTextColor.test.js` (+28) | #14 regression test |
+| `tests/markdownRoundTrip.test.js` (+26) | #106 nested-list case |
+
+**That WIP is UNVERIFIED.** No live run and no `npm test` was run against it. Do not trust it.
+**#108 was never started.**
+
+### To resume
+
+Brief is still valid at `.planning/brief-docs-live-gaps-2.md`. Either resume the Codex session
+with its context intact:
+
+```
+codex exec resume --last -C "C:/Users/2supe/All Coding/Google-Tools-MCP/google-tools-mcp-int" \
+  -s workspace-write -m gpt-5.6-terra -c model_reasoning_effort="xhigh" \
+  -c sandbox_workspace_write.network_access=true \
+  -c sandbox_workspace_write.writable_roots='["C:/Users/2supe/.config/google-tools-mcp"]'
+```
+(session file: `~/.codex/sessions/2026/08/29/rollout-2026-08-29T23-35-44-01a050bc-*.jsonl`)
+
+or dispatch fresh from the brief, telling it `ae23783` is unverified prior work it may keep,
+discard, or redo.
+
+First thing either way, before writing any code, is to establish where the WIP actually stands:
+
+```
+cd google-tools-mcp-int
+npm test
+GOOGLE_MCP_TEST_FOLDER_ID=15m5wq1pA8Mn0ETxIaLdN0kaUFwnrfzHN LOG_LEVEL=warn \
+  node scripts/live-smoke.mjs issue-14-explicit-font-color issue-106-mirror-rewritten-list-structure issue-108-stale-guard-unrelated-change
+```
+
+Baseline to beat: `npm test` at 91 suites / 1295 tests, live at 19 passed / 3 failed of 22.
+
+### Open decision for Elliot
+
+**Does #126 block 3.0?** `listFolderContents` returns empty for ~30 subfolders in a row with no
+error while `getFileInfo` on the same folders succeeds. It is the same tool as the headline #99
+recursive-listing feature in PR #113. My recommendation is yes, block, because shipping recursive
+listing on an enumerator that silently returns nothing is worse than shipping neither. Unverified
+hypothesis: missing `supportsAllDrives` / `includeItemsFromAllDrives` on the `files.list` call.
+Tracked as task #53.
+
+---
+
 ## STATUS — 2026-08-30
 
 Everything below is committed and pushed. Nothing lives only on this machine.
