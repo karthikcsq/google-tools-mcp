@@ -98,9 +98,11 @@ describe('replaceDocumentWithMarkdown workspace mirror ordering', () => {
         const server = createServer();
         register(server);
 
-        // The tool still rejects, but the arbitrary caught text is now an
-        // internal cause rather than a caller-visible message: the caller gets
-        // the generic operation template only.
+        // The tool still rejects. Since issue #88 the message is no longer the
+        // generic operation template: a failure AFTER the delete has landed
+        // leaves a partial document, and saying "the operation failed" invites
+        // the caller to believe nothing changed. The arbitrary caught text is
+        // still an internal cause and must not appear.
         let thrown;
         try {
             await server.getTool('replaceDocumentWithMarkdown').execute(
@@ -111,7 +113,11 @@ describe('replaceDocumentWithMarkdown workspace mirror ordering', () => {
             thrown = error;
         }
         expect(thrown).toBeDefined();
-        expect(thrown.message).toBe('The apply markdown operation failed.');
+        expect(thrown.message).toContain('PARTIAL');
+        // The exact markdown that never landed is recoverable from a NEW file,
+        // named in the message — never from the shared mirror, which must keep
+        // holding the last content that actually landed.
+        expect(thrown.message).toMatch(/\.recovery-[\dTZ-]+\.md/);
         expect(thrown.message).not.toContain('simulated insert failure');
 
         // The Docs mutation never succeeded, so the local mirror must still

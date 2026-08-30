@@ -5,15 +5,17 @@ import * as fs from 'fs/promises';
 import { getWorkspacePath } from '../dist/workspace.js';
 
 const documentsGet = jest.fn();
+let driveModifiedTime = null;
 
 jest.unstable_mockModule('../dist/clients.js', () => ({
     getDocsClient: async () => ({ documents: { get: documentsGet } }),
     getDriveClient: async () => ({
-        files: { get: async () => ({ data: { modifiedTime: null } }) },
+        files: { get: async () => ({ data: { modifiedTime: driveModifiedTime } }) },
     }),
 }));
 
 const { register } = await import('../dist/tools/docs/readGoogleDoc.js');
+const { getLastReadContent, guardMutation } = await import('../dist/readTracker.js');
 
 function createServer() {
     const tools = new Map();
@@ -41,6 +43,28 @@ afterEach(async () => {
 });
 
 describe('readDocument local workspace + fidelity warnings', () => {
+    it('allows a title-only modifiedTime change after a text read because the body is unchanged (#108)', async () => {
+        const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        driveModifiedTime = '2026-08-29T10:00:00.000Z';
+        documentsGet.mockResolvedValueOnce(
+            docWithBody([{ paragraph: { elements: [{ textRun: { content: 'Doors open at six.\n' } }] } }])
+        );
+
+        const server = createServer();
+        register(server);
+        await server.getTool('readDocument').execute(
+            { documentId, format: 'text', diffFromLastRead: false },
+            { log }
+        );
+
+        expect(getLastReadContent(documentId)).toBe('Doors open at six.');
+        driveModifiedTime = '2026-08-29T10:01:00.000Z';
+        await expect(guardMutation(documentId, {
+            contentFetcher: async () => ({ content: 'Doors open at six.', revisionId: 'body-unchanged-title-renamed' }),
+        })).resolves.toBeUndefined();
+        driveModifiedTime = null;
+    });
+
     it('saves the markdown to a local workspace file and advises pushing it back', async () => {
         const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         documentsGet.mockResolvedValueOnce(
@@ -163,5 +187,121 @@ describe('readDocument local workspace + fidelity warnings', () => {
         expect(result2).toContain(getWorkspacePath(documentId, 'tab-2').replace(/\\/g, '/'));
         expect(await fs.readFile(getWorkspacePath(documentId, 'tab-1'), 'utf-8')).toBe('Tab one content');
         expect(await fs.readFile(getWorkspacePath(documentId, 'tab-2'), 'utf-8')).toBe('Tab two content');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #96: plainMarkdown read option.
+//
+// readDocument's markdown output defaulted to "rich" (HTML-extension) markdown
+// with no way to suppress it, unlike readDriveFile which already forwarded a
+// plainMarkdown flag to the same converter. The working copy on disk (and the
+// diff/conflict tracker) must always stay rich even when the flag is set —
+// otherwise a later replaceDocumentWithMarkdown push from the working copy
+// would silently drop the document's existing colors.
+// ---------------------------------------------------------------------------
+describe('readDocument plainMarkdown option (#96)', () => {
+    function coloredDoc() {
+        return docWithBody([
+            {
+                paragraph: {
+                    elements: [
+                        {
+                            textRun: {
+                                content: 'Colored text\n',
+                                textStyle: { foregroundColor: { color: { rgbColor: { red: 1, green: 0, blue: 0 } } } },
+                            },
+                        },
+                    ],
+                },
+            },
+        ]);
+    }
+
+    it('defaults to rich markdown in both the response and the working copy', async () => {
+        const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        documentsGet.mockResolvedValueOnce(coloredDoc());
+
+        const server = createServer();
+        register(server);
+        const localPath = getWorkspacePath(documentId);
+        cleanupPaths.push(localPath);
+
+        const result = await server.getTool('readDocument').execute(
+            { documentId, format: 'markdown', diffFromLastRead: false },
+            { log }
+        );
+
+        expect(result).toContain('<span style=');
+        const onDisk = await fs.readFile(localPath, 'utf-8');
+        expect(onDisk).toContain('<span style=');
+    });
+
+    it('plainMarkdown: true strips rich extensions from the response but keeps the working copy rich', async () => {
+        const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        documentsGet.mockResolvedValueOnce(coloredDoc());
+
+        const server = createServer();
+        register(server);
+        const localPath = getWorkspacePath(documentId);
+        cleanupPaths.push(localPath);
+
+        const result = await server.getTool('readDocument').execute(
+            { documentId, format: 'markdown', diffFromLastRead: false, plainMarkdown: true },
+            { log }
+        );
+
+        expect(result).not.toContain('<span style=');
+        expect(result).toContain('Colored text');
+        const onDisk = await fs.readFile(localPath, 'utf-8');
+        expect(onDisk).toContain('<span style=');
+    });
+
+    it('plainMarkdown: true truncates and reports totalLength against the plain (shorter) text, not the rich text', async () => {
+        const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        documentsGet.mockResolvedValueOnce(coloredDoc());
+
+        const server = createServer();
+        register(server);
+        cleanupPaths.push(getWorkspacePath(documentId));
+
+        // Longer than the plain text ("Colored text" = 12 chars) but shorter
+        // than the rich text (which adds a <span style="color:#ff0000">...</span> wrapper).
+        const maxLength = 20;
+        const result = await server.getTool('readDocument').execute(
+            { documentId, format: 'markdown', diffFromLastRead: false, plainMarkdown: true, maxLength },
+            { log }
+        );
+
+        expect(result).not.toContain('truncated');
+        expect(result).toContain('Colored text');
+        expect(result).not.toContain('<span style=');
+    });
+
+    it('ignores plainMarkdown for diffFromLastRead and notes it in the response', async () => {
+        const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        cleanupPaths.push(getWorkspacePath(documentId));
+
+        const server = createServer();
+        register(server);
+
+        documentsGet.mockResolvedValueOnce(coloredDoc());
+        await server.getTool('readDocument').execute(
+            { documentId, format: 'markdown', diffFromLastRead: false },
+            { log }
+        );
+
+        documentsGet.mockResolvedValueOnce(
+            docWithBody([{ paragraph: { elements: [{ textRun: { content: 'Colored text changed\n' } }] } }])
+        );
+        const diffResult = await server.getTool('readDocument').execute(
+            { documentId, format: 'markdown', diffFromLastRead: true, plainMarkdown: true },
+            { log }
+        );
+
+        expect(diffResult).toContain('plainMarkdown was ignored');
+        // The diff itself is derived from the rich snapshots (the removed line
+        // still carries the rich HTML span), not a plain-vs-rich comparison.
+        expect(diffResult).toContain('<span style=');
     });
 });

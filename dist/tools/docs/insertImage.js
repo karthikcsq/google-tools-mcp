@@ -74,17 +74,35 @@ export function register(server) {
                     catch (folderError) {
                         log.warn(`Could not determine document's parent folder, using Drive root: ${folderError}`);
                     }
-                    const driveFileId = await GDocsHelpers.uploadImageToDrive(drive, args.localImagePath, parentFolderId, true // skipPublicSharing
-                    );
-                    log.info(`[AppsScript] Inserting image via marker at index ${args.index} (fileId: ${driveFileId})`);
+                    // Acquire the lease BEFORE any Drive upload: a rejected mutation
+                    // (unauthorized/never-read document, expired handle, etc.) must
+                    // never leave a file behind in the user's Drive (#87 gap).
                     const appsScriptLease = await beginDocsMutation(args.documentId, {
                         tabId: args.tabId ?? null,
                         readHandle: args.readHandle,
                     });
+                    let driveFileId;
+                    try {
+                        driveFileId = await GDocsHelpers.uploadImageToDrive(drive, args.localImagePath, parentFolderId, true // skipPublicSharing
+                        );
+                    }
+                    catch (uploadError) {
+                        // Nothing was written to the document, so this is not a
+                        // failed mutation — fail() would terminalize the handle
+                        // as INVALID. abort() returns the record to active so a
+                        // corrected retry can reuse the same handle.
+                        await appsScriptLease.abort();
+                        throw uploadError;
+                    }
+                    log.info(`[AppsScript] Inserting image via marker at index ${args.index} (fileId: ${driveFileId})`);
                     try {
                         await GDocsHelpers.insertImageViaAppsScript(docs, scriptClient, appsScriptDeploymentId, args.documentId, driveFileId, args.index, args.tabId, appsScriptLease.writeControlFor());
                     }
                     catch (appsScriptError) {
+                        // The upload already succeeded at this point; existing
+                        // behavior is to leave the uploaded Drive file in place
+                        // (no delete-on-write-failure cleanup exists for this tool)
+                        // and only release the lease.
                         await appsScriptLease.fail();
                         throw appsScriptError;
                     }
@@ -101,6 +119,13 @@ export function register(server) {
                     return `${docUrl}\nSuccessfully inserted local image at index ${args.index} via Apps Script${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
                 }
                 // --- Standard path: public URL insertion via Docs API ---
+                // Acquire the lease BEFORE any Drive upload: a rejected mutation
+                // (unauthorized/never-read document, expired handle, etc.) must
+                // never leave a file behind in the user's Drive (#87 gap).
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: args.tabId ?? null,
+                    readHandle: args.readHandle,
+                });
                 let resolvedUrl;
                 if (args.localImagePath) {
                     const drive = await getDriveClient();
@@ -119,17 +144,23 @@ export function register(server) {
                     catch (folderError) {
                         log.warn(`Could not determine document's parent folder, using Drive root: ${folderError}`);
                     }
-                    resolvedUrl = await GDocsHelpers.uploadImageToDrive(drive, args.localImagePath, parentFolderId);
+                    try {
+                        resolvedUrl = await GDocsHelpers.uploadImageToDrive(drive, args.localImagePath, parentFolderId);
+                    }
+                    catch (uploadError) {
+                        // Nothing was written to the document, so this is not a
+                        // failed mutation — fail() would terminalize the handle
+                        // as INVALID. abort() returns the record to active so a
+                        // corrected retry can reuse the same handle.
+                        await lease.abort();
+                        throw uploadError;
+                    }
                     log.info(`Image uploaded successfully, URL: ${resolvedUrl}`);
                 }
                 else {
                     resolvedUrl = args.imageUrl;
                     log.info(`Inserting image from URL ${resolvedUrl} at index ${args.index} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 }
-                const lease = await beginDocsMutation(args.documentId, {
-                    tabId: args.tabId ?? null,
-                    readHandle: args.readHandle,
-                });
                 await lease.write(
                     (writeControl) => GDocsHelpers.insertInlineImage(docs, args.documentId, resolvedUrl, args.index, args.width, args.height, args.tabId, writeControl),
                     (response) => response?.writeControl?.requiredRevisionId,
