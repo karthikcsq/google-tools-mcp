@@ -827,8 +827,18 @@ export async function getDefaultTextColor(docs, documentId) {
             fields: 'namedStyles',
         });
         const normalTextStyle = styleRes.data.namedStyles?.styles?.find((s) => s.namedStyleType === 'NORMAL_TEXT');
-        const rgbColor = normalTextStyle?.textStyle?.foregroundColor?.color?.rgbColor;
-        return { color: rgbColor ?? null, error: null };
+        const foregroundColor = normalTextStyle?.textStyle?.foregroundColor;
+        const rgbColor = foregroundColor?.color?.rgbColor;
+        if (rgbColor) return { color: rgbColor, error: null };
+        // Google omits the NORMAL_TEXT foregroundColor entirely for its stock
+        // black default. That still means the effective default is black; use
+        // it explicitly so a markdown rebuild does not create colorless runs.
+        // A named theme color remains inherit-only because pinning it to a
+        // concrete RGB value would sever the document from its theme.
+        if (!foregroundColor?.color) {
+            return { color: { red: 0, green: 0, blue: 0 }, error: null };
+        }
+        return { color: null, error: null };
     }
     catch (error) {
         return { color: null, error: error instanceof Error ? error : new Error(String(error)) };

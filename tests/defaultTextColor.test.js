@@ -28,6 +28,7 @@ const { register: registerFindAndReplace } = await import('../dist/tools/docs/fi
 const { register: registerInsertTableWithData } = await import('../dist/tools/docs/insertTableWithData.js');
 const { register: registerCreateDocument } = await import('../dist/tools/drive/createDocument.js');
 const { register: registerCreateFromTemplate } = await import('../dist/tools/drive/createFromTemplate.js');
+const { insertMarkdown } = await import('../dist/markdown-transformer/index.js');
 
 function createMockServer() {
     const tools = new Map();
@@ -40,11 +41,14 @@ const noopLog = { info() {}, error() {}, warn() {}, debug() {} };
 // Google Docs template shape.
 const DEFAULT_RGB = { red: 0.1, green: 0.2, blue: 0.3 };
 function namedStylesResponse(rgb = DEFAULT_RGB) {
+    const textStyle = rgb === 'theme'
+        ? { foregroundColor: { color: { themeColor: 'TEXT1' } } }
+        : (rgb ? { foregroundColor: { color: { rgbColor: rgb } } } : {});
     return {
         data: {
             namedStyles: {
                 styles: [
-                    { namedStyleType: 'NORMAL_TEXT', textStyle: rgb ? { foregroundColor: { color: { rgbColor: rgb } } } : {} },
+                    { namedStyleType: 'NORMAL_TEXT', textStyle },
                 ],
             },
         },
@@ -130,7 +134,17 @@ describe('modifyText — explicit default text color (issue #14)', () => {
 
     it('theme-color-based NORMAL_TEXT (no rgbColor): inserts inherit-only, no error', async () => {
         const documentId = `modify-theme-${Date.now()}`;
-        const { batchUpdate } = setUpDocsMock({ rgb: null });
+        const documentsGet = jest.fn(async ({ fields } = {}) => {
+            if (fields === 'namedStyles') {
+                return { data: { namedStyles: { styles: [{
+                    namedStyleType: 'NORMAL_TEXT',
+                    textStyle: { foregroundColor: { color: { themeColor: 'TEXT1' } } },
+                }] } } };
+            }
+            return { data: {} };
+        });
+        const batchUpdate = jest.fn(async ({ requestBody }) => ({ data: { writeControl: requestBody.writeControl, requests: requestBody.requests } }));
+        fakeDocs = { documents: { get: documentsGet, batchUpdate } };
         trackRead(documentId, null, null, 'rev-read');
 
         const server = createMockServer();
@@ -186,6 +200,34 @@ describe('modifyText — explicit default text color (issue #14)', () => {
     });
 });
 
+describe('markdown insertion — implicit black default text color (issue #14)', () => {
+    it('paints stock-document markdown text explicitly when NORMAL_TEXT omits foregroundColor', async () => {
+        const batchUpdate = jest.fn(async ({ requestBody }) => ({ data: { writeControl: requestBody.writeControl } }));
+        const docs = {
+            documents: {
+                get: jest.fn(async ({ fields } = {}) => {
+                    if (fields === 'namedStyles') {
+                        // Real stock Docs omit the implicit black default rather
+                        // than echoing rgbColor, which hid this gap in the
+                        // old mocked-RGB-only tests.
+                        return { data: { namedStyles: { styles: [{ namedStyleType: 'NORMAL_TEXT', textStyle: {} }] } } };
+                    }
+                    return { data: {} };
+                }),
+                batchUpdate,
+            },
+        };
+
+        await insertMarkdown(docs, 'markdown-default-black', '# Title\n\nParagraph\n\n- Bullet');
+
+        const requests = batchUpdate.mock.calls.flatMap((call) => call[0].requestBody.requests);
+        const colorRequests = colorRequestsIn(requests);
+        expect(colorRequests).toHaveLength(1);
+        expect(colorRequests[0].updateTextStyle.textStyle.foregroundColor.color.rgbColor)
+            .toEqual({ red: 0, green: 0, blue: 0 });
+    });
+});
+
 describe('appendText — explicit default text color (issue #14)', () => {
     function setUpDocsMock({ rgb = DEFAULT_RGB } = {}) {
         const documentsGet = jest.fn(async ({ fields } = {}) => {
@@ -212,7 +254,7 @@ describe('appendText — explicit default text color (issue #14)', () => {
 
     it('no color request when NORMAL_TEXT has no rgb default', async () => {
         const documentId = `append-theme-${Date.now()}`;
-        const { batchUpdate } = setUpDocsMock({ rgb: null });
+        const { batchUpdate } = setUpDocsMock({ rgb: 'theme' });
         trackRead(documentId, null, null, 'rev-read');
 
         const server = createMockServer();
