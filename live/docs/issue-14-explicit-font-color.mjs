@@ -37,6 +37,6 @@ export async function run(ctx) {
     ctx.assert(
         uncolored.length === 0,
         uncolored.length + ' of ' + runs.length + ' text run(s) written by replaceDocumentWithMarkdown carry no explicit '
-        + 'foregroundColor (e.g. "' + uncolored[0].text + '"), so Google Docs treats them as "no color set" (#14).',
+        + 'foregroundColor (e.g. "' + uncolored[0]?.text + '"), so Google Docs treats them as "no color set" (#14).',
     );
 }
