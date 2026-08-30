@@ -11,12 +11,16 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 jest.setTimeout(60_000);
 
 const ENTRYPOINT = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 const PROTOCOL_VERSION = '2026-07-28';
+let configSequence = 0;
 
 const modernBody = (id, method, params = {}) => JSON.stringify({
     jsonrpc: '2.0',
@@ -32,6 +36,8 @@ const modernBody = (id, method, params = {}) => JSON.stringify({
 });
 
 function startServer(env) {
+    configSequence += 1;
+    const configRoot = path.join(os.tmpdir(), `google-tools-mcp-entrypoint-${process.pid}-${configSequence}`);
     const child = spawn(process.execPath, [ENTRYPOINT], {
         stdio: ['pipe', 'pipe', 'pipe'],
         // LOG_LEVEL is pinned rather than inherited: every readiness check below
@@ -39,7 +45,7 @@ function startServer(env) {
         // LOG_LEVEL=warn exported in their shell (which docs/live-smoke.md
         // suggests for a live run) would see these tests time out for a reason
         // that has nothing to do with the entrypoint.
-        env: { ...process.env, CI: 'true', GOOGLE_MCP_TRANSPORT: undefined, LOG_LEVEL: 'info', ...env },
+        env: { ...process.env, CI: 'true', XDG_CONFIG_HOME: configRoot, GOOGLE_MCP_TRANSPORT: undefined, LOG_LEVEL: 'info', ...env },
     });
     let stderr = '';
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -64,7 +70,7 @@ function startServer(env) {
                 exitedPromise = new Promise((resolve, reject) => {
                     child.once('error', reject);
                     child.once('exit', resolve);
-                });
+                }).finally(() => fs.rm(configRoot, { recursive: true, force: true }));
             }
             return exitedPromise;
         },
@@ -152,7 +158,7 @@ describe('dist/index.js entrypoint', () => {
 
             server.child.stdin.write(`${modernBody(2, 'tools/list')}\n`);
             const list = await nextMessage(2);
-            expect(list.result.tools).toHaveLength(156);
+            expect(list.result.tools).toHaveLength(160);
             // Deterministic registration order, which is what makes the catalog
             // cacheable by a client.
             const names = list.result.tools.map(({ name }) => name);
@@ -199,7 +205,7 @@ describe('dist/index.js entrypoint', () => {
             });
             expect(response.status).toBe(200);
             expect(response.headers.get('mcp-session-id')).toBeNull();
-            expect((await response.json()).result.tools).toHaveLength(156);
+            expect((await response.json()).result.tools).toHaveLength(160);
 
             // The startup banner names the breaking change, and never prints the
             // configured token.

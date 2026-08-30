@@ -108,6 +108,14 @@ describe('local error boundary', () => {
 });
 
 describe('diagnostic redaction', () => {
+    it('redacts only the home prefix with separator boundaries', () => {
+        const home = process.env.USERPROFILE || process.env.HOME;
+        if (!home) return;
+        expect(redactDiagnostic(home)).toBe('~');
+        expect(redactDiagnostic(`${home}\\logs\\server.log`)).toBe('~\\logs\\server.log');
+        expect(redactDiagnostic(`path=${home}/logs/server.log`)).toContain('path=~/logs/server.log');
+        expect(redactDiagnostic(`${home}ish\\file`)).toContain(`${home}ish`);
+    });
     it('redacts nested gaxios-shaped credentials, configured secret values, and error chains without mutating them', () => {
         process.env.GOOGLE_CLIENT_SECRET = secretValues[0];
         const source = new Error(

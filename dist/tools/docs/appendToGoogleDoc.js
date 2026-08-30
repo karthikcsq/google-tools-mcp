@@ -11,7 +11,8 @@ export function register(server) {
     server.addTool({
         name: 'appendText',
         description: 'Appends plain text to the end of a document. For formatted content, use appendMarkdown instead. ' +
-            'To edit existing content, use modifyText (single-location) or replaceDocumentWithMarkdown (section/full rewrite).',
+            'To edit existing content, use modifyText (single-location) or replaceDocumentWithMarkdown (section/full rewrite). ' +
+            "Appended text carries the document's default text color explicitly, when the document defines one.",
         parameters: DocumentIdParameter.extend({
             text: z.string().optional().describe('The plain text to append to the end of the document. For content longer than ~2000 characters, prefer writing to a local file first and passing filePath instead.'),
             filePath: z.string().optional().describe('Path to a local text file to use as content. Takes precedence over the text parameter.'),
@@ -95,11 +96,21 @@ throw wrapOperationError('read local text file', err, { code: err?.code });
                 if (args.tabId) {
                     location.tabId = args.tabId;
                 }
-                const request = {
-                    insertText: { location, text: textToInsert },
-                };
+                const requests = [{ insertText: { location, text: textToInsert } }];
+                // Paint the freshly-appended range with the document's default
+                // foreground color so it carries an explicit color instead of
+                // leaving it undefined (issue #14). appendText always inserts
+                // fresh content, so this always applies when a default resolves.
+                const { color: defaultColor, error: defaultColorError } = await GDocsHelpers.getDefaultTextColor(docs, args.documentId);
+                if (defaultColorError) {
+                    log.warn(`appendText: could not fetch document default text color for ${args.documentId}: ${defaultColorError.message}`);
+                }
+                const defaultColorRequest = GDocsHelpers.buildDefaultColorStyleRequest(endIndex, endIndex + textToInsert.length, defaultColor, args.tabId);
+                if (defaultColorRequest) {
+                    requests.push(defaultColorRequest);
+                }
                 await lease.write(
-                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], writeControl),
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests, writeControl),
                     (response) => response?.writeControl?.requiredRevisionId,
                 );
                 log.info(`Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);

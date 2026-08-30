@@ -1,7 +1,6 @@
 import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { z } from 'zod';
-import { google } from 'googleapis';
-import { getDocsClient, getAuthClient } from '../../../clients.js';
+import { getDocsClient, getDriveClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
 export function register(server) {
     server.addTool({
@@ -25,7 +24,10 @@ export function register(server) {
                 // First, get the text content that will be quoted
                 const docsClient = await getDocsClient();
                 const doc = await docsClient.documents.get({ documentId: args.documentId });
-                // Extract the quoted text from the document
+                // Extract the quoted text from the document. Only walks
+                // top-level paragraph text runs; text inside tables or
+                // document tabs is not covered. Out of scope for #86 — see
+                // #88's structural work.
                 let quotedText = '';
                 const content = doc.data.body?.content || [];
                 for (const element of content) {
@@ -47,8 +49,7 @@ export function register(server) {
                     }
                 }
                 // Use Drive API v3 for comments
-                const authClient = await getAuthClient();
-                const drive = google.drive({ version: 'v3', auth: authClient });
+                const drive = await getDriveClient();
                 const response = await drive.comments.create({
                     fileId: args.documentId,
                     fields: 'id,content,quotedFileContent,author,createdTime,resolved',

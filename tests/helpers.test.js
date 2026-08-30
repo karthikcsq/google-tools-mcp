@@ -4,7 +4,6 @@ import {
     processMessagePart,
     findHeader,
     formatEmailList,
-    wrapTextBody,
     foldHeader,
     isHtmlBody,
     constructRawMessage,
@@ -12,6 +11,8 @@ import {
     getNestedHistory,
     stripQuotedHistory,
     formatMessageClean,
+    formatMessageMetadata,
+    formatMessageForOutput,
     capArrayByResponseBudget,
     capToResponseBudget,
     makeOmissionStub,
@@ -51,6 +52,59 @@ describe('header folding', () => {
         expect(foldHeader('Subject', 'Short subject')).toBe('Subject: Short subject');
     });
 
+    it('folds a 1000-character thread Subject within the RFC 5322 hard line limit', async () => {
+        const gmail = {
+            users: {
+                threads: {
+                    get: async () => ({
+                        data: {
+                            messages: [{
+                                payload: {
+                                    headers: [{ name: 'Subject', value: 'A'.repeat(1000) }],
+                                },
+                            }],
+                        },
+                    }),
+                },
+            },
+        };
+        const raw = await constructRawMessage(gmail, { threadId: 'thread-1', body: 'Reply' });
+        const headerBlock = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
+        const subjectLines = headerBlock.split('\r\n').filter(line => line === 'Subject:' || line.startsWith('Subject:') || line.startsWith(' '));
+
+        expect(subjectLines.length).toBeGreaterThan(1);
+        expect(subjectLines.every(line => Buffer.byteLength(line, 'utf8') <= 998)).toBe(true);
+    });
+
+    it('preserves literal message identifiers in thread In-Reply-To and References headers', async () => {
+        const messageId = '<reply@example.com>';
+        const previousId = '<previous@example.com>';
+        const gmail = {
+            users: {
+                threads: {
+                    get: async () => ({
+                        data: {
+                            messages: [{
+                                payload: {
+                                    headers: [
+                                        { name: 'Message-ID', value: messageId },
+                                        { name: 'References', value: previousId },
+                                    ],
+                                },
+                            }],
+                        },
+                    }),
+                },
+            },
+        };
+        const raw = await constructRawMessage(gmail, { threadId: 'thread-1', body: 'Reply' });
+        const headerBlock = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
+
+        expect(headerBlock).toContain(`In-Reply-To: ${messageId}`);
+        expect(headerBlock).toContain(`References: ${previousId} ${messageId}`);
+        expect(headerBlock).not.toContain('=3C');
+    });
+
     it('neutralizes embedded line breaks, including a lone CR', () => {
         expect(foldHeader('Subject', 'Hello\rBcc: evil@x.com')).toBe('Subject: Hello Bcc: evil@x.com');
         expect(foldHeader('Subject', 'Hello\r\n  world\nagain')).toBe('Subject: Hello world again');
@@ -85,23 +139,33 @@ describe('header folding', () => {
     // flatly illegal for Message-ID/In-Reply-To/References. The only
     // RFC-legal move for a wordless, over-length token is to leave it whole
     // on one (possibly >998-octet) line rather than mutate it.
-    it('leaves an unbreakable over-length token whole instead of injecting a corrupting fold', () => {
-        // 300 emoji, no whitespace -> ~1200 octets on one token. There is no
-        // FWS-legal place to fold inside it, so it must survive as one line.
+    it('leaves an unbreakable over-length token whole instead of injecting a corrupting fold, but the composed path never produces one (issue #73)', async () => {
+        // 300 emoji, no whitespace -> ~1200 octets on one token. foldHeader is
+        // the LAST stage and, on its own, still has no FWS-legal place to fold
+        // inside such a token, so it must survive as one line rather than be
+        // mutated. That contract is unchanged.
         const run = '😀'.repeat(300);
         const folded = foldHeader('Subject', run);
 
-        // No fold was injected: exactly one line, and it legitimately
-        // exceeds the 998-octet hard limit because it cannot be split.
         expect(folded.split('\r\n')).toHaveLength(1);
         expect(Buffer.byteLength(folded, 'utf8')).toBeGreaterThan(998);
-
         // True RFC unfolding (remove CRLF only - there isn't one here, so
         // this is a no-op) reproduces the original byte-for-byte, with no
         // manual space-stripping required.
         expect(folded).toBe(`Subject: ${run}`);
-        const decoded = Buffer.from(folded, 'utf8').toString('utf8');
-        expect(decoded).not.toContain('�');
+        expect(Buffer.from(folded, 'utf8').toString('utf8')).not.toContain('�');
+
+        // The inverse is now what actually ships: nothing reaches foldHeader
+        // un-encoded any more, so the same subject sent through the real
+        // builder produces only legal lines. This is the assertion that
+        // replaced the old "our output exceeds 998 octets" expectation.
+        const raw = await constructRawMessage(null, { to: ['a@b.com'], subject: run, body: 'x' });
+        const headerBlock = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
+        const subjectLines = headerBlock.split('\r\n');
+        expect(subjectLines.length).toBeGreaterThan(1);
+        for (const line of subjectLines) {
+            expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(78);
+        }
     });
 
     it('does not split a multi-byte character straddling the old hard limit', () => {
@@ -214,32 +278,6 @@ describe('formatEmailList', () => {
     it('returns empty array for null/undefined', () => {
         expect(formatEmailList(null)).toEqual([]);
         expect(formatEmailList(undefined)).toEqual([]);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// wrapTextBody
-// ---------------------------------------------------------------------------
-describe('wrapTextBody', () => {
-    it('does not wrap lines <= 76 chars', () => {
-        const short = 'Hello, world!';
-        expect(wrapTextBody(short)).toBe(short);
-    });
-
-    it('wraps long lines at 76-char boundaries', () => {
-        const long = 'A'.repeat(200);
-        const wrapped = wrapTextBody(long);
-        // Should contain soft line breaks
-        expect(wrapped).toContain('=\n');
-        // First chunk should be 76 chars
-        const firstChunk = wrapped.split('=\n')[0];
-        expect(firstChunk.length).toBe(76);
-    });
-
-    it('preserves existing newlines', () => {
-        const input = 'line1\nline2\nline3';
-        const result = wrapTextBody(input);
-        expect(result.split('\n').length).toBe(3);
     });
 });
 
@@ -852,5 +890,63 @@ describe('getNestedHistory', () => {
     it('returns empty for non-text parts with no sub-parts', () => {
         const part = { mimeType: 'application/octet-stream' };
         expect(getNestedHistory(part)).toBe('');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// formatMessageForOutput — the shared clean/metadata/full dispatch used by
+// getMessage, listMessages, batchGetMessages, getThread, listThreads, and
+// batchGetThreads (issue #74). Pure function: given a message and the tool
+// params object, it must reproduce exactly what each of those six call sites
+// used to inline separately.
+// ---------------------------------------------------------------------------
+describe('formatMessageForOutput', () => {
+    const fixtureMessage = () => ({
+        id: 'msg-1',
+        threadId: 'thread-1',
+        labelIds: ['INBOX'],
+        snippet: 'hello',
+        payload: {
+            mimeType: 'text/plain',
+            headers: [
+                { name: 'From', value: 'a@example.com' },
+                { name: 'To', value: 'b@example.com' },
+                { name: 'Subject', value: 'Hi' },
+                { name: 'Date', value: 'Mon, 1 Jul 2024 09:00:00 +0000' },
+            ],
+            body: { data: Buffer.from('Hello world').toString('base64') },
+        },
+    });
+
+    it("dispatches to formatMessageClean for format: 'clean'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { format: 'clean', maxBodyChars: 3000, includeQuoted: false });
+        expect(result).toEqual(formatMessageClean(fixtureMessage(), 3000, false));
+    });
+
+    it("dispatches to formatMessageMetadata for format: 'metadata'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { format: 'metadata' });
+        expect(result).toEqual(formatMessageMetadata(fixtureMessage()));
+    });
+
+    it("falls through to processMessagePart (mutating payload in place) for format: 'full'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { format: 'full', includeBodyHtml: false, maxBodyChars: 3000 });
+        expect(result).toBe(msg); // same reference: full mode mutates and returns the input
+        expect(result.payload.body.data).toBe('Hello world');
+    });
+
+    it("treats an undefined/omitted format the same as 'full'", () => {
+        const msg = fixtureMessage();
+        const result = formatMessageForOutput(msg, { maxBodyChars: 3000 });
+        expect(result).toBe(msg);
+        expect(result.payload.body.data).toBe('Hello world');
+    });
+
+    it('handles a message with no payload without throwing', () => {
+        const msg = { id: 'no-payload' };
+        expect(() => formatMessageForOutput(msg, { format: 'full' })).not.toThrow();
+        expect(formatMessageForOutput(msg, { format: 'full' })).toBe(msg);
     });
 });

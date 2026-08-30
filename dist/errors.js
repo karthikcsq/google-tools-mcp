@@ -1,4 +1,5 @@
 // Dependency-free error and diagnostic boundary for the SDK migration.
+import * as os from 'os';
 
 const publicMessages = new WeakMap();
 const operationErrorBrand = new WeakSet();
@@ -220,6 +221,13 @@ function redactString(value, secrets) {
     result = result.replace(/((?:authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|oauth[_-]?token|session[_-]?token|token[_-]?value|token|client[_-]?secret|api[_-]?key|google[_-]?api[_-]?key|private[_-]?key|password|credential|cookie|set[_-]?cookie)\s*[=:]\s*["']?)(?:Bearer\s+)?[^\s,;"'}\]]+/gi, `$1${REDACTED}`);
     result = result.replace(/\bBearer\s+[^\s,;"'}\]]+/gi, `Bearer ${REDACTED}`);
     for (const secret of secrets) result = result.split(secret).join(REDACTED);
+
+    const home = os.homedir();
+    if (home) {
+        const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        result = result.replace(new RegExp(`^${escaped}(?=$|[\\\\/])`, 'i'), '~')
+            .replace(new RegExp(`([\\s"'=(/:])${escaped}(?=$|[\\\\/])`, 'gi'), '$1~');
+    }
 
     if (result.length > MAX_DIAGNOSTIC_STRING_LENGTH) {
         result = `${result.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH)}${TRUNCATED}`;

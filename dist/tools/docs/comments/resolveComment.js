@@ -1,37 +1,32 @@
 import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } from '../../../errors.js';
 import { z } from 'zod';
-import { google } from 'googleapis';
-import { getAuthClient } from '../../../clients.js';
+import { getDriveClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
 export function register(server) {
     server.addTool({
         name: 'resolveComment',
-        description: 'Marks a comment as resolved. Note: resolved status may not persist in the Google Docs UI due to a Drive API limitation.',
+        description: 'Marks a comment as resolved by posting a reply with the resolve action (the only Drive API mechanism that actually flips resolved status — `comments.update` cannot write it). Verifies the result and throws if the comment is still unresolved afterward.',
         parameters: DocumentIdParameter.extend({
             commentId: z.string().describe('The ID of the comment to resolve'),
+            note: z.string().optional().describe('Optional text for the resolution reply (e.g. explaining how the comment was addressed).'),
         }),
         execute: async (args, { log }) => {
             log.info(`Resolving comment ${args.commentId} in doc ${args.documentId}`);
             try {
-                const authClient = await getAuthClient();
-                const drive = google.drive({ version: 'v3', auth: authClient });
-                // First, get the current comment content (required by the API)
-                const currentComment = await drive.comments.get({
+                const drive = await getDriveClient();
+                // The only supported resolution mechanism: a reply carrying
+                // action: 'resolve'. `comments.resolved` is output-only and
+                // silently ignores writes through comments.update.
+                await drive.replies.create({
                     fileId: args.documentId,
                     commentId: args.commentId,
-                    fields: 'content',
-                });
-                // Update with both content and resolved status
-                await drive.comments.update({
-                    fileId: args.documentId,
-                    commentId: args.commentId,
-                    fields: 'id,resolved',
+                    fields: 'id,action',
                     requestBody: {
-                        content: currentComment.data.content,
-                        resolved: true,
+                        action: 'resolve',
+                        content: args.note ?? '',
                     },
                 });
-                // Verify the resolved status was set
+                // Verify the resolved status was actually set.
                 const verifyComment = await drive.comments.get({
                     fileId: args.documentId,
                     commentId: args.commentId,
@@ -41,9 +36,7 @@ export function register(server) {
                 if (verifyComment.data.resolved) {
                     return `${docUrl}\nComment ${args.commentId} has been marked as resolved.`;
                 }
-                else {
-                    return `${docUrl}\nAttempted to resolve comment ${args.commentId}, but the resolved status may not persist in the Google Docs UI due to API limitations. The comment can be resolved manually in the Google Docs interface.`;
-                }
+                throw publicError(`Resolving comment ${args.commentId} did not persist: the comment still reports unresolved after the resolve reply was created.`);
             }
             catch (error) {
                 if (isPublicError(error)) throw error;

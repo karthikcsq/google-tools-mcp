@@ -3,6 +3,22 @@ import { hexToRgbColor, NotImplementedError } from './types.js';
 import { logger } from './logger.js';
 // --- Constants ---
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
+// Identity brand for "this write was refused because the document moved to a
+// new revision". A PublicToolError is frozen at construction, so it cannot
+// carry a flag of its own, and re-matching the sentence wording at every call
+// site is exactly the kind of coupling that rots. Callers that must react
+// differently to a revision conflict than to any other failed write (e.g.
+// replaceRangeWithMarkdown, which can only report an exact leftover range when
+// the document is still at the revision it measured) ask this predicate.
+const revisionConflictErrors = new WeakSet();
+function brandRevisionConflict(error) {
+    revisionConflictErrors.add(error);
+    return error;
+}
+/** True when `error` is the conflict `executeBatchUpdate` throws on a failed requiredRevisionId. */
+export function isRevisionConflictError(error) {
+    return typeof error === 'object' && error !== null && revisionConflictErrors.has(error);
+}
 // --- Core Helper to Execute Batch Updates ---
 export async function executeBatchUpdate(docs, documentId, requests, writeControl) {
     if (!requests || requests.length === 0) {
@@ -34,7 +50,7 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
             ((error.code === 400 || error.code === 409) && /revision|write\s*control|updated since/i.test(apiMessage))
         );
         if (isRevisionConflict) {
-            throw publicError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`);
+            throw brandRevisionConflict(publicError(`This document (${documentId}) changed since you last read it. Read the document again before editing to ensure you have current content.`));
         }
         if (error.code === 400 && error.message.includes('Invalid requests')) {
             // Try to extract more specific info if available
@@ -99,6 +115,35 @@ export function createWriteControlChain(revisionId) {
         },
     };
 }
+// --- Partial-batch progress tracking (PR #113 review finding 3) ---
+// executeBatchUpdateWithSplitting sends delete/insert/format requests across
+// multiple non-atomic documents.batchUpdate calls; once a batch succeeds its
+// changes are committed to the live document with no rollback across calls.
+// When a LATER batch throws, callers (createDocument, and anything else that
+// wraps insertMarkdown) need to know whether anything already landed so they
+// can tell the caller "partially applied, go inspect the document" instead
+// of "nothing was added" — and so they don't blindly re-send content that is
+// already there.
+//
+// This is a WeakMap side-channel keyed on the very error object that gets
+// thrown/rethrown, rather than a wrapper class replacing it. Several callers
+// (appendMarkdownToGoogleDoc, replaceDocumentWithMarkdown) branch on
+// `error instanceof UserError` to decide whether the underlying error's own
+// message is safe to surface directly (e.g. the revision-conflict message
+// from executeBatchUpdate). Swapping in a new error type here would silently
+// break those existing, tested paths; tagging the original error via WeakMap
+// changes nothing about its identity or `instanceof` behavior.
+const batchUpdateProgress = new WeakMap();
+
+/**
+ * Best-effort progress info attached to an error thrown mid-way through
+ * executeBatchUpdateWithSplitting, or undefined if not available/applicable
+ * (e.g. the very first batch failed, or the error didn't come from there).
+ * @returns {{ completedRequests: number, totalRequests: number, phase: 'delete'|'insert'|'format' } | undefined}
+ */
+export function getBatchUpdateProgress(error) {
+    return typeof error === 'object' && error !== null ? batchUpdateProgress.get(error) : undefined;
+}
 /**
  * Executes batch updates with automatic splitting for large request arrays.
  * Separates insert and format operations, executing inserts first.
@@ -148,10 +193,23 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     // (PR #42 review). Only chain when we started guarded, so legacy flows that
     // never captured a revision stay unguarded.
     let chainedWriteControl = writeControl;
-    const executeBatch = async (batch) => {
-        const data = await executeBatchUpdate(docs, documentId, batch, chainedWriteControl);
-        if (chainedWriteControl && data?.writeControl) {
-            chainedWriteControl = data.writeControl;
+    let completedRequests = 0;
+    const executeBatch = async (batch, phase) => {
+        try {
+            const data = await executeBatchUpdate(docs, documentId, batch, chainedWriteControl);
+            if (chainedWriteControl && data?.writeControl) {
+                chainedWriteControl = data.writeControl;
+            }
+            completedRequests += batch.length;
+        }
+        catch (error) {
+            // Tag (don't wrap) the error with how much already landed before
+            // this batch failed, so a caller can tell "nothing applied" apart
+            // from "some earlier batch in this same call already committed".
+            if (typeof error === 'object' && error !== null) {
+                batchUpdateProgress.set(error, { completedRequests, totalRequests: requests.length, phase });
+            }
+            throw error;
         }
     };
     // Execute delete batches first (must happen before inserts)
@@ -165,7 +223,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
             if (log) {
                 log.info(`Delete batch content: ${JSON.stringify(batch)}`);
             }
-            await executeBatch(batch);
+            await executeBatch(batch, 'delete');
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -183,7 +241,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (insertRequests.length > 0) {
         for (let i = 0; i < insertRequests.length; i += MAX_BATCH) {
             const batch = insertRequests.slice(i, i + MAX_BATCH);
-            await executeBatch(batch);
+            await executeBatch(batch, 'insert');
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -198,7 +256,7 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
     if (formatRequests.length > 0) {
         for (let i = 0; i < formatRequests.length; i += MAX_BATCH) {
             const batch = formatRequests.slice(i, i + MAX_BATCH);
-            await executeBatch(batch);
+            await executeBatch(batch, 'format');
             totalApiCalls++;
             if (log) {
                 const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -237,22 +295,34 @@ export async function executeBatchUpdateWithSplitting(docs, documentId, requests
 }
 // --- Text Finding Helper ---
 // This improved version is more robust in handling various text structure scenarios
+// --- text-search snapshots (issue #88) --------------------------------------
+//
+// `findTextRange` used to be the only entry point, and it fetched the document
+// on every call. `batchModifyText` resolves N text-search targets that must all
+// address ONE consistent document state, so the search core is split into a
+// pure `findTextRangeInDoc(docJson, ...)` over a caller-supplied snapshot, with
+// `findTextRange` becoming fetch-then-delegate. Both share this field mask, so
+// a snapshot taken with `textSearchFields()` resolves identically either way.
+const TEXT_SEARCH_BODY_SUBTREE =
+    'content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex)';
+
+/** Field mask a snapshot must be fetched with to be usable by findTextRangeInDoc. */
+export function textSearchFields(tabId) {
+    return tabId
+        ? `tabs(tabProperties(tabId),documentTab(body(${TEXT_SEARCH_BODY_SUBTREE})))`
+        : `body(${TEXT_SEARCH_BODY_SUBTREE})`;
+}
+
 /**
- * Fetches document content and builds a flat text representation with segment mappings.
- * Shared by findTextRange and other text-search utilities.
+ * Pure form of getDocumentTextAndSegments: flat text plus index segments for an
+ * already-fetched document. Tab selection is identical to the fetching form —
+ * a snapshot variant that ignored `tabId` would resolve against the default
+ * body and silently target the wrong tab.
  */
-async function getDocumentTextAndSegments(docs, documentId, tabId) {
-    const needsTabsContent = !!tabId;
-    const res = await docs.documents.get({
-        documentId,
-        ...(needsTabsContent && { includeTabsContent: true }),
-        fields: needsTabsContent
-            ? 'tabs(tabProperties(tabId),documentTab(body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))))'
-            : 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
-    });
+export function extractTextAndSegments(docJson, tabId) {
     let bodyContent;
     if (tabId) {
-        const targetTab = findTabById(res.data, tabId);
+        const targetTab = findTabById(docJson, tabId);
         if (!targetTab) {
             throw publicError(`Tab with ID "${tabId}" not found in document.`);
         }
@@ -262,7 +332,7 @@ async function getDocumentTextAndSegments(docs, documentId, tabId) {
         bodyContent = targetTab.documentTab.body.content;
     }
     else {
-        bodyContent = res.data.body?.content;
+        bodyContent = docJson?.body?.content;
     }
     if (!bodyContent) {
         return null;
@@ -300,6 +370,20 @@ async function getDocumentTextAndSegments(docs, documentId, tabId) {
     collectTextFromContent(bodyContent);
     segments.sort((a, b) => a.start - b.start);
     return { fullText, segments };
+}
+
+/**
+ * Fetches document content and builds a flat text representation with segment
+ * mappings. Thin fetch-then-delegate wrapper over `extractTextAndSegments`.
+ */
+async function getDocumentTextAndSegments(docs, documentId, tabId) {
+    const needsTabsContent = !!tabId;
+    const res = await docs.documents.get({
+        documentId,
+        ...(needsTabsContent && { includeTabsContent: true }),
+        fields: textSearchFields(tabId),
+    });
+    return extractTextAndSegments(res.data, tabId);
 }
 /**
  * Maps a position in the concatenated fullText back to the actual document index.
@@ -411,15 +495,112 @@ function findAllOccurrences(fullText, segments, textToFind) {
     }
     return occurrences;
 }
-export async function findTextRange(docs, documentId, textToFind, instance, tabId) {
-    try {
-        const result = await getDocumentTextAndSegments(docs, documentId, tabId);
-        if (!result) {
-            logger.warn(`No content found in document ${documentId}${tabId ? ` (tab: ${tabId})` : ''}`);
-            return null;
+const SEARCH_FAILURE_CONTEXT_CHARS = 40;
+
+/**
+ * Work out *where* a failed `textToFind` stopped matching (issue #105).
+ *
+ * Previously a miss produced a bare `null` and each caller turned that into
+ * "Could not find X", which tells the caller nothing about which part of their
+ * string was wrong — the common real cause being a near-miss on a long
+ * multi-line search string.
+ *
+ * The longest matching prefix is monotonic (if a prefix of length k appears in
+ * the document, so does every shorter one), so a binary search finds it in
+ * O(log n) `indexOf` calls. Everything is measured on the *normalized* text,
+ * the most forgiving of the four match strategies, so the reported divergence
+ * is the point past which no strategy could have matched.
+ *
+ * @returns {{found:false, reason:string, textToFind:string, candidateCount:number,
+ *   bestPrefixLength:number, divergenceIndex:number|null, matchedPrefix:string,
+ *   contextBefore:string, contextAfter:string, message:string}}
+ */
+function diagnoseTextSearchFailure(fullText, textToFind, { reason = 'notFound', candidateCount = 0, tabId = null, requestedInstance = null } = {}) {
+    const scope = tabId ? ` in tab ${tabId}` : '';
+    const failure = {
+        found: false,
+        reason,
+        textToFind,
+        candidateCount,
+        bestPrefixLength: 0,
+        divergenceIndex: null,
+        matchedPrefix: '',
+        contextBefore: '',
+        contextAfter: '',
+        message: '',
+    };
+    const searchText = normalizeForSearch(stripMarkdownListMarkersForSearch(textToFind ?? ''));
+    const { normalized: haystack } = normalizeWithPositionMap(fullText ?? '');
+    if (searchText.length > 0 && haystack.length > 0) {
+        let lo = 0;
+        let hi = searchText.length;
+        while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (haystack.indexOf(searchText.slice(0, mid)) !== -1) lo = mid;
+            else hi = mid - 1;
         }
+        failure.bestPrefixLength = lo;
+        if (lo > 0) {
+            const prefix = searchText.slice(0, lo);
+            const at = haystack.indexOf(prefix);
+            let count = 0;
+            for (let from = at; from !== -1; from = haystack.indexOf(prefix, from + 1)) count += 1;
+            failure.candidateCount = candidateCount || count;
+            failure.divergenceIndex = lo < searchText.length ? lo : null;
+            failure.matchedPrefix = prefix.slice(-SEARCH_FAILURE_CONTEXT_CHARS).replace(/\n/g, '\\n');
+            failure.contextBefore = haystack
+                .slice(Math.max(0, at - SEARCH_FAILURE_CONTEXT_CHARS), at)
+                .replace(/\n/g, '\\n');
+            failure.contextAfter = haystack
+                .slice(at + lo, at + lo + SEARCH_FAILURE_CONTEXT_CHARS)
+                .replace(/\n/g, '\\n');
+        }
+    }
+
+    if (reason === 'noContent') {
+        failure.message = `The document has no readable text content${scope}, so "${textToFind}" cannot be located.`;
+    }
+    else if (reason === 'instanceOutOfRange') {
+        failure.candidateCount = candidateCount;
+        failure.message =
+            `Instance ${requestedInstance ?? '?'} of "${textToFind}"${scope} does not exist: only ` +
+            `${candidateCount} match${candidateCount === 1 ? '' : 'es'} were found. ` +
+            'Pass a matchInstance between 1 and ' + candidateCount + '.';
+    }
+    else if (failure.bestPrefixLength === 0) {
+        failure.message =
+            `Could not find "${textToFind}"${scope}. Not even its first character matched anywhere in the document, ` +
+            "so the search string likely belongs to a different document or tab. Call readDocument with format='index' " +
+            'to see the document structure.';
+    }
+    else if (failure.divergenceIndex === null) {
+        failure.message = `Could not find "${textToFind}"${scope}.`;
+    }
+    else {
+        const expectedTail = searchText
+            .slice(failure.divergenceIndex, failure.divergenceIndex + SEARCH_FAILURE_CONTEXT_CHARS)
+            .replace(/\n/g, '\\n');
+        failure.message =
+            `Could not find "${textToFind}"${scope}. The first ${failure.bestPrefixLength} character(s) matched ` +
+            `(${failure.candidateCount} place${failure.candidateCount === 1 ? '' : 's'} in the document), then the ` +
+            `search diverged at offset ${failure.divergenceIndex}: the document has ` +
+            `"…${failure.matchedPrefix}${failure.contextAfter}…" where the search expected ` +
+            `"…${failure.matchedPrefix}${expectedTail}…". ` +
+            "Copy the exact text from readDocument, or address the edit by index using format='index'.";
+    }
+    return failure;
+}
+
+/**
+ * The search itself, over an already-extracted `{ fullText, segments }`.
+ * Identical behavior for the fetching and the snapshot entry points: the full
+ * four-strategy fallback chain (exact -> list-marker-stripped -> unicode
+ * normalized -> both), the multi-instance disambiguation error, and the
+ * structured failure diagnostics all live here and nowhere else.
+ */
+function searchTextSegments(result, textToFind, instance, tabId, documentId = 'snapshot') {
+    {
         const { fullText, segments } = result;
-        logger.debug(`Document ${documentId} contains ${segments.length} text segments and ${fullText.length} characters in total.`);
         let allOccurrences = findAllOccurrences(fullText, segments, textToFind);
         // Fallback: markdown exports include list markers that are absent from
         // Docs API text runs. Retry after stripping line-start markdown markers.
@@ -498,7 +679,9 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         }
         if (allOccurrences.length === 0) {
             logger.warn(`Text "${textToFind}" not found in document ${documentId}`);
-            return null;
+            // Structured failure, not a bare null: the caller renders where the
+            // match diverged instead of "could not find it" (issue #105).
+            return diagnoseTextSearchFailure(fullText, textToFind, { reason: 'notFound', tabId });
         }
         // If instance is not specified and there are multiple matches, return all of them
         // so the caller can disambiguate
@@ -511,7 +694,12 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         const targetInstance = instance ?? 1;
         if (targetInstance > allOccurrences.length) {
             logger.warn(`Requested instance ${targetInstance} but only ${allOccurrences.length} found`);
-            return null;
+            return diagnoseTextSearchFailure(fullText, textToFind, {
+                reason: 'instanceOutOfRange',
+                candidateCount: allOccurrences.length,
+                requestedInstance: targetInstance,
+                tabId,
+            });
         }
         const match = allOccurrences[targetInstance - 1];
         if (match.startIndex === -1 || match.endIndex === -1) {
@@ -520,6 +708,38 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         }
         logger.debug(`Successfully mapped "${textToFind}" instance ${targetInstance} to document range ${match.startIndex}-${match.endIndex}`);
         return { startIndex: match.startIndex, endIndex: match.endIndex };
+    }
+}
+
+/**
+ * Resolve `textToFind` against an ALREADY-FETCHED document snapshot.
+ *
+ * Exists so a multi-operation tool can resolve every target against one
+ * consistent document state instead of re-fetching per operation (which would
+ * let the document shift under successive resolutions). The snapshot must have
+ * been fetched with `textSearchFields(tabId)` (a superset mask is fine).
+ *
+ * Same return contract as `findTextRange`: `{startIndex,endIndex}` on success,
+ * a structured `{found:false, message, ...}` diagnosis on a miss, and a thrown
+ * publicError when the text is ambiguous and no `instance` was given.
+ */
+export function findTextRangeInDoc(docJson, textToFind, instance, tabId) {
+    const result = extractTextAndSegments(docJson, tabId);
+    if (!result) {
+        return diagnoseTextSearchFailure('', textToFind, { reason: 'noContent', tabId });
+    }
+    return searchTextSegments(result, textToFind, instance, tabId);
+}
+
+export async function findTextRange(docs, documentId, textToFind, instance, tabId) {
+    try {
+        const result = await getDocumentTextAndSegments(docs, documentId, tabId);
+        if (!result) {
+            logger.warn(`No content found in document ${documentId}${tabId ? ` (tab: ${tabId})` : ''}`);
+            return diagnoseTextSearchFailure('', textToFind, { reason: 'noContent', tabId });
+        }
+        logger.debug(`Document ${documentId} contains ${result.segments.length} text segments and ${result.fullText.length} characters in total.`);
+        return searchTextSegments(result, textToFind, instance, tabId, documentId);
     }
     catch (error) {
         if (isPublicError(error))
@@ -623,6 +843,174 @@ export async function getParagraphRange(docs, documentId, indexWithin, tabId) {
         if (error.code === 403)
             throw publicError(`Permission denied while accessing doc ${documentId}.`);
         throw new Error(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
+    }
+}
+// --- Default text color (issue #14) ---
+/**
+ * Looks up the document's NORMAL_TEXT named style and returns its explicit
+ * foreground color, using a representable RGB fallback for stock black.
+ *
+ * Shared by every insertion path that wants inserted text to carry an
+ * explicit color (matching the document default) instead of leaving it
+ * undefined, which Google Docs treats as "no color selected" in the picker.
+ *
+ * Does NOT log — callers decide what a fetch failure means for them (most
+ * treat it as non-fatal and log a warning, then proceed without a color).
+ * Theme-color-based NORMAL_TEXT styles (no `rgbColor`) are treated the same
+ * as "no explicit default": matching a theme slot can't be done with a fixed
+ * RGB paint without freezing it to today's theme.
+ *
+ * @returns {Promise<{color: {red?:number,green?:number,blue?:number}|null, error: Error|null}>}
+ */
+const EXPLICIT_BLACK_RGB = Object.freeze({ red: 0, green: 0, blue: 1 / 255 });
+export async function getDefaultTextColor(docs, documentId) {
+    try {
+        const styleRes = await docs.documents.get({
+            documentId,
+            fields: 'namedStyles',
+        });
+        const normalTextStyle = styleRes.data.namedStyles?.styles?.find((s) => s.namedStyleType === 'NORMAL_TEXT');
+        const foregroundColor = normalTextStyle?.textStyle?.foregroundColor;
+        const rgbColor = foregroundColor?.color?.rgbColor;
+        // Google serializes an all-zero RGB value as `{}`. That is its
+        // inherit/default representation, not a usable direct paint: sending
+        // the empty object back in updateTextStyle leaves the run without an
+        // explicit foregroundColor. A color with at least one numeric channel
+        // is an actual custom default and must be preserved verbatim.
+        const hasRgbChannel = rgbColor && ['red', 'green', 'blue']
+            .some((channel) => typeof rgbColor[channel] === 'number');
+        if (hasRgbChannel) return { color: rgbColor, error: null };
+        // The Docs JSON/proto layer omits an all-zero RGB value. This Color
+        // endpoint does not accept themeColor, so its nearest representable
+        // explicit black is a one-channel, one-step RGB value.
+        return { color: EXPLICIT_BLACK_RGB, error: null };
+    }
+    catch (error) {
+        return { color: null, error: error instanceof Error ? error : new Error(String(error)) };
+    }
+}
+/**
+ * Builds an updateTextStyle request that paints [startIndex, endIndex) with
+ * an explicit foreground color (an rgbColor object as returned by
+ * getDefaultTextColor). Returns null for an empty/invalid range so callers
+ * can push-if-truthy without an extra guard.
+ */
+export function buildDefaultForegroundColorStyle(color) {
+    if (!color)
+        return null;
+    const hasNonZeroRgbChannel = ['red', 'green', 'blue']
+        .some((channel) => typeof color[channel] === 'number' && color[channel] !== 0);
+    return { rgbColor: hasNonZeroRgbChannel ? color : EXPLICIT_BLACK_RGB };
+}
+export function buildDefaultColorStyleRequest(startIndex, endIndex, color, tabId) {
+    if (!color || endIndex <= startIndex)
+        return null;
+    const range = { startIndex, endIndex };
+    if (tabId)
+        range.tabId = tabId;
+    return {
+        updateTextStyle: {
+            range,
+            textStyle: {
+                foregroundColor: { color: buildDefaultForegroundColorStyle(color) },
+            },
+            fields: 'foregroundColor',
+        },
+    };
+}
+// Character-style properties `clearStyle` resets, and the properties reported
+// back as "inherited style" when they are set on the run new text lands in.
+// Docs API rule: a field named in the mask but absent from the payload is reset
+// to its default, which is what makes one empty textStyle enough to clear all
+// of these (https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/request#updatetextstylerequest).
+const CLEARABLE_TEXT_STYLE_FIELDS = [
+    'bold', 'italic', 'underline', 'strikethrough', 'smallCaps',
+    'baselineOffset', 'link', 'foregroundColor', 'backgroundColor',
+    'fontSize', 'weightedFontFamily',
+];
+/**
+ * Builds an updateTextStyle request that strips direct character formatting from
+ * [startIndex, endIndex), so text inserted there lands as plain body text
+ * instead of inheriting the formatting of the run it replaced (issue #121).
+ * Returns null for an empty/invalid range.
+ */
+export function buildClearTextStyleRequest(startIndex, endIndex, tabId) {
+    if (endIndex <= startIndex)
+        return null;
+    const range = { startIndex, endIndex };
+    if (tabId)
+        range.tabId = tabId;
+    return {
+        updateTextStyle: {
+            range,
+            // Deliberately empty: every field in the mask resets to its default.
+            textStyle: {},
+            fields: CLEARABLE_TEXT_STYLE_FIELDS.join(','),
+        },
+    };
+}
+/**
+ * Human-readable list of the non-default character formatting on a textStyle,
+ * or an empty array when it is plain. Used to tell the caller what formatting
+ * the text they just inserted will have inherited (issue #121) — "Successfully
+ * replaced text at range 2934-3110" gave no hint that 2,500 characters had just
+ * landed in italic.
+ *
+ * Only the visually obvious attributes are named. Font size, family and colors
+ * are omitted on purpose: they are set on essentially every run in a real
+ * document, so reporting them would make the note noise and train the caller to
+ * ignore it.
+ */
+export function describeInheritedTextStyle(textStyle) {
+    if (!textStyle || typeof textStyle !== 'object')
+        return [];
+    const named = [];
+    if (textStyle.bold === true) named.push('bold');
+    if (textStyle.italic === true) named.push('italic');
+    if (textStyle.underline === true) named.push('underline');
+    if (textStyle.strikethrough === true) named.push('strikethrough');
+    if (textStyle.smallCaps === true) named.push('small caps');
+    if (textStyle.baselineOffset === 'SUPERSCRIPT') named.push('superscript');
+    if (textStyle.baselineOffset === 'SUBSCRIPT') named.push('subscript');
+    if (textStyle.link?.url) named.push('a hyperlink');
+    return named;
+}
+/**
+ * The textStyle of the run covering `index`, or null when it cannot be found.
+ *
+ * Docs inserts text with the formatting of the surrounding run, so this is the
+ * style newly inserted text will carry. Fetched with a narrow field mask (text
+ * styles and element bounds only, never content) so the probe stays cheap even
+ * on a large document. Any failure answers null: "we could not tell you what
+ * style you inherited" must never fail the edit itself.
+ */
+export async function fetchTextStyleAtIndex(docs, documentId, index, tabId) {
+    if (!Number.isInteger(index) || index < 1)
+        return null;
+    try {
+        const fields = tabId
+            ? 'tabs(tabProperties(tabId),documentTab(body(content(paragraph(elements(startIndex,endIndex,textRun(textStyle)))))))'
+            : 'body(content(paragraph(elements(startIndex,endIndex,textRun(textStyle)))))';
+        const response = await docs.documents.get({
+            documentId,
+            ...(tabId ? { includeTabsContent: true } : {}),
+            fields,
+        });
+        const content = tabId
+            ? findTabById(response.data, tabId)?.documentTab?.body?.content
+            : response.data.body?.content;
+        for (const element of content ?? []) {
+            for (const pe of element.paragraph?.elements ?? []) {
+                if (!pe.textRun) continue;
+                if (typeof pe.startIndex !== 'number' || typeof pe.endIndex !== 'number') continue;
+                if (index >= pe.startIndex && index < pe.endIndex) return pe.textRun.textStyle ?? null;
+            }
+        }
+        return null;
+    }
+    catch (error) {
+        logger.warn(`Could not read the text style at index ${index} of ${documentId}: ${error.message}`);
+        return null;
     }
 }
 // --- Style Request Builders ---
@@ -810,7 +1198,7 @@ export async function getTableCellRange(docs, documentId, tableStartIndex, rowIn
     // Find the table element matching tableStartIndex
     const tableElement = bodyContent.find((el) => el.table && el.startIndex === tableStartIndex);
     if (!tableElement || !tableElement.table) {
-        throw publicError(`No table found at startIndex ${tableStartIndex}. Use readGoogleDoc with format='json' to find the correct table startIndex.`);
+        throw publicError(`No table found at startIndex ${tableStartIndex}. Use readDocument with format='index' to find the correct table startIndex.`);
     }
     const table = tableElement.table;
     const rows = table.tableRows;

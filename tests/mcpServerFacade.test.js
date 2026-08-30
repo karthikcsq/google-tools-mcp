@@ -71,13 +71,13 @@ function stdioMessages(output) {
 }
 
 describe('official SDK v2 facade', () => {
-    it('registers the current 156-tool catalog through the production facade', async () => {
+    it('registers the current 160-tool catalog through the production facade', async () => {
         const factory = await prepareMcpServerFactory({ registerTools: registerAllTools });
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
         try {
             const list = await (await handler.fetch(modern('tools/list'))).json();
-            expect(list.result.tools).toHaveLength(156);
-            expect(new Set(list.result.tools.map((tool) => tool.name)).size).toBe(156);
+            expect(list.result.tools).toHaveLength(160);
+            expect(new Set(list.result.tools.map((tool) => tool.name)).size).toBe(160);
         } finally { await handler.close(); }
     });
 
@@ -139,7 +139,7 @@ describe('official SDK v2 facade', () => {
             expect(forbidden.status).toBe(403);
             expect(await forbidden.json()).toEqual({ error: 'Forbidden: request Origin is not allowed' });
             const response = await handler.fetch(new Request('http://localhost/healthz', { headers: { authorization: `Bearer ${TOKEN}` } }));
-            expect(await response.json()).toEqual({ status: 'ok' });
+                expect(await response.json()).toEqual({ status: 'ok', pid: process.pid });
             // Documented removal behavior for the session era's routes: /sse,
             // its /messages companion, mcp-proxy's /ping, and the DELETE that
             // terminated a session are all 404 now - after the same auth gate,

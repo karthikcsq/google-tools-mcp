@@ -1,13 +1,14 @@
 {
   "name": "google-tools-mcp",
   "version": "2.0.0",
-  "description": "The easiest MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, and Tasks. 156 tools with one-click browser auth. Read Word docs, PDFs, and spreadsheets straight from Drive.",
+  "description": "The easiest MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, and Tasks. 160 tools with one-click browser auth. Read Word docs, PDFs, and spreadsheets straight from Drive.",
   "type": "module",
   "bin": {
     "google-tools-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.js"
   ],
   "keywords": [
     "mcp",
