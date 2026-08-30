@@ -19,8 +19,12 @@
 - **Error-boundary rule:** never interpolate a caught error's message into `publicError()`.
   Use `wrapOperationError()` or a validated field via `getApiErrorDetail()` from
   `dist/errors.js`. Caller-supplied text must never reach persisted diagnostics.
-- You have **no network access**. `gh`, `npm install`, and any HTTP call will fail. Do not
-  try. Everything you need is inlined in this brief or already in the worktree.
+- **Network access varies per run and the launching brief is authoritative, not this file.**
+  Default to none: assume `gh`, `npm install`, and any HTTP call will fail, and that everything
+  you need is inlined in the brief or already in the worktree. If the brief explicitly says
+  network or `npm` is available, believe the brief. If a stated precondition turns out to be
+  false, stop and report rather than working around it, exactly as the #71 run did when the
+  packages it was told were installed were absent: refusing to fabricate a lockfile was correct.
 - Do not make unrelated changes, do not reformat untouched code, do not bump versions.
 - Add or extend tests for every behavioural fix. A fix without a test that fails before it
   and passes after it is not done.
