@@ -6,41 +6,67 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
+import { randomUUID } from 'crypto';
+import { runArgv } from '../shellSafe.js';
+import { getTokenPath, SCOPES } from '../auth.js';
+import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
-import { logger } from '../logger.js';
+import { getLogFilePath, getStructuredLogFilePath, logger, readRecentToolCalls } from '../logger.js';
 import { getPublicErrorMessage, publicError } from '../errors.js';
 import { google } from 'googleapis';
 import { registerLegacyAliases } from './legacyAliases.js';
 
-const execAsync = promisify(exec);
-
 const REPO = 'karthikcsq/google-tools-mcp';
 
-async function tryGhCli(title, body, label) {
+// feedback's review step and its publish step are two independent tool calls
+// with no protocol-level session binding them together. Without server-side
+// state, a caller could review one draft (e.g. diagnostics off) and then
+// publish a second, unreviewed call's title/description/diagnostics -- the
+// publish call would just recompute `body` fresh and trust confirmPublicPost
+// on its own (finding 13). So the review step stores the exact reviewed
+// title/body/label in memory keyed by a random draftId, and the publish step
+// is required to name that draftId and always publishes the stored content,
+// never anything recomputed from the publish call's own arguments. Entries
+// expire so an abandoned review can't be replayed indefinitely.
+const FEEDBACK_DRAFT_TTL_MS = 15 * 60 * 1000;
+const feedbackDrafts = new Map();
+
+function pruneFeedbackDrafts(now = Date.now()) {
+    for (const [id, draft] of feedbackDrafts) {
+        if (now - draft.createdAt > FEEDBACK_DRAFT_TTL_MS) feedbackDrafts.delete(id);
+    }
+}
+
+// The issue title is caller-supplied MCP tool input. It is never rendered into
+// a shell command string: every `gh` invocation below is an argv array handed
+// to runArgv(), so `$(...)`, backticks, `;`, `&`, and quotes are inert bytes in
+// a single argv element rather than shell syntax. (Issue #114.)
+export async function tryGhCli(title, body, label, { run = runArgv } = {}) {
     // Probe for gh CLI
     try {
-        await execAsync('gh --version');
+        await run(['gh', '--version']);
     } catch {
         return { ok: false, reason: 'gh CLI not installed' };
     }
     // Probe for auth
     try {
-        await execAsync('gh auth status');
+        await run(['gh', 'auth', 'status']);
     } catch {
         return { ok: false, reason: 'gh CLI not authenticated (run: gh auth login)' };
     }
-    // Write body to a temp file to avoid shell-escaping issues with newlines/quotes.
+    // The body still goes through a temp file: it is multiline markdown, which
+    // no argv-length limit or console encoding handles reliably.
     const tmpFile = path.join(os.tmpdir(), `gtm-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
     try {
         await fs.writeFile(tmpFile, body, 'utf8');
-        const { stdout } = await execAsync(
-            `gh issue create --repo ${REPO} --title ${JSON.stringify(title)} --label ${JSON.stringify(label)} --body-file ${JSON.stringify(tmpFile)}`,
-            { maxBuffer: 10 * 1024 * 1024 }
-        );
-        const issueUrl = stdout.trim().split('\n').pop();
+        const stdout = await run([
+            'gh', 'issue', 'create',
+            '--repo', REPO,
+            '--title', String(title),
+            '--label', String(label),
+            '--body-file', tmpFile,
+        ], { maxBuffer: 10 * 1024 * 1024 });
+        const issueUrl = String(stdout).trim().split('\n').pop();
         return { ok: true, issueUrl };
     } catch (err) {
         return { ok: false, reason: `gh CLI failed: ${err.stderr || err.message || err}` };
@@ -49,19 +75,16 @@ async function tryGhCli(title, body, label) {
     }
 }
 
-function openBrowser(url) {
-    const platform = process.platform;
-    let cmd;
-    if (platform === 'win32') {
-        cmd = `start "" "${url}"`;
-    } else if (platform === 'darwin') {
-        cmd = `open "${url}"`;
-    } else {
-        cmd = `xdg-open "${url}"`;
-    }
-    return new Promise((resolve) => {
-        exec(cmd, (err) => resolve(!err));
-    });
+// The fallback URL embeds the same caller-supplied title and description. Even
+// though URLSearchParams percent-encodes them, the opener is argv-based so no
+// shell (or cmd.exe `%VAR%` expansion) ever sees the value.
+export function openBrowser(url, { run = runArgv, platform = process.platform } = {}) {
+    const argv = platform === 'win32'
+        // rundll32 opens a URL with the registered protocol handler without a
+        // shell; `start` is a cmd.exe builtin and would need one.
+        ? ['rundll32.exe', 'url.dll,FileProtocolHandler', String(url)]
+        : [platform === 'darwin' ? 'open' : 'xdg-open', String(url)];
+    return run(argv).then(() => true, () => false);
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +94,7 @@ function openBrowser(url) {
 const ERROR_HINT =
     '\n\nIf this error is unexpected or unclear, you can:\n' +
     '  • Call the `troubleshoot` tool to run a health check (auth, API connectivity, recent logs).\n' +
-    '  • Call the `feedback` tool to file a bug report with diagnostics auto-attached.';
+    '  • Call the `feedback` tool to file a bug report with optional reviewed diagnostics.';
 
 // Tools that should NOT have the hint appended (would be circular/noisy).
 const HINT_EXCLUDED_TOOLS = new Set(['troubleshoot', 'feedback', 'help', 'logout']);
@@ -232,7 +255,7 @@ export async function registerAllTools(server) {
     for (const [name, { loader }] of Object.entries(CATEGORIES)) {
         await loader(wrappedServer);
     }
-    logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories at startup.`);
+    logger.info(`Loaded all ${Object.keys(CATEGORIES).length} categories in ${Math.round(process.uptime() * 1000)}ms.`);
 
     // Register backward-compatible snake_case aliases for the renamed/consolidated
     // tools. Opt-in: set GOOGLE_MCP_ENABLE_LEGACY_ALIASES=true to register them.
@@ -244,14 +267,14 @@ export async function registerAllTools(server) {
         description:
             'Show documentation for google-tools-mcp: setup instructions, available tool categories, environment variables, and troubleshooting. ' +
             'Call this when you need guidance on how to use the Google Workspace tools. ' +
-            'Also available: `troubleshoot` (run health check when tools fail) and `feedback` (submit bug reports/feature requests with diagnostics auto-attached).',
+            'Also available: `troubleshoot` (run health check when tools fail) and `feedback` (submit bug reports/feature requests with optional reviewed diagnostics).',
         parameters: z.object({}),
         execute: async () => {
             const __dirname = path.dirname(fileURLToPath(import.meta.url));
             const readmePath = path.resolve(__dirname, '..', '..', 'README.md');
             const diagnosticsSection = '\n\n## Diagnostics & Feedback\n\n' +
                 '- **`troubleshoot`** — Run a health check when tools fail (checks auth, API connectivity, config, recent logs).\n' +
-                '- **`feedback`** — Submit a bug report or feature request with diagnostics auto-attached (files via GitHub CLI or browser).\n' +
+                '- **`feedback`** — Submit a bug report or feature request with diagnostics only after explicit opt-in and review.\n' +
                 '- **`help`** — Show this documentation.\n';
             try {
                 const readme = await fs.readFile(readmePath, 'utf-8');
@@ -372,13 +395,31 @@ export async function registerAllTools(server) {
                 tokenPath,
                 credentialSource: process.env.GOOGLE_CLIENT_ID ? 'environment' : 'file',
                 scopes: SCOPES,
-                logFile: process.env.GOOGLE_MCP_LOG_FILE || '(not set)',
+                logFile: getLogFilePath() || '(disabled)',
+                structuredLogFile: getStructuredLogFilePath() || '(disabled)',
+                transport: process.env.GOOGLE_MCP_TRANSPORT || 'stdio',
+                port: process.env.GOOGLE_MCP_PORT || '3939',
+                loadedConfigFiles: getLoadedConfigFiles(),
+                warnings: getConfigWarnings(),
             };
 
-            // --- Recent logs ---
-            const logFilePath = process.env.GOOGLE_MCP_LOG_FILE === '1'
-                ? path.join(configDir, 'server.log')
-                : process.env.GOOGLE_MCP_LOG_FILE;
+            // --- Privacy-safe recent activity ---
+            const recent = readRecentToolCalls();
+            if (recent.records.length > 0) {
+                const toolCalls = {};
+                const errorsByCode = {};
+                const failures = [];
+                for (const record of recent.records) {
+                    toolCalls[record.tool] = (toolCalls[record.tool] || 0) + 1;
+                    if (record.outcome !== 'ok') {
+                        errorsByCode[record.errCode] = (errorsByCode[record.errCode] || 0) + 1;
+                        failures.push({ tool: record.tool, reqId: record.reqId, errCode: record.errCode, errMsg: record.errMsg });
+                    }
+                }
+                report.recentLogs = { source: recent.filePath, toolCalls, errorsByCode, lastFailures: failures.slice(-5) };
+            } else {
+            // --- Legacy plain-log fallback ---
+            const logFilePath = getLogFilePath();
             if (logFilePath) {
                 try {
                     const logContent = await fs.readFile(logFilePath, 'utf8');
@@ -389,6 +430,8 @@ export async function registerAllTools(server) {
                 }
             } else {
                 report.recentLogs = '(file logging not enabled — set GOOGLE_MCP_LOG_FILE to enable)';
+            }
+
             }
 
             // --- Environment ---
@@ -415,14 +458,63 @@ export async function registerAllTools(server) {
     server.addTool({
         name: 'feedback',
         description:
-            'Submit feedback or a bug report for google-tools-mcp. Automatically collects diagnostic info, then files the issue via the GitHub CLI (`gh`) if available, or falls back to opening a pre-filled GitHub issue URL in the user\'s browser.',
+            'Draft feedback or a bug report for google-tools-mcp. Review the generated draft, then call again with confirmPublicPost: true and the returned draftId to publish exactly that reviewed draft. Recent activity requires explicit includeDiagnostics opt-in.',
         parameters: z.object({
             type: z.enum(['bug', 'feature']).describe('Type of feedback'),
             title: z.string().describe('Short summary'),
             description: z.string().describe('Detailed description of the issue or feature request'),
+            includeDiagnostics: z.boolean().optional().default(false).describe('Include a privacy-safe recent activity summary. Review it before public submission.'),
+            confirmPublicPost: z.boolean().optional().default(false).describe('Set true only after reviewing the generated draft to allow public submission.'),
+            draftId: z.string().optional().describe('The draftId returned by the prior review call. Required when confirmPublicPost is true: publication always uses the exact reviewed title/body/label for that draftId, never any new text or diagnostics passed on this call.'),
         }),
         execute: async (args) => {
-            // Collect diagnostics
+            pruneFeedbackDrafts();
+
+            // Publishing never recomputes the draft from this call's own
+            // arguments -- it only ever replays the exact title/body/label
+            // that were returned for review under draftId. That is what
+            // prevents a second call from smuggling in unreviewed text or
+            // diagnostics under cover of confirmPublicPost: true (finding 13).
+            if (args.confirmPublicPost) {
+                const draft = args.draftId ? feedbackDrafts.get(args.draftId) : undefined;
+                if (!draft) {
+                    throw publicError('No matching reviewed draft found for that draftId. Call feedback with confirmPublicPost: false first to generate a fresh draft, then resubmit confirmPublicPost: true with the exact draftId returned from that call.');
+                }
+                feedbackDrafts.delete(args.draftId);
+
+                const ghResult = await tryGhCli(draft.title, draft.body, draft.label);
+                if (ghResult.ok) {
+                    return JSON.stringify({
+                        method: 'gh-cli',
+                        issueUrl: ghResult.issueUrl,
+                        note: 'Issue filed successfully via GitHub CLI.',
+                    }, null, 2);
+                }
+
+                // Fallback: open pre-filled GitHub issue URL in the user's browser
+                const params = new URLSearchParams({
+                    title: draft.title,
+                    body: draft.body,
+                    labels: draft.label,
+                });
+                const url = `https://github.com/${REPO}/issues/new?${params.toString()}`;
+                const opened = await openBrowser(url);
+
+                return JSON.stringify({
+                    method: 'browser-fallback',
+                    ghCliUnavailableReason: ghResult.reason,
+                    url,
+                    browserOpened: opened,
+                    markdown: draft.body,
+                    note: url.length > 8000
+                        ? 'The URL may be too long for some browsers. Use the markdown body to create the issue manually.'
+                        : opened
+                            ? 'Opened the pre-filled GitHub issue in your browser. Click "Submit new issue" to file it.'
+                            : 'Could not auto-open browser. Please open the URL manually.',
+                }, null, 2);
+            }
+
+            // Not publishing yet: build a fresh draft to review. Collect diagnostics
             const __dirname = path.dirname(fileURLToPath(import.meta.url));
             let pkgVersion = 'unknown';
             try {
@@ -461,6 +553,11 @@ export async function registerAllTools(server) {
                 `- **Scopes:** ${enabledScopes.join(', ')}`,
             ].join('\n');
 
+            const recent = args.includeDiagnostics ? readRecentToolCalls() : null;
+            const recentDiagnostics = recent?.records?.length
+                ? `\n\n## Recent Activity (review before submitting)\n\n${JSON.stringify(recent.records.slice(-20), null, 2)}`
+                : '';
+
             const body = [
                 `## Description`,
                 ``,
@@ -469,43 +566,20 @@ export async function registerAllTools(server) {
                 `<details>`,
                 `<summary>Diagnostic Info</summary>`,
                 ``,
-                diagnostics,
+                diagnostics + recentDiagnostics,
                 ``,
                 `</details>`,
             ].join('\n');
 
             const label = args.type === 'bug' ? 'bug' : 'enhancement';
 
-            // Try gh CLI first
-            const ghResult = await tryGhCli(args.title, body, label);
-            if (ghResult.ok) {
-                return JSON.stringify({
-                    method: 'gh-cli',
-                    issueUrl: ghResult.issueUrl,
-                    note: 'Issue filed successfully via GitHub CLI.',
-                }, null, 2);
-            }
-
-            // Fallback: open pre-filled GitHub issue URL in the user's browser
-            const params = new URLSearchParams({
-                title: args.title,
-                body,
-                labels: label,
-            });
-            const url = `https://github.com/${REPO}/issues/new?${params.toString()}`;
-            const opened = await openBrowser(url);
-
+            const draftId = randomUUID();
+            feedbackDrafts.set(draftId, { title: args.title, body, label, createdAt: Date.now() });
             return JSON.stringify({
-                method: 'browser-fallback',
-                ghCliUnavailableReason: ghResult.reason,
-                url,
-                browserOpened: opened,
+                method: 'review-required',
+                draftId,
                 markdown: body,
-                note: url.length > 8000
-                    ? 'The URL may be too long for some browsers. Use the markdown body to create the issue manually.'
-                    : opened
-                        ? 'Opened the pre-filled GitHub issue in your browser. Click "Submit new issue" to file it.'
-                        : 'Could not auto-open browser. Please open the URL manually.',
+                note: 'Review this draft. Call feedback again with confirmPublicPost: true and this exact draftId to publish it. Changing the title, description, type, or includeDiagnostics on the publish call has no effect -- only the reviewed draft is ever published.',
             }, null, 2);
         },
     });

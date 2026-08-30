@@ -1,6 +1,6 @@
 // Tests that all tool categories register the expected tools.
 // Uses a minimal mock server that records addTool calls instead of a real FastMCP instance.
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, jest } from '@jest/globals';
 
 // Minimal mock server that captures tool registrations
 function createMockServer() {
@@ -296,8 +296,15 @@ describe('Total tool count', () => {
     it('registerAllTools (real production path) registers exactly 160 tools by default (aliases opt-in, unset)', async () => {
         const server = createMockServer();
         const { registerAllTools } = await import('../dist/tools/index.js');
-        await registerAllTools(server);
-        expect(server.getTools().size).toBe(160);
+        const { logger } = await import('../dist/logger.js');
+        const info = jest.spyOn(logger, 'info').mockImplementation(() => {});
+        try {
+            await registerAllTools(server);
+            expect(server.getTools().size).toBe(160);
+            expect(info).toHaveBeenCalledWith(expect.stringMatching(/^Loaded all \d+ categories in \d+ms\.$/));
+            expect(server.getTools().get('feedback').parameters.parse({ type: 'bug', title: 'x', description: 'y' }))
+                .toMatchObject({ includeDiagnostics: false, confirmPublicPost: false });
+        } finally { info.mockRestore(); }
     });
 
     it('registerAllTools (real production path) registers exactly 232 tools with legacy aliases explicitly enabled', async () => {
