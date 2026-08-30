@@ -343,3 +343,32 @@ warning text comes from docs-cluster) fails on `feat/independents` standalone an
 after #110 and #112 are merged into it.
 
 **Gate wording, restated:** read the `Test Suites:` line, never the `Tests:` line alone.
+
+### Resolution (2026-08-30)
+
+Repaired in `5e5d0e6` on `verify/live-smoke-on-fixes`. The `fs/promises` factory gained `chmod`
+plus `open`/`rename` (ops-cluster writes the token atomically through a file handle, not a plain
+`writeFile`), and now asserts configDir `0o700` and token.json `0o600` — coverage that fix had
+nowhere else. The `child_process` factory gained `execFile` recording the argv, and the unreachable
+`exec` recorder was removed. `createDocument.test.js` took the `dc9b1ce` approach: real
+`documents.get` body, merged warning text, plus the seeding test the path never had.
+
+Verified independently, not accepted on report: four consecutive full green runs
+(`Test Suites: 91 passed, 91 total` / `Tests: 2 skipped, 1303 passed, 1305 total`), test count up
+by one with nothing consolidated. A separate script compared all 56 factory calls across 45 files
+against every named import of each mocked module anywhere in `dist/`; the 38 candidates it raised
+all reduce to repo-wide imports vs per-test graph (a Docs test legitimately omits `getGmailClient`).
+No real latent gap.
+
+Residual note: `dist/setup.js` still imports `exec` from `child_process`, so if `auth.js` ever
+transitively reaches `setup.js` that suite link-fails. It fails loudly at link time, so it is left
+alone.
+
+Live smoke on the merged tree, run `2026-08-30T14-32-04-674-afb4`: **22 passed, 0 failed**, cleanup
+trashed 28 of 28, folder empty afterwards, 0 drafts left behind, 0 stdout leaks, 0 guard refusals
+across 70 containment lookups. The 20 scenarios that disagreed with `expectedOnBase` are the point
+of the harness (they fail on main and pass on the fix branches); both `expected-pass` scenarios
+still pass, so nothing regressed.
+
+The integration rehearsal is complete. Remaining gate before the merge sequence is the landing-split
+decision recorded above.
