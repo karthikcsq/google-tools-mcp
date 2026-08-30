@@ -92,13 +92,18 @@ const decodeParameterValue = (headerValue, name) => {
     const sections = [];
     // The leading delimiter matters: without it, a search for "name" would also
     // match inside "filename*0*=".
-    const extended = new RegExp(`(?:^|[;\\s])${name}\\*(?:(\\d+)\\*)?=(?:UTF-8'')?([^;\\r\\n]*)`, 'gi');
-    for (const match of unfold(headerValue).matchAll(extended)) {
-        sections.push({ index: match[1] === undefined ? 0 : Number(match[1]), value: match[2] });
+    const parameter = new RegExp(`(?:^|[;\\s])${name}(?:\\*(\\d+))?(\\*)?=(?:UTF-8'')?(?:"((?:\\\\.|[^"])*)"|([^;\\r\\n]*))`, 'gi');
+    for (const match of unfold(headerValue).matchAll(parameter)) {
+        sections.push({
+            index: match[1] === undefined ? 0 : Number(match[1]),
+            extended: match[2] === '*',
+            value: (match[3] ?? match[4]).replace(/\\\\([\\\\"])/g, '$1'),
+        });
     }
     if (!sections.length) return undefined;
     sections.sort((left, right) => left.index - right.index);
     const percent = sections.map((section) => section.value).join('');
+    if (!sections.some((section) => section.extended)) return percent;
     const octets = [];
     for (let index = 0; index < percent.length; index += 1) {
         if (percent[index] === '%') {
@@ -112,6 +117,34 @@ const decodeParameterValue = (headerValue, name) => {
 };
 
 const octets = (value) => Buffer.byteLength(value, 'utf8');
+
+/**
+ * Gmail's draft parser prefers a bare filename parameter when one is present;
+ * otherwise it reconstructs RFC 2231 continuations. Keep this deliberately
+ * small and independent of the RFC 2231 decoder above so the multipart
+ * regression proves which filename Gmail will expose after a draft round trip.
+ */
+const gmailDraftFilename = (headerBlock) => {
+    const unfolded = unfold(headerBlock);
+    const bare = unfolded.match(/(?:^|[;\s])filename="((?:\\.|[^"])*)"/i);
+    if (bare) return bare[1].replace(/\\([\\"])/g, '$1');
+    const sections = [];
+    for (const match of unfolded.matchAll(/(?:^|[;\s])filename\*(?:(\d+)\*)?=(?:UTF-8'')?([^;\r\n]*)/gi)) {
+        sections.push({ index: match[1] === undefined ? 0 : Number(match[1]), value: match[2] });
+    }
+    if (!sections.length) return undefined;
+    const value = sections.sort((left, right) => left.index - right.index).map((section) => section.value).join('');
+    const octets = [];
+    for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === '%') {
+            octets.push(parseInt(value.slice(index + 1, index + 3), 16));
+            index += 2;
+        } else {
+            octets.push(value.charCodeAt(index));
+        }
+    }
+    return Buffer.from(octets).toString('utf8');
+};
 
 // ---------------------------------------------------------------------------
 // RFC 2047 encoded-words
@@ -384,6 +417,22 @@ describe('header folding', () => {
 // RFC 2231 parameters
 // ---------------------------------------------------------------------------
 describe('RFC 2231 / RFC 6266 parameters', () => {
+    it('round-trips a long French and Japanese filename through an assembled multipart attachment as Gmail reads it', () => {
+        const filename = `Présentation-du-partenariat-東京-会社-日本語-${'très-long-'.repeat(10)}2026.pdf`;
+        const raw = assembleMultipart(['To: a@b.com'], 'See attached', false, [{
+            filename,
+            mimeType: 'application/pdf',
+            base64Data: Buffer.from('attachment bytes').toString('base64'),
+        }]);
+        const boundary = raw.match(/boundary="([^"]+)"/)[1];
+        const attachmentHeaderBlock = raw.split(`--${boundary}`)[2].split('\r\n\r\n')[0];
+
+        expect(gmailDraftFilename(attachmentHeaderBlock)).toBe(filename);
+        for (const line of attachmentHeaderBlock.split('\r\n')) {
+            expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
+        }
+    });
+
     it('emits only the quoted form for a short, plain ASCII filename', () => {
         expect(encodeParameter('filename', 'report.pdf')).toEqual(['filename="report.pdf"']);
         expect(buildContentTypeHeader('application/pdf', 'report.pdf'))
@@ -397,8 +446,7 @@ describe('RFC 2231 / RFC 6266 parameters', () => {
         const header = buildContentDispositionHeader('attachment', filename);
         expect(header).toContain("filename*=UTF-8''");
         expect(decodeParameterValue(header, 'filename')).toBe(filename);
-        // The legacy quoted fallback is still there for pre-2231 clients.
-        expect(unfold(header)).toMatch(/filename="[^"]*"/);
+        expect(unfold(header)).not.toMatch(/filename="/);
     });
 
     it('splits a long filename into numbered continuations, none of which blows a line limit', () => {
@@ -411,6 +459,23 @@ describe('RFC 2231 / RFC 6266 parameters', () => {
             expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
         }
         expect(decodeParameterValue(header, 'filename')).toBe(filename);
+    });
+
+    it('uses unencoded continuations for a long pure-ASCII filename', () => {
+        const filename = `${'quarterly-partnership-presentation-'.repeat(4)}2026.pdf`;
+        const header = buildContentDispositionHeader('attachment', filename);
+        expect(unfold(header)).toContain('filename*0=');
+        expect(unfold(header)).not.toContain("UTF-8''");
+        expect(unfold(header)).not.toContain('%');
+        expect(decodeParameterValue(header, 'filename')).toBe(filename);
+        for (const line of header.split('\r\n')) expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
+    });
+
+    it('round-trips a filename containing a quote and semicolon', () => {
+        const filename = 'proposal; final "review".pdf';
+        const header = buildContentDispositionHeader('attachment', filename);
+        expect(decodeParameterValue(header, 'filename')).toBe(filename);
+        for (const line of header.split('\r\n')) expect(octets(line)).toBeLessThanOrEqual(HARD_LINE_LIMIT);
     });
 
     it('never splits a percent triplet across two continuations', () => {

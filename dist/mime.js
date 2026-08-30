@@ -328,10 +328,10 @@ const ATTR_CHAR = /^[A-Za-z0-9!#$&+.^_`|~-]$/;
 // comfortable headroom for a long parameter name.
 const PARAMETER_SECTION_LENGTH = 50;
 
-// The quoted ASCII fallback exists only for pre-RFC-2231 clients; the
-// filename*/name* extended value is authoritative (RFC 6266 §4.3). Capping it
-// keeps it from ever becoming an unbreakable over-length token, which is the
-// only way a composed header could still blow the 998-octet limit.
+// A quoted ASCII parameter is kept small so it can never become an unbreakable
+// over-length header token. It is only used for filenames that are already
+// plain ASCII; non-ASCII values use the RFC 2231 form exclusively, because
+// Gmail's draft parser can otherwise select this lossy fallback over filename*.
 const MAX_FALLBACK_LENGTH = 64;
 
 const percentEncode = (value) => {
@@ -390,30 +390,29 @@ export const asciiFallbackParameter = (value) => {
  * Encode one MIME parameter as the list of parameter strings it needs.
  *
  * A short, plain, printable-ASCII value produces just `name="value"` so ASCII
- * messages stay byte-compatible. Anything else additionally produces the RFC
- * 2231 extended form, split into `name*0*`, `name*1*`… continuations when the
+ * messages stay byte-compatible. Non-ASCII values use the RFC 2231 extended
+ * form exclusively, split into `name*0*`, `name*1*`… continuations when the
  * encoded value is long enough that a single parameter would be an unbreakable
  * over-length token:
  *
  *   filename="report.pdf"; filename*0*=UTF-8''%E5%A0%B1%E5%91%8A; filename*1*=...
  *
- * Both forms are emitted together per RFC 6266 §4.3, which tells a modern
- * recipient to prefer the extended one.
+ * Long plain-ASCII values use unencoded RFC 2231 continuations (`name*0=`,
+ * `name*1=`) rather than percent-encoding bytes that do not need encoding.
  */
 export const encodeParameter = (name, value) => {
     const raw = String(value ?? '');
     const fallback = asciiFallbackParameter(raw);
-    const parameters = [`${name}="${fallback}"`];
-    const needsExtended = needsEncoding(raw) || fallback !== raw;
-    if (!needsExtended) return parameters;
-
-    const encoded = percentEncode(raw);
+    const requiresExtended = needsEncoding(raw) || /[\x00-\x1F\x7F"\\]/.test(raw);
+    const encoded = requiresExtended ? percentEncode(raw) : raw;
     const sections = chunkPercentEncoded(encoded, PARAMETER_SECTION_LENGTH);
+    if (!requiresExtended && sections.length === 1) return [`${name}="${fallback}"`];
+    const parameters = [];
     if (sections.length === 1) {
         parameters.push(`${name}*=UTF-8''${sections[0]}`);
     } else {
         sections.forEach((section, index) => {
-            parameters.push(`${name}*${index}*=${index === 0 ? "UTF-8''" : ''}${section}`);
+            parameters.push(`${name}*${index}${requiresExtended ? '*' : ''}=${index === 0 && requiresExtended ? "UTF-8''" : ''}${section}`);
         });
     }
     return parameters;
