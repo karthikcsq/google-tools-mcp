@@ -835,7 +835,7 @@ export async function getDefaultTextColor(docs, documentId) {
         // it explicitly so a markdown rebuild does not create colorless runs.
         // A named theme color remains inherit-only because pinning it to a
         // concrete RGB value would sever the document from its theme.
-        if (!foregroundColor?.color) {
+        if (normalTextStyle && !foregroundColor?.color) {
             return { color: { red: 0, green: 0, blue: 0 }, error: null };
         }
         return { color: null, error: null };
