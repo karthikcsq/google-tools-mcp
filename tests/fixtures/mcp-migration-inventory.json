@@ -202,9 +202,6 @@
         "file": "dist/tools/docs/modifyText.js"
       },
       {
-        "file": "dist/tools/docs/modifyText.test.js"
-      },
-      {
         "file": "dist/tools/docs/readGoogleDoc.js"
       },
       {
@@ -561,6 +558,9 @@
         "file": "tests/applyParagraphStyleBulletNesting.test.js"
       },
       {
+        "file": "tests/authConsentFlow.test.js"
+      },
+      {
         "file": "tests/batchModifyText.test.js"
       },
       {
@@ -571,6 +571,12 @@
       },
       {
         "file": "tests/config.test.js"
+      },
+      {
+        "file": "tests/copyFile.test.js"
+      },
+      {
+        "file": "tests/createDocument.test.js"
       },
       {
         "file": "tests/createFlowsReadSeeding.test.js"
@@ -610,6 +616,9 @@
       },
       {
         "file": "tests/documentationConsistency.test.js"
+      },
+      {
+        "file": "tests/drivePermissions.test.js"
       },
       {
         "file": "tests/entrypointSmoke.test.js"
@@ -676,6 +685,9 @@
       },
       {
         "file": "tests/linkMismatchDetection.test.js"
+      },
+      {
+        "file": "tests/listFolderContents.test.js"
       },
       {
         "file": "tests/listHeadings.test.js"
@@ -969,7 +981,7 @@
       },
       {
         "file": "dist/tools/docs/modifyText.js",
-        "line": 174,
+        "line": 183,
         "match": ".addTool({"
       },
       {
@@ -1049,7 +1061,7 @@
       },
       {
         "file": "dist/tools/drive/listFolderContents.js",
-        "line": 5,
+        "line": 46,
         "match": ".addTool({"
       },
       {

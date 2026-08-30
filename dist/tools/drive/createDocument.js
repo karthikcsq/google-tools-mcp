@@ -2,7 +2,7 @@ import { publicError, isPublicError, wrapOperationError } from '../../errors.js'
 import { z } from 'zod';
 import { getDriveClient, getDocsClient } from '../../clients.js';
 import { insertMarkdown, formatInsertResult, docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { getDefaultTextColor, buildDefaultColorStyleRequest } from '../../googleDocsApiHelpers.js';
+import { getDefaultTextColor, buildDefaultColorStyleRequest, getBatchUpdateProgress } from '../../googleDocsApiHelpers.js';
 import { trackRead } from '../../readTracker.js';
 import { mintDocsReadHandle } from '../../docsHandles.js';
 export function register(server) {
@@ -57,6 +57,7 @@ export function register(server) {
                 };
                 // Add initial content if provided
                 let contentWarnings;
+                let contentWarningNote;
                 if (args.initialContent) {
                     try {
                         const docsClient = await ensureDocsClient();
@@ -126,10 +127,36 @@ export function register(server) {
                         // tool and leave that document unreported (#87-style
                         // orphan). Degrade to a named warning instead.
                         log.warn(`Document ${document.id} created but failed to add initial content: ${contentError.message}`);
-                        contentWarnings = [
-                            ...(contentWarnings ?? []),
-                            `Initial content was not added to document ${document.id}: ${contentError.message}`,
-                        ];
+                        // The document itself exists, so preserve that success while
+                        // making the partial result explicit without exposing an
+                        // arbitrary caught API error to the caller.
+                        //
+                        // insertMarkdown's markdown path is NOT atomic: it sends
+                        // delete/insert/format requests across separate
+                        // documents.batchUpdate calls (and splits each phase into
+                        // batches of 50), and every batch that succeeds before a
+                        // later one fails is already committed to the document with
+                        // no rollback. Claiming initial content "could not be added"
+                        // would be false whenever an earlier batch already landed —
+                        // a caller trusting that message and resending initialContent
+                        // would duplicate whatever is already there. When progress
+                        // info is available, say so explicitly and point at the
+                        // document instead (PR #113 review finding 3).
+                        const progress = getBatchUpdateProgress(contentError);
+                        if (progress && progress.completedRequests > 0) {
+                            contentWarnings = [
+                                ...(contentWarnings ?? []),
+                                'Document created but initial content was only partially applied before a later operation failed.',
+                            ];
+                            contentWarningNote = `The document was created and ${progress.completedRequests} of ${progress.totalRequests} content operation(s) (${progress.phase} phase) were already applied to it before the failure. Do not blindly resend initialContent — inspect the document with readDocument first to see what already landed, then reconcile or retry only what's missing.`;
+                        }
+                        else {
+                            contentWarnings = [
+                                ...(contentWarnings ?? []),
+                                'Document created but initial content failed.',
+                            ];
+                            contentWarningNote = 'The document was created, but its initial content could not be added.';
+                        }
                     }
                 }
                 // Seed post-create read state so an immediate follow-up mutation
@@ -189,7 +216,7 @@ export function register(server) {
                     url: document.webViewLink,
                     ...(contentWarnings && {
                         warnings: contentWarnings,
-                        warningNote: `${contentWarnings.length} item${contentWarnings.length === 1 ? '' : 's'} noted during document creation — see warnings.`,
+                        warningNote: contentWarningNote ?? `${contentWarnings.length} item${contentWarnings.length === 1 ? '' : 's'} of initialContent could not be converted and ${contentWarnings.length === 1 ? 'was' : 'were'} dropped — see warnings.`,
                     }),
                     ...(readHandle && {
                         readHandleNote: 'This document has been seeded as read. You can mutate it immediately without calling readDocument first.',
