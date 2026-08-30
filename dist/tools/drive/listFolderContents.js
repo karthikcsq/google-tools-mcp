@@ -45,7 +45,7 @@ function isRateLimitStatus(error) {
 export function register(server) {
     server.addTool({
         name: 'listFolderContents',
-        description: "Lists files and subfolders within a Drive folder. Use folderId='root' to browse the top-level of the Drive. With depth omitted or 1, returns the legacy {folders, files} result. With depth 2 through 10 or 'all', returns a flat breadth-first {entries, count, truncated, truncationReason?, unreadable, apiCalls} tree; each entry has path and parentIds. A node is listed once, using its first-discovered BFS path, while parentIds preserves multiple discovered parent edges. Shortcuts include shortcutDetails.targetId but are never expanded. Recursive calls cap output with maxItems (default 500, maximum 5000), report every truncation, and use maxResults only for the legacy depth-1 response. Use getFilePath for the inverse, upward path lookup.",
+        description: "Lists files and subfolders within a Drive folder. Use folderId='root' to browse the top-level of the Drive. With depth omitted or 1, returns a single {folders, files, truncated, truncationReason?} page capped by maxResults; truncated reports when Drive has more pages. With depth 2 through 10 or 'all', returns a flat breadth-first {entries, count, truncated, truncationReason?, unreadable, apiCalls} tree; each entry has path and parentIds. A node is listed once, using its first-discovered BFS path, while parentIds preserves multiple discovered parent edges. Shortcuts include shortcutDetails.targetId but are never expanded. Recursive calls cap output with maxItems (default 500, maximum 5000), report every truncation, and use maxResults only for the single depth-1 page. Use getFilePath for the inverse, upward path lookup.",
         parameters: z.object({
             folderId: z.string().describe('ID of the folder to list contents of. Use "root" for the root Drive folder.'),
             includeSubfolders: z.boolean().optional().default(true).describe('Whether to include subfolders in results.'),
@@ -66,20 +66,25 @@ export function register(server) {
                 const includeSubfolders = args.includeSubfolders ?? true;
                 const includeFiles = args.includeFiles ?? true;
                 const maxResults = args.maxResults ?? 50;
-                // Keep the legacy depth-1 request and response shape intact.
+                // Keep depth 1 to its established single Drive page. Its additive
+                // truncation signal lets callers distinguish that page from a full listing.
                 if (depth === 1) {
                     let queryString = `'${escapeDriveQueryValue(args.folderId)}' in parents and trashed=false`;
                     if (!includeSubfolders) queryString += ` and mimeType!='${FOLDER_MIME_TYPE}'`;
                     else if (!includeFiles) queryString += ` and mimeType='${FOLDER_MIME_TYPE}'`;
                     const response = await drive.files.list({
                         q: queryString, pageSize: maxResults, orderBy: 'folder,name',
-                        fields: 'files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
+                        fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
                         supportsAllDrives: true, includeItemsFromAllDrives: true,
                     });
                     const items = response.data.files || [];
                     const folders = items.filter((f) => f.mimeType === FOLDER_MIME_TYPE).map((f) => ({ id: f.id, name: f.name, modifiedTime: f.modifiedTime }));
                     const files = items.filter((f) => f.mimeType !== FOLDER_MIME_TYPE).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime }));
-                    return JSON.stringify({ folders, files }, null, 2);
+                    const truncated = Boolean(response.data.nextPageToken);
+                    const truncationReason = truncated
+                        ? `maxResults (${maxResults}) single-page cap reached; raise maxResults (up to the maximum of 100) or use depth with maxItems for a bounded recursive traversal.`
+                        : undefined;
+                    return JSON.stringify({ folders, files, truncated, ...(truncationReason ? { truncationReason } : {}) }, null, 2);
                 }
 
                 const maxItems = args.maxItems ?? 500;

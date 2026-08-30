@@ -18,7 +18,7 @@ const folder = (id, name, parents) => ({ id, name, mimeType: 'application/vnd.go
 const file = (id, name, parents) => ({ id, name, mimeType: 'text/plain', parents, modifiedTime: '2026-08-21T00:00:00Z', size: '12' });
 
 describe('listFolderContents recursive traversal', () => {
-    it('keeps the omitted-depth request and {folders, files} response byte-for-byte compatible', async () => {
+    it('keeps depth-1 folders and files while reporting a complete single page', async () => {
         const list = jest.fn(async () => ({ data: { files: [
             { id: 'child', name: 'Child', mimeType: 'application/vnd.google-apps.folder', modifiedTime: '2026-01-01' },
             { id: 'note', name: 'note.txt', mimeType: 'text/plain', modifiedTime: '2026-01-02' },
@@ -30,8 +30,37 @@ describe('listFolderContents recursive traversal', () => {
         expect(result).toBe(JSON.stringify({
             folders: [{ id: 'child', name: 'Child', modifiedTime: '2026-01-01' }],
             files: [{ id: 'note', name: 'note.txt', mimeType: 'text/plain', modifiedTime: '2026-01-02' }],
+            truncated: false,
         }, null, 2));
         expect(list).toHaveBeenCalledWith(expect.objectContaining({ q: "'ro\\'ot' in parents and trashed=false", pageSize: 50 }));
+    });
+
+    it('reports depth-1 truncation when Drive returns another page', async () => {
+        const list = jest.fn(async () => ({ data: {
+            files: [file('first', 'first.txt', ['root-id'])],
+            nextPageToken: 'next-page',
+        } }));
+        fakeDrive = { files: { list, get: jest.fn() } };
+
+        const result = JSON.parse(await getTool().execute({ folderId: 'root-id', maxResults: 5, depth: 1 }, { log: noopLog }));
+
+        expect(result).toMatchObject({
+            folders: [],
+            files: [{ id: 'first', name: 'first.txt', mimeType: 'text/plain', modifiedTime: '2026-08-21T00:00:00Z' }],
+            truncated: true,
+        });
+        expect(result.truncationReason).toMatch(/maxResults \(5\).*maximum of 100.*depth.*maxItems/i);
+        expect(list).toHaveBeenCalledTimes(1);
+    });
+
+    it('distinguishes a genuinely empty depth-1 folder from a truncated listing', async () => {
+        const list = jest.fn(async () => ({ data: { files: [] } }));
+        fakeDrive = { files: { list, get: jest.fn() } };
+
+        const result = JSON.parse(await getTool().execute({ folderId: 'empty', depth: 1 }, { log: noopLog }));
+
+        expect(result).toEqual({ folders: [], files: [], truncated: false });
+        expect(result.truncationReason).toBeUndefined();
     });
 
     it('validates recursive parameter combinations and boundaries', () => {
