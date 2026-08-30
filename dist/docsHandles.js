@@ -119,10 +119,11 @@ async function safeDiscardWorkspace(workspaceId, { context: label }) {
  * @param {string|null} [input.tabId]
  * @param {string|null} [input.revisionId] Docs `revisionId` from this read.
  * @param {object} input.contentSource Document/fragment to fingerprint.
+ * @param {object} [input.projectionSource] Read projection for range precision.
  * @param {string} input.content Exact bytes to seed the editable workspace with.
  * @returns {Promise<null|{readHandle:string, expiresAt:number, editablePath:string, structuralFingerprint:string}>}
  */
-export async function mintDocsReadHandle({ documentId, tabId = null, revisionId = null, contentSource, content }) {
+export async function mintDocsReadHandle({ documentId, tabId = null, revisionId = null, contentSource, projectionSource = contentSource, content }) {
     if (!isHandleRuntimeActive()) return null;
     const context = getRequestContext();
     const store = getReadHandleStore();
@@ -162,7 +163,7 @@ export async function mintDocsReadHandle({ documentId, tabId = null, revisionId 
     try {
         setWorkspaceProjection(
             created.workspace.workspaceId,
-            captureDocsProjection(contentSource, { tabId }),
+            captureDocsProjection(projectionSource, { tabId }),
         );
     } catch { /* a projection is an optimization for later precision, never a read failure */ }
     setResultHandle(issued.readHandle, issued.expiresAt);

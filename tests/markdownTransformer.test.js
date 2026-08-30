@@ -624,8 +624,8 @@ describe('convertMarkdownToRequests', () => {
             r.updateTextStyle?.fields === 'foregroundColor'
         );
         expect(colorRequests.length).toBe(1);
-        expect(colorRequests[0].updateTextStyle.textStyle.foregroundColor.color.rgbColor).toEqual({
-            red: 0, green: 0, blue: 0,
+        expect(colorRequests[0].updateTextStyle.textStyle.foregroundColor.color).toEqual({
+            rgbColor: { red: 0, green: 0, blue: 1 / 255 },
         });
     });
 
@@ -640,6 +640,17 @@ describe('convertMarkdownToRequests', () => {
         expect(colorReq.updateTextStyle.range.startIndex).toBe(5);
         // endIndex should be > startIndex (covers the inserted text)
         expect(colorReq.updateTextStyle.range.endIndex).toBeGreaterThan(5);
+
+        const { requests: headingRequests } = convertMarkdownToRequests('# Font Color Probe', 1, undefined, {
+            defaultForegroundColor: { red: 0, green: 0, blue: 1 / 255 },
+        });
+        const colorIndex = headingRequests.findIndex((request) =>
+            request.updateTextStyle?.fields === 'foregroundColor'
+        );
+        const headingStyleIndex = headingRequests.findIndex((request) =>
+            request.updateParagraphStyle?.paragraphStyle?.namedStyleType === 'HEADING_1'
+        );
+        expect(colorIndex).toBeGreaterThan(headingStyleIndex);
     });
 
     it('does not add foreground color when option is not provided', () => {

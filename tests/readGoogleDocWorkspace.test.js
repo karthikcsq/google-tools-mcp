@@ -16,6 +16,7 @@ jest.unstable_mockModule('../dist/clients.js', () => ({
 
 const { register } = await import('../dist/tools/docs/readGoogleDoc.js');
 const { getLastReadContent, guardMutation } = await import('../dist/readTracker.js');
+const { docsJsonToMarkdown } = await import('../dist/markdown-transformer/index.js');
 
 function createServer() {
     const tools = new Map();
@@ -43,12 +44,38 @@ afterEach(async () => {
 });
 
 describe('readDocument local workspace + fidelity warnings', () => {
-    it('allows a title-only modifiedTime change after a text read because the body is unchanged (#108)', async () => {
-        const documentId = `ws-doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    it('allows a title-only modifiedTime change after a text read with structured body content (#108)', async () => {
+        const documentId = `ws-doc-projection-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const fullDoc = {
+            data: {
+                body: {
+                    content: [
+                        {
+                            paragraph: {
+                                paragraphStyle: { namedStyleType: 'HEADING_1' },
+                                elements: [{ textRun: { content: 'Run of show\n' } }],
+                            },
+                        },
+                        {
+                            paragraph: {
+                                bullet: { listId: 'agenda-list', nestingLevel: 0 },
+                                elements: [{ textRun: { content: 'Doors open at six.\n' } }],
+                            },
+                        },
+                    ],
+                },
+                lists: {
+                    'agenda-list': { listProperties: { nestingLevels: [{ glyphSymbol: '•' }] } },
+                },
+            },
+        };
+        const textOnlyDoc = docWithBody(fullDoc.data.body.content.map((element) => ({
+            paragraph: { elements: element.paragraph.elements },
+        })));
         driveModifiedTime = '2026-08-29T10:00:00.000Z';
-        documentsGet.mockResolvedValueOnce(
-            docWithBody([{ paragraph: { elements: [{ textRun: { content: 'Doors open at six.\n' } }] } }])
-        );
+        documentsGet.mockImplementationOnce(async ({ fields }) => (
+            fields === '*' ? fullDoc : textOnlyDoc
+        ));
 
         const server = createServer();
         register(server);
@@ -57,10 +84,14 @@ describe('readDocument local workspace + fidelity warnings', () => {
             { log }
         );
 
-        expect(getLastReadContent(documentId)).toBe('Doors open at six.');
+        expect(documentsGet.mock.calls[0][0].fields).toBe('*');
+        expect(getLastReadContent(documentId)).toBe(docsJsonToMarkdown(fullDoc.data));
         driveModifiedTime = '2026-08-29T10:01:00.000Z';
         await expect(guardMutation(documentId, {
-            contentFetcher: async () => ({ content: 'Doors open at six.', revisionId: 'body-unchanged-title-renamed' }),
+            contentFetcher: async () => ({
+                content: docsJsonToMarkdown(fullDoc.data),
+                revisionId: 'body-unchanged-title-renamed',
+            }),
         })).resolves.toBeUndefined();
         driveModifiedTime = null;
     });

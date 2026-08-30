@@ -267,6 +267,29 @@ describe('markdown export round-trips through the importer', () => {
             'BULLET_DISC_CIRCLE_SQUARE',
         ]);
         expect(requests.some((request) => request.insertText?.text === '\t')).toBe(true);
+
+        const indentOnlyMarkdown = docsJsonToMarkdown({
+            body: {
+                content: [
+                    para([run('Plan the room\n')], {
+                        paragraphStyle: { indentStart: { magnitude: 36, unit: 'PT' } },
+                        bullet: { listId: 'parent-list' },
+                    }),
+                    para([run('Follow up on the table count and space capacity.\n')], {
+                        paragraphStyle: { indentStart: { magnitude: 72, unit: 'PT' } },
+                        bullet: { listId: 'child-list' },
+                    }),
+                ],
+            },
+            lists: {
+                'parent-list': { listProperties: { nestingLevels: [{ glyphType: 'DECIMAL' }] } },
+                'child-list': { listProperties: { nestingLevels: [{ glyphSymbol: '•' }] } },
+            },
+        });
+        expect(indentOnlyMarkdown).toBe(
+            '1. Plan the room\n' +
+            '   - Follow up on the table count and space capacity.'
+        );
     });
 
     it('survives both defects in one document (a styled label inside a list, then a header)', () => {

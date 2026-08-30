@@ -145,7 +145,7 @@ export function register(server) {
                 if (args.format === 'index') {
                     fields = needsTabsContent ? INDEX_TABS_FIELDS : INDEX_BODY_FIELDS;
                 }
-                else if (needsTabsContent || args.format === 'json' || args.format === 'markdown') {
+                else if (needsTabsContent || args.format === 'json' || args.format === 'markdown' || args.format === 'text') {
                     fields = '*'; // Get everything for structure analysis
                 }
                 else {
@@ -187,13 +187,14 @@ export function register(server) {
                 // result for every format (plan §2), so nothing about the
                 // returned text below changes. Off that runtime this is a no-op
                 // and the legacy readTracker guard stays in force.
-                const mintHandle = async (content) => {
+                const mintHandle = async (content, projectionSource) => {
                     try {
                         return await mintDocsReadHandle({
                             documentId: args.documentId,
                             tabId: args.tabId ?? null,
                             revisionId: res.data.revisionId ?? null,
                             contentSource,
+                            ...(projectionSource !== undefined && { projectionSource }),
                             content,
                         });
                     }
@@ -457,7 +458,11 @@ export function register(server) {
                 // caller asked to receive plain text: Drive title changes move
                 // modifiedTime but do not alter this body representation.
                 trackRead(args.documentId, modifiedTime, docsJsonToMarkdown(contentSource), res.data.revisionId);
-                await mintHandle(textContent);
+                // Text reads retain a complete body snapshot for the legacy
+                // stale guard, but do not expose indexed structure through the
+                // read handle. A later index-based edit must still re-read in
+                // index or markdown mode before range precision can authorize it.
+                await mintHandle(textContent, { body: { content: [] } });
                 if (!textContent.trim())
                     return 'Document found, but appears empty.';
                 const totalLength = textContent.length;

@@ -34,7 +34,7 @@ describe('getDefaultTextColor', () => {
         expect(result).toEqual({ color: rgb, error: null });
     });
 
-    it('returns null color when NORMAL_TEXT has no rgb color (e.g. theme-based)', async () => {
+    it('returns a representable explicit black when NORMAL_TEXT uses a theme color', async () => {
         const docs = {
             documents: {
                 get: async () => ({
@@ -47,13 +47,13 @@ describe('getDefaultTextColor', () => {
             },
         };
         const result = await getDefaultTextColor(docs, 'doc-1');
-        expect(result).toEqual({ color: null, error: null });
+        expect(result).toEqual({ color: { red: 0, green: 0, blue: 1 / 255 }, error: null });
     });
 
-    it('returns null color when there is no NORMAL_TEXT style at all', async () => {
+    it('uses a representable explicit black when NORMAL_TEXT is absent', async () => {
         const docs = { documents: { get: async () => ({ data: { namedStyles: { styles: [] } } }) } };
         const result = await getDefaultTextColor(docs, 'doc-1');
-        expect(result).toEqual({ color: null, error: null });
+        expect(result).toEqual({ color: { red: 0, green: 0, blue: 1 / 255 }, error: null });
     });
 
     it('does not throw on fetch failure — returns the error for the caller to log', async () => {

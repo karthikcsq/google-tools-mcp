@@ -289,7 +289,7 @@ export function docsJsonToMarkdown(docData, options = {}) {
     // whether the immediately preceding block was a list item (so a following
     // non-list block gets a blank-line separator instead of being read as a
     // lazy continuation of the last list item).
-    const listState = { listStack: [], lastWasListItem: false };
+    const listState = { listStack: [], listIndentStarts: [], lastWasListItem: false };
     let markdown = '';
     for (const element of body.content) {
         if (element.paragraph) {
@@ -360,7 +360,8 @@ function convertParagraph(paragraph, lists, options, listState) {
 // this replaces used a flat 2-space-per-level indent that only happened to
 // work for unordered lists.
 function renderListItem(listInfo, text, listState) {
-    const { nestingLevel, ordered, listId } = listInfo;
+    const { ordered, listId } = listInfo;
+    const nestingLevel = resolveListNestingLevel(listInfo, listState);
     const stack = listState.listStack;
     // Preserve this level's existing entry (needed below to decide whether the
     // ordinal continues or resets) while discarding any deeper levels: we have
@@ -392,6 +393,37 @@ function renderListItem(listInfo, text, listState) {
     listState.lastWasListItem = true;
     return `${indent}${marker} ${text}\n`;
 }
+// Google Docs normally gives every bullet a nestingLevel. A list created from
+// markdown can instead come back as separate listIds whose child bullets omit
+// that field entirely, while their paragraph indent still carries the real
+// visual depth (for example, 36pt parent then 72pt child). Keep an explicit
+// API nestingLevel authoritative, and only use the ordered indent positions as
+// a fallback for that real response shape.
+function resolveListNestingLevel(listInfo, listState) {
+    if (Number.isInteger(listInfo.nestingLevel)) {
+        return listInfo.nestingLevel;
+    }
+    const indentStart = listInfo.indentStart;
+    if (!Number.isFinite(indentStart)) {
+        return 0;
+    }
+    const indents = listState.listIndentStarts;
+    const knownLevel = indents.indexOf(indentStart);
+    if (knownLevel !== -1) {
+        return knownLevel;
+    }
+    const insertionLevel = indents.findIndex((knownIndent) => indentStart < knownIndent);
+    if (insertionLevel === -1) {
+        indents.push(indentStart);
+        return indents.length - 1;
+    }
+    // Keep the ordinal stack aligned with the inserted visual level. This is
+    // uncommon (Docs normally emits parents before children), but avoids
+    // assigning the next observed shallower list to the previous child level.
+    indents.splice(insertionLevel, 0, indentStart);
+    listState.listStack.splice(insertionLevel, 0, undefined);
+    return insertionLevel;
+}
 // --- Heading Detection ---
 function getHeadingLevel(paragraph) {
     const styleType = paragraph.paragraphStyle?.namedStyleType;
@@ -407,12 +439,15 @@ function getHeadingLevel(paragraph) {
 function getListInfo(paragraph, lists) {
     if (!paragraph.bullet)
         return null;
-    const nestingLevel = paragraph.bullet.nestingLevel ?? 0;
+    const nestingLevel = paragraph.bullet.nestingLevel;
     const listId = paragraph.bullet.listId;
     let ordered = false;
     if (listId && lists[listId]?.listProperties?.nestingLevels) {
         const nestingLevels = lists[listId].listProperties.nestingLevels;
-        const level = nestingLevels[nestingLevel];
+        // When nestingLevel is omitted, Google has commonly split the child
+        // into its own listId. Its first list definition still correctly names
+        // the child marker, while the paragraph indent supplies the depth.
+        const level = nestingLevels[nestingLevel ?? 0];
         if (level) {
             // glyphType is set for ordered lists (e.g., DECIMAL, ALPHA, ROMAN)
             // glyphSymbol is set for unordered lists (e.g., bullet characters)
@@ -422,7 +457,12 @@ function getListInfo(paragraph, lists) {
             }
         }
     }
-    return { ordered, nestingLevel, listId };
+    return {
+        ordered,
+        nestingLevel,
+        listId,
+        indentStart: paragraph.paragraphStyle?.indentStart?.magnitude,
+    };
 }
 // --- Text Run Conversion ---
 function extractFormattedText(elements, options) {

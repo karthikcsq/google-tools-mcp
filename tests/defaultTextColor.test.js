@@ -132,7 +132,7 @@ describe('modifyText — explicit default text color (issue #14)', () => {
         expect(last.updateTextStyle.textStyle.foregroundColor.color.rgbColor).toEqual({ red: 1, green: 0, blue: 0 });
     });
 
-    it('theme-color-based NORMAL_TEXT (no rgbColor): inserts inherit-only, no error', async () => {
+    it('theme-color-based NORMAL_TEXT uses the nearest representable explicit black', async () => {
         const documentId = `modify-theme-${Date.now()}`;
         const documentsGet = jest.fn(async ({ fields } = {}) => {
             if (fields === 'namedStyles') {
@@ -156,7 +156,9 @@ describe('modifyText — explicit default text color (issue #14)', () => {
 
         expect(result).toMatch(/Successfully/);
         const requests = batchUpdate.mock.calls[0][0].requestBody.requests;
-        expect(colorRequestsIn(requests)).toHaveLength(0);
+        const [colorRequest] = colorRequestsIn(requests);
+        expect(colorRequest.updateTextStyle.textStyle.foregroundColor.color)
+            .toEqual({ rgbColor: { red: 0, green: 0, blue: 1 / 255 } });
     });
 
     it('style-only calls (no new text) never touch color, even with a resolvable default', async () => {
@@ -223,9 +225,35 @@ describe('markdown insertion — implicit black default text color (issue #14)',
         const requests = batchUpdate.mock.calls.flatMap((call) => call[0].requestBody.requests);
         const colorRequests = colorRequestsIn(requests);
         expect(colorRequests).toHaveLength(1);
-        expect(colorRequests[0].updateTextStyle.textStyle.foregroundColor.color.rgbColor)
-            .toEqual({ red: 0, green: 0, blue: 0 });
+        expect(colorRequests[0].updateTextStyle.textStyle.foregroundColor.color)
+            .toEqual({ rgbColor: { red: 0, green: 0, blue: 1 / 255 } });
+
+        const expectFallbackColor = async (documentId, styles) => {
+            const fallbackBatchUpdate = jest.fn(async ({ requestBody }) => ({
+                data: { writeControl: requestBody.writeControl },
+            }));
+            const fallbackDocs = {
+                documents: {
+                    get: jest.fn(async () => ({ data: { namedStyles: { styles } } })),
+                    batchUpdate: fallbackBatchUpdate,
+                },
+            };
+
+            await insertMarkdown(fallbackDocs, documentId, 'Font Color Probe');
+
+            const fallbackRequests = fallbackBatchUpdate.mock.calls
+                .flatMap((call) => call[0].requestBody.requests);
+            const [fallbackColorRequest] = colorRequestsIn(fallbackRequests);
+            expect(fallbackColorRequest.updateTextStyle.textStyle.foregroundColor.color)
+                .toEqual({ rgbColor: { red: 0, green: 0, blue: 1 / 255 } });
+        };
+        await expectFallbackColor('markdown-empty-rgb', [{
+            namedStyleType: 'NORMAL_TEXT',
+            textStyle: { foregroundColor: { color: { rgbColor: {} } } },
+        }]);
+        await expectFallbackColor('markdown-no-normal-text', []);
     });
+
 });
 
 describe('appendText — explicit default text color (issue #14)', () => {
@@ -252,7 +280,7 @@ describe('appendText — explicit default text color (issue #14)', () => {
         expect(colorRequestsIn(requests)).toHaveLength(1);
     });
 
-    it('no color request when NORMAL_TEXT has no rgb default', async () => {
+    it('uses an explicit near-black RGB fallback for a theme default', async () => {
         const documentId = `append-theme-${Date.now()}`;
         const { batchUpdate } = setUpDocsMock({ rgb: 'theme' });
         trackRead(documentId, null, null, 'rev-read');
@@ -262,7 +290,9 @@ describe('appendText — explicit default text color (issue #14)', () => {
         await server.getTool('appendText').execute({ documentId, text: 'hello' }, { log: noopLog });
 
         const requests = batchUpdate.mock.calls[0][0].requestBody.requests;
-        expect(colorRequestsIn(requests)).toHaveLength(0);
+        const [colorRequest] = colorRequestsIn(requests);
+        expect(colorRequest.updateTextStyle.textStyle.foregroundColor.color)
+            .toEqual({ rgbColor: { red: 0, green: 0, blue: 1 / 255 } });
     });
 });
 
