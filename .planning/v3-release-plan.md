@@ -306,3 +306,40 @@ which is arguably the correct fix, with the scenario still asserting the old sha
 Monitor task, persistent, 120s poll, one shared `scan()` for issues + PRs + issue comments +
 review comments since a watermark that advances each cycle, filtering out `ElliotDrel` so my
 own replies do not echo back as events.
+
+## Merge-induced mock-factory breaks (found 2026-08-30)
+
+After all five branches merged cleanly on `verify/live-smoke-on-fixes` (HEAD `f63cd12`, zero
+conflict markers), `npm test` reported `Test Suites: 2 failed, 89 passed` with **zero failed
+tests**. That gap is the whole finding: a Jest ESM suite that fails to *link* reports no failed
+tests and reads as green on the `Tests:` line.
+
+All of it is one mechanism. A `jest.unstable_mockModule` factory written on branch A supplies a
+partial set of exports; branch B adds a new named import from that same module to the code under
+test. Git merges both without a conflict because they are different files. The suite then either
+throws `SyntaxError: does not provide an export named X` at link time, or the absent export
+surfaces later as `TypeError: X is not a function`.
+
+Three confirmed instances, all in files owned by `feat/independents` (#113, merges last):
+
+| Missing export | Factory in | New import from |
+|---|---|---|
+| `fs/promises` -> `chmod` | `tests/authConsentFlow.test.js` (#115) | ops-cluster `dist/auth.js:172,176,191` (configDir 0o700, token.json 0o600) |
+| `child_process` -> `execFile` | `tests/authConsentFlow.test.js` | ops-cluster `dist/shellSafe.js` browser opener (#125) |
+| `markdown-transformer/index.js` -> `docsJsonToMarkdown` | `tests/createDocument.test.js` | docs-cluster `dist/tools/drive/createDocument.js` read-state seeding (#87) |
+
+The `createDocument` one was already solved once, in `dc9b1ce` on the abandoned `dev/live-testing`
+lineage: give the fake Docs client a real `documents.get` body rather than stubbing
+`docsJsonToMarkdown`, correct the assertions to merged behaviour, and add the seeding test the path
+never had. Ported by hand (the surrounding file moved), not cherry-picked.
+
+45 mock factories exist across `tests/`. A factory missing an export on a path no test currently
+drives fails silently until something changes, so the whole set gets swept, not just the two that
+happened to fire.
+
+**Rule for the real merge sequence:** adding a missing export to a mock factory is safe on
+`feat/independents` today. Any assertion change that encodes *merged* behaviour (createDocument's
+warning text comes from docs-cluster) fails on `feat/independents` standalone and can only land
+after #110 and #112 are merged into it.
+
+**Gate wording, restated:** read the `Test Suites:` line, never the `Tests:` line alone.
