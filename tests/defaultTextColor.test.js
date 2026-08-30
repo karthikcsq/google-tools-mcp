@@ -226,6 +226,34 @@ describe('markdown insertion — implicit black default text color (issue #14)',
         expect(colorRequests[0].updateTextStyle.textStyle.foregroundColor.color.rgbColor)
             .toEqual({ red: 0, green: 0, blue: 0 });
     });
+
+    it('treats Googles empty RGB payload as implicit black, not an empty direct paint', async () => {
+        const batchUpdate = jest.fn(async ({ requestBody }) => ({ data: { writeControl: requestBody.writeControl } }));
+        const docs = {
+            documents: {
+                get: jest.fn(async ({ fields } = {}) => {
+                    if (fields === 'namedStyles') {
+                        // This is the live Docs payload for its stock black
+                        // NORMAL_TEXT value: proto JSON omits every zero
+                        // channel but retains the surrounding rgbColor object.
+                        return { data: { namedStyles: { styles: [{
+                            namedStyleType: 'NORMAL_TEXT',
+                            textStyle: { foregroundColor: { color: { rgbColor: {} } } },
+                        }] } } };
+                    }
+                    return { data: {} };
+                }),
+                batchUpdate,
+            },
+        };
+
+        await insertMarkdown(docs, 'markdown-empty-rgb', 'Font Color Probe');
+
+        const requests = batchUpdate.mock.calls.flatMap((call) => call[0].requestBody.requests);
+        const [colorRequest] = colorRequestsIn(requests);
+        expect(colorRequest.updateTextStyle.textStyle.foregroundColor.color.rgbColor)
+            .toEqual({ red: 0, green: 0, blue: 0 });
+    });
 });
 
 describe('appendText — explicit default text color (issue #14)', () => {

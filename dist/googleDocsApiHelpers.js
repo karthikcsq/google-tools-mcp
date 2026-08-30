@@ -871,13 +871,20 @@ export async function getDefaultTextColor(docs, documentId) {
         const normalTextStyle = styleRes.data.namedStyles?.styles?.find((s) => s.namedStyleType === 'NORMAL_TEXT');
         const foregroundColor = normalTextStyle?.textStyle?.foregroundColor;
         const rgbColor = foregroundColor?.color?.rgbColor;
-        if (rgbColor) return { color: rgbColor, error: null };
+        // Google serializes an all-zero RGB value as `{}`. That is its
+        // inherit/default representation, not a usable direct paint: sending
+        // the empty object back in updateTextStyle leaves the run without an
+        // explicit foregroundColor. A color with at least one numeric channel
+        // is an actual custom default and must be preserved verbatim.
+        const hasRgbChannel = rgbColor && ['red', 'green', 'blue']
+            .some((channel) => typeof rgbColor[channel] === 'number');
+        if (hasRgbChannel) return { color: rgbColor, error: null };
         // Google omits the NORMAL_TEXT foregroundColor entirely for its stock
         // black default. That still means the effective default is black; use
         // it explicitly so a markdown rebuild does not create colorless runs.
         // A named theme color remains inherit-only because pinning it to a
         // concrete RGB value would sever the document from its theme.
-        if (normalTextStyle && !foregroundColor?.color) {
+        if (normalTextStyle && !foregroundColor?.color?.themeColor) {
             return { color: { red: 0, green: 0, blue: 0 }, error: null };
         }
         return { color: null, error: null };
