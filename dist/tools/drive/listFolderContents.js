@@ -69,6 +69,18 @@ export function register(server) {
                 // Keep depth 1 to its established single Drive page. Its additive
                 // truncation signal lets callers distinguish that page from a full listing.
                 if (depth === 1) {
+                    // A list without an explicit corpora defaults to the caller's My
+                    // Drive corpus, even when includeItemsFromAllDrives is enabled.
+                    // Read the folder first so a shared-drive folder can use the same
+                    // complete-drive scope as recursive listings. This is deliberately
+                    // left unscoped for My Drive and individually shared folders, whose
+                    // existing list behavior must remain unchanged.
+                    const folderResponse = await drive.files.get({
+                        fileId: args.folderId,
+                        fields: 'id,driveId',
+                        supportsAllDrives: true,
+                    });
+                    const sharedDriveId = folderResponse.data.driveId || undefined;
                     let queryString = `'${escapeDriveQueryValue(args.folderId)}' in parents and trashed=false`;
                     if (!includeSubfolders) queryString += ` and mimeType!='${FOLDER_MIME_TYPE}'`;
                     else if (!includeFiles) queryString += ` and mimeType='${FOLDER_MIME_TYPE}'`;
@@ -76,6 +88,7 @@ export function register(server) {
                         q: queryString, pageSize: maxResults, orderBy: 'folder,name',
                         fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
                         supportsAllDrives: true, includeItemsFromAllDrives: true,
+                        ...(sharedDriveId ? { corpora: 'drive', driveId: sharedDriveId } : {}),
                     });
                     const items = response.data.files || [];
                     const folders = items.filter((f) => f.mimeType === FOLDER_MIME_TYPE).map((f) => ({ id: f.id, name: f.name, modifiedTime: f.modifiedTime }));

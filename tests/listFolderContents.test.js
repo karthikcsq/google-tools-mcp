@@ -23,7 +23,8 @@ describe('listFolderContents recursive traversal', () => {
             { id: 'child', name: 'Child', mimeType: 'application/vnd.google-apps.folder', modifiedTime: '2026-01-01' },
             { id: 'note', name: 'note.txt', mimeType: 'text/plain', modifiedTime: '2026-01-02' },
         ] } }));
-        fakeDrive = { files: { list, get: jest.fn() } };
+        const get = jest.fn(async () => ({ data: { id: "ro'ot" } }));
+        fakeDrive = { files: { list, get } };
 
         const result = await getTool().execute({ folderId: "ro'ot", includeSubfolders: true, includeFiles: true, maxResults: 50, depth: 1 }, { log: noopLog });
 
@@ -33,6 +34,33 @@ describe('listFolderContents recursive traversal', () => {
             truncated: false,
         }, null, 2));
         expect(list).toHaveBeenCalledWith(expect.objectContaining({ q: "'ro\\'ot' in parents and trashed=false", pageSize: 50 }));
+        expect(get).toHaveBeenCalledTimes(1);
+    });
+
+    it('scopes a depth-1 listing to the shared drive that owns its folder', async () => {
+        const list = jest.fn(async () => ({ data: { files: [] } }));
+        const get = jest.fn(async () => ({ data: { id: 'shared-folder', driveId: 'shared-drive-x' } }));
+        fakeDrive = { files: { list, get } };
+
+        await getTool().execute({ folderId: 'shared-folder', depth: 1 }, { log: noopLog });
+
+        expect(get).toHaveBeenCalledWith({ fileId: 'shared-folder', fields: 'id,driveId', supportsAllDrives: true });
+        expect(list).toHaveBeenCalledTimes(1);
+        expect(list).toHaveBeenCalledWith(expect.objectContaining({ corpora: 'drive', driveId: 'shared-drive-x' }));
+    });
+
+    it('keeps a depth-1 My Drive listing unscoped after one folder lookup', async () => {
+        const list = jest.fn(async () => ({ data: { files: [] } }));
+        const get = jest.fn(async () => ({ data: { id: 'my-folder' } }));
+        fakeDrive = { files: { list, get } };
+
+        await getTool().execute({ folderId: 'my-folder', depth: 1 }, { log: noopLog });
+
+        expect(get).toHaveBeenCalledTimes(1);
+        expect(list).toHaveBeenCalledTimes(1);
+        expect(list).toHaveBeenCalledWith(expect.objectContaining({ supportsAllDrives: true, includeItemsFromAllDrives: true }));
+        expect(list.mock.calls[0][0].corpora).toBeUndefined();
+        expect(list.mock.calls[0][0].driveId).toBeUndefined();
     });
 
     it('reports depth-1 truncation when Drive returns another page', async () => {
@@ -40,7 +68,7 @@ describe('listFolderContents recursive traversal', () => {
             files: [file('first', 'first.txt', ['root-id'])],
             nextPageToken: 'next-page',
         } }));
-        fakeDrive = { files: { list, get: jest.fn() } };
+        fakeDrive = { files: { list, get: jest.fn(async () => ({ data: { id: 'root-id' } })) } };
 
         const result = JSON.parse(await getTool().execute({ folderId: 'root-id', maxResults: 5, depth: 1 }, { log: noopLog }));
 
@@ -55,7 +83,7 @@ describe('listFolderContents recursive traversal', () => {
 
     it('distinguishes a genuinely empty depth-1 folder from a truncated listing', async () => {
         const list = jest.fn(async () => ({ data: { files: [] } }));
-        fakeDrive = { files: { list, get: jest.fn() } };
+        fakeDrive = { files: { list, get: jest.fn(async () => ({ data: { id: 'empty' } })) } };
 
         const result = JSON.parse(await getTool().execute({ folderId: 'empty', depth: 1 }, { log: noopLog }));
 
