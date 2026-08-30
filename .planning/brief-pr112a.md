@@ -1,0 +1,367 @@
+# PR #112 (ops cluster) — batch 1 of 2: close out unaddressed review findings
+
+You are working on branch `feat/ops-cluster` in this worktree. This PR added a shared
+configuration file layer, convergent setup/doctor, structured JSONL diagnostics with
+rotation, the `troubleshoot` tool, and shared-HTTP service lifecycle management
+(`start`/`stop`).
+
+Twenty-four adversarial-review findings landed AFTER the last commit (220f97f) and none
+have been addressed. This brief is **batch 1: findings 1 through 12**. A second run will
+take findings 13-24, so do not touch anything outside what these twelve require, and keep
+your commits tight so the second batch rebases cleanly on top.
+
+There is also one security issue, #114, included as **finding 13** in this batch because it
+lives in `dist/tools/index.js` which findings 8 touches.
+
+Relevant areas: `dist/config*.js`, `dist/setup*.js`, `dist/doctor*.js`, `dist/logger*.js`,
+`dist/httpService*.js`, `dist/tools/index.js`, `dist/clients/*`.
+
+## Standing constraints (apply to every task below)
+
+- You are working in the worktree you were launched in (`-C`). Stay in it. Do NOT `git
+  checkout`, `git switch`, `git rebase`, `git merge`, `git push`, or touch any other branch.
+- **Commit your work** in logical commits with real messages. Do not push.
+- **`dist/*.js` is hand-written runtime source.** There is no `src/`, no TypeScript, and no
+  build step. Edit `dist/` directly.
+- **Tests are Jest ESM.** Run `npm test` or `npm test -- <path>`. Bare `npx jest` FAILS.
+  Read the **`Test Suites:`** line, not just `Tests:` — a suite that fails to *load* reports
+  zero failed tests, so a broken suite otherwise looks green.
+- The registered tool count is **160**, pinned in `tests/toolRegistration.test.js`,
+  `tests/mcpSdkV2Compatibility.test.js`, `tests/mcpServerFacade.test.js`,
+  `tests/entrypointSmoke.test.js`. If you add a tool you must update all of them.
+- After changing any tracked file under `dist/` or `tests/`, regenerate the inventory:
+  `node scripts/inventory-mcp-migration.mjs --write-snapshot tests/fixtures/mcp-migration-inventory.json`
+  Line shifts alone fail `tests/mcpMigrationInventory.test.js`.
+- **Stdout purity is absolute** on stdio transport: only protocol messages may reach stdout.
+  A stray `console.log` corrupts the protocol. Use the logger, which writes to stderr.
+- **Error-boundary rule:** never interpolate a caught error's message into `publicError()`.
+  Use `wrapOperationError()` or a validated field via `getApiErrorDetail()` from
+  `dist/errors.js`. Caller-supplied text must never reach persisted diagnostics.
+- Do not use `gh` to post anything. Do not `npm install`.
+  Everything you need is inlined in this brief or already in the worktree.
+- Do not make unrelated changes, do not reformat untouched code, do not bump versions.
+- Add or extend tests for every behavioural fix. A fix without a test that fails before it
+  and passes after it is not done.
+
+## How to report
+
+For EVERY numbered finding, end your run with one line of the form:
+
+    FINDING <n>: FIXED <commit-sha> — <one sentence on what changed>
+    FINDING <n>: ALREADY-CORRECT — <the code and reasoning that disprove it>
+    FINDING <n>: INVALID — <why the report is wrong>
+
+Verify each finding against the actual code BEFORE fixing it. Some reports are wrong or
+already fixed; saying so with evidence is a correct outcome and is more useful than a
+defensive change. Never silently skip one.
+
+---
+
+# The findings (1-12)
+## Finding 1 (posted 2026-08-21T17:03:30Z)
+
+**Adversarial Review — issue**
+
+Switching setup from shared HTTP back to stdio leaves the persisted HTTP transport active, so the newly-written stdio client entry does not actually start a stdio server.
+
+Failure scenario:
+1. Run setup once and choose shared HTTP. `configureTransport()` calls `persistTransportSelection('http')`, which writes `GOOGLE_MCP_TRANSPORT=http` into the user `.env`.
+2. Run setup again and choose `One process per client` / stdio.
+3. The stdio branch returns immediately from `configureTransport()` and neither updates the persisted `.env` nor overrides `process.env.GOOGLE_MCP_TRANSPORT`.
+4. `registerClients()` then writes a normal stdio entry (`node .../dist/index.js`). On the next client launch, `dist/config.js` reloads the still-persisted `GOOGLE_MCP_TRANSPORT=http`, and `dist/index.js` selects HTTP rather than stdio. The MCP client is waiting on stdio, so the repaired entry cannot connect.
+
+The current implementation only persists one direction:
+```js
+export async function persistTransportSelection(transport, ...) {
+    if (transport !== 'http') return;
+    await mergeCredentialEnv(..., { GOOGLE_MCP_TRANSPORT: 'http' });
+}
+```
+and the stdio selection exits before any persistence/update.
+
+Smallest fix / acceptance criteria: persist the selected transport in both directions and update the current setup environment consistently. In particular, selecting stdio should explicitly persist `GOOGLE_MCP_TRANSPORT=stdio` (rather than merely deleting it, since a lower-priority cwd/package `.env` could otherwise reactivate HTTP). Add a regression test that starts from a user config containing `GOOGLE_MCP_TRANSPORT=http`, selects stdio, and verifies the resulting client launch resolves to stdio in a fresh process.
+
+
+## Finding 2 (posted 2026-08-21T17:03:42Z)
+
+**Adversarial Review — issue**
+
+`doctor` and the returning-user setup path treat a valid service-account installation as broken because their auth inspection is OAuth-only, even though the runtime explicitly supports `SERVICE_ACCOUNT_PATH`.
+
+Concrete failure scenario:
+- Configure the server with `SERVICE_ACCOUNT_PATH=/path/key.json` (and optionally `GOOGLE_IMPERSONATE_USER`) and no OAuth client ID/secret or `token.json`.
+- Runtime auth succeeds via `authorizeWithServiceAccount()` because `authorize()` checks `SERVICE_ACCOUNT_PATH` first.
+- `google-tools-mcp doctor` calls `inspectSetup()`, whose `checkCredentials()` only calls `loadClientSecrets()` and whose `inspectToken()` only reads/refreshes OAuth `token.json`. The report therefore adds both `OAuth credentials are not configured` and `OAuth token: missing` and exits unhealthy despite a usable auth configuration.
+- `google-tools-mcp setup` has the same mismatch: `runSetup()` uses `checkCredentials()` to decide whether this is a returning installation, so a service-account-only user is routed into the first-install OAuth wizard.
+
+This is not just an unsupported configuration: `dist/auth.js` has a first-class service-account path and the public configuration documents `SERVICE_ACCOUNT_PATH`.
+
+Smallest fix / acceptance criteria: make setup inspection auth-source-aware. When `SERVICE_ACCOUNT_PATH` is configured, validate/report the service-account configuration instead of requiring OAuth client secrets and `token.json`, and let returning setup skip the OAuth wizard when that auth source is healthy. Add doctor/setup tests for a service-account-only configuration with no OAuth files.
+
+
+## Finding 3 (posted 2026-08-21T17:03:52Z)
+
+**Adversarial Review — issue**
+
+Custom diagnostic log paths can chmod an unrelated existing parent directory to `0700`, and common paths such as `/tmp/server.log` simply fail to initialize because the process cannot chmod `/tmp`.
+
+`initLogFile()` / `initStructuredLogFile()` call `ensurePrivateDirectory(path.dirname(filePath))`, and that helper always does:
+```js
+fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+fs.chmodSync(directory, 0o700);
+```
+This is correct for the dedicated default config directory, but `GOOGLE_MCP_LOG_FILE` and `GOOGLE_MCP_JSONL_FILE` explicitly accept arbitrary custom file paths.
+
+Concrete failures:
+- `GOOGLE_MCP_LOG_FILE=/tmp/google-tools-mcp.log` reaches `chmodSync('/tmp', 0700)`. A normal user gets EPERM, the catch path warns, and requested logging is disabled.
+- If the custom parent is an existing directory the user owns and intentionally shares/traverses (for example `$HOME/shared-logs` at `0755`), starting the server silently changes that directory to `0700`, affecting unrelated files/users.
+
+The new test only creates a fresh dedicated `diagnostics` directory, so it verifies the intended default case but not an existing arbitrary parent.
+
+Smallest fix / acceptance criteria: create/chmod a directory only when this logger owns/creates the dedicated diagnostics directory; for an existing custom parent, leave its mode unchanged and create/chmod only the log file itself to `0600`. Add tests with (1) a pre-existing custom parent whose mode must remain unchanged and (2) a writable shared/system-style parent where logging can create the file without requiring parent chmod permission.
+
+
+## Finding 4 (posted 2026-08-21T17:04:35Z)
+
+**Adversarial Review — issue**
+
+Client registration executes shell command strings built with an incomplete `shellQuote()`, so valid configuration values containing shell metacharacters can break setup and can execute unintended commands.
+
+`defaultRun()` uses `child_process.exec(command)`, but `shellQuote()` only adds double quotes when a value contains whitespace or `"`:
+```js
+function shellQuote(value) {
+    return /[\s"]/u.test(value) ? `"${String(value).replaceAll('"', '\\"')}"` : String(value);
+}
+```
+Characters such as `;`, `&`, `|`, `$`, backticks, `<`, and `>` are therefore passed to the shell unquoted. Even the quoted branch is not a complete POSIX-shell escape because `$` and command substitution remain active inside double quotes.
+
+Concrete reachable case: `GOOGLE_MCP_ENDPOINT` is user/config-file controlled and `validEndpoint()` allows `;`. With an endpoint such as `/mcp;id;:`, the generated Claude HTTP registration URL has no whitespace, so it is emitted raw into the `claude mcp add ...` command. Because `adapter.add()` feeds that string to `exec()`, the shell parses the semicolons as command separators instead of URL characters. The same quoting helper is also used for launch paths/args and Codex registration values, so legitimate install paths containing shell metacharacters can fail similarly.
+
+This boundary matters more with the new config layer because cwd/user `.env` values now feed setup/lifecycle behavior directly.
+
+Smallest fix / acceptance criteria: stop constructing registration commands for execution as shell strings. Use `execFile`/`spawn` with an argv array for automatic client operations, keeping shell-rendered strings only for display/manual copy-paste with a platform-correct quoting function. Add a regression test with an allowed endpoint/path containing `;`/`&`/`$` and verify it is passed as one literal argv value and no second command is interpreted.
+
+
+## Finding 5 (posted 2026-08-21T17:05:51Z)
+
+**Adversarial Review — issue**
+
+The Codex HTTP fallback still prints the live bearer token, violating this PR's token-hygiene contract and #83's acceptance criterion that the fixed token be stored/referenced without being printed.
+
+Reachable path:
+1. Choose shared HTTP in setup with Codex installed.
+2. If the Codex entry is missing or differs, `reconcileClientEntry()` takes the `adapter.name === 'Codex' && desired.url` branch because Codex cannot persist the token value in its MCP registration.
+3. That branch builds `manualCommand` with either:
+   - `export GOOGLE_MCP_HTTP_TOKEN='<live token>'`, or
+   - `setx GOOGLE_MCP_HTTP_TOKEN "<live token>"`
+4. `registerClients()` then prints `result.manualCommand` verbatim as the exact commands to run.
+
+So the persisted bearer token is exposed in terminal scrollback precisely on the setup path the PR added. This contradicts the README/PR claim that the token is never printed, and issue #83 explicitly required the generated fixed token to be stored with restrictive permissions and never printed to stderr.
+
+This is also avoidable: setup already knows the private token-file path. The manual instruction can reference/read that file without embedding the secret itself (or otherwise establish the launch environment without rendering the value).
+
+Smallest fix / acceptance criteria: no setup/doctor/status/manual-command output should contain the bearer token bytes. Generate Codex completion instructions that reference the private token source rather than interpolating its value, and add a test asserting the rendered failure/manual path does not contain the test token.
+
+
+## Finding 6 (posted 2026-08-21T17:06:19Z)
+
+**Adversarial Review — issue**
+
+The new client-entry backup can persist secrets that do not happen to have `token|secret|password|authorization` in their key name, and on a returning stdio setup it can create that backup with default file permissions inside an older non-private config directory.
+
+`backupClientEntry()` writes the captured existing entry through:
+```js
+function redactEntry(value) {
+  ...
+  /token|secret|password|authorization/i.test(key) ? '[REDACTED]' : redactEntry(item)
+}
+```
+That heuristic does not redact common credential keys such as `GOOGLE_MAPS_API_KEY`, `API_KEY`, `AWS_ACCESS_KEY_ID`, or arbitrary provider-specific credential names. A concrete repo-native case is an existing google MCP stdio entry with `env: { GOOGLE_MAPS_API_KEY: '...' }`: replacing that entry writes the actual Maps API key into `client-config-backups.log`.
+
+There is a second problem on upgrades: `backupClientEntry()` does only `mkdir(configDir, { recursive: true })` and `appendFile(...)` with default modes. An existing pre-fix config directory can still be `0755`; a returning user with a valid old OAuth token who chooses stdio does not pass through the new token/HTTP writers that chmod the directory. The backup can therefore be created as a normal umask-derived `0644` file under that traversable directory.
+
+Smallest fix / acceptance criteria: treat captured client config as secret-bearing by default. At minimum redact all environment-variable values and authorization/header values (prefer an allowlist for values safe to retain), sanitize credential-bearing URL fields, ensure the config directory is `0700`, and create the backup file as `0600`. Add a regression test with an existing entry containing `GOOGLE_MAPS_API_KEY`/`API_KEY` and a pre-existing `0755` config directory; neither the secret bytes nor permissive backup mode should survive.
+
+
+## Finding 7 (posted 2026-08-21T17:08:11Z)
+
+**Adversarial Review — issue**
+
+The Codex adapter cannot recognize the current `codex mcp get google --json` output shape, so a correctly configured Codex entry is treated as different on every setup/doctor run.
+
+`normalizeClientEntry()` currently does:
+```js
+const source = entry.config && typeof entry.config === 'object' ? entry.config : entry;
+const { name, serverName, token, ...rest } = source;
+if (!rest.command && !rest.url) return null;
+```
+But current Codex serializes both stdio and HTTP settings under a nested `transport` object. The upstream `run_get(... --json)` output is shaped like:
+```json
+{
+  "name": "google",
+  "enabled": true,
+  "transport": {
+    "type": "stdio",
+    "command": "...",
+    "args": [...],
+    "env": {...}
+  },
+  ...
+}
+```
+or `transport: { type: "streamable_http", url, bearer_token_env_var, ... }` for HTTP. This is the current OpenAI Codex implementation: https://github.com/openai/codex/blob/41ab01a2eaff4d4c0fc88d56a0027d1244c33e82/codex-rs/cli/src/mcp_cmd.rs
+
+Because neither `command` nor `url` exists at the top level, `normalizeClientEntry()` returns `null` while `parseClientEntry()` still reports `status: 'found'`.
+
+Concrete effects:
+- A correct Codex stdio entry never compares equal, so setup offers to remove/re-add it every run instead of converging.
+- `doctor` reports a correct Codex entry as different/problematic.
+- A correct Codex HTTP entry also fails equality; the later Codex HTTP fallback then reports setup incomplete and prints manual commands even though the registration is already right.
+
+The current tests mock `adapter.get()` with already-flattened entries, so they do not exercise the real Codex JSON contract.
+
+Smallest fix / acceptance criteria: add a Codex-specific normalization step that extracts the supported fields from `entry.transport` (and ignores Codex metadata such as `enabled`, timeouts, tool filters, etc.) before comparing to the desired entry. Add fixture tests using the actual current `codex mcp get --json` shapes for both stdio and streamable HTTP, and verify setup returns `unchanged` / doctor returns configured.
+
+
+## Finding 8 (posted 2026-08-21T23:04:36Z)
+
+**Adversarial Review — issue**
+
+Changing the configured HTTP bearer token can strand a healthy managed server and delete the only state needed to stop it.
+
+Concrete failure scenario:
+1. Start shared HTTP with the persisted token from `<configDir>/http-token`.
+2. Before stopping/restarting it, set `GOOGLE_MCP_HTTP_TOKEN` to a new value (for example while rotating credentials).
+3. `stopHttpService()` reads the recorded PID, sees that it is alive, then calls `getHttpServiceStatus({ env })`.
+4. `getHttpServiceStatus()` prefers the new environment token, so both authenticated probes to the still-running server fail with the old token and return `diagnostic: 'unreachable-or-unauthorized'`.
+5. `stopHttpService()` treats that as `foreign-or-unverified` **and deletes `http-server.json` without signaling the process**.
+
+The old managed process is now still alive, but the CLI has discarded its PID/URL ownership record. A subsequent `restart`/`start` cannot stop it and will normally hit the occupied port, so token rotation requires manual process discovery/termination.
+
+This is distinct from PID-reuse protection: the state was valid and the PID was live; only authentication changed. The current test `never signals a live foreign or unauthenticated pid` actually codifies the state deletion path but does not exercise the managed-server token-rotation case.
+
+Smallest fix / acceptance criteria: on failed authentication/ownership verification, do **not** delete a live state record. Preserve it and return an explicit auth/token-mismatch diagnostic so the operator can retry with the existing token or an intentional recovery path. Add a regression test that starts a managed instance with token A, invokes stop/restart under token B, and verifies the process remains tracked (or is safely stopped through a purpose-built verified rotation flow) instead of becoming an untracked orphan.
+
+
+## Finding 9 (posted 2026-08-22T00:04:30Z)
+
+**Adversarial Review — issue**
+
+`GOOGLE_MCP_HTTP_NO_AUTH=1` is a supported loopback mode, but setup and doctor still force Codex through the bearer-token path, so a valid no-auth HTTP configuration cannot converge.
+
+Failure scenario:
+1. Set `GOOGLE_MCP_HTTP_NO_AUTH=1` and run setup, choosing shared HTTP.
+2. `configureTransport()` still calls `ensureHttpToken()` and returns a transport object with a token even though `resolveHttpAuthConfig()` has disabled authentication.
+3. `buildClientEntry('Codex', { transport: 'http', ... })` always emits `bearer_token_env_var: 'GOOGLE_MCP_HTTP_TOKEN'`.
+4. If the Codex entry is missing or differs, `reconcileClientEntry()` unconditionally takes its `adapter.name === 'Codex' && desired.url` branch and returns `unsupported-http-auth` instead of adding the URL. `registerClients()` then aborts setup. This happens even though the running server does not require any bearer token.
+5. `doctor` has the same assumption: `createDoctorDesiredEntryResolver()` always flags Codex HTTP as a problem when the token is not inherited, so a manually configured `{ url }` entry against a healthy no-auth server is reported unhealthy.
+
+The failure is specific to the no-auth mode this PR still exposes and documents; there is no authentication value Codex needs in this case.
+
+Smallest fix / acceptance criteria: carry the effective `noAuth` setting into client-entry construction and inspection. For no-auth HTTP, build Codex as URL-only, skip the `unsupported-http-auth` branch/token-environment requirement, and let setup add or repair the entry normally. Add setup + doctor regression tests with `GOOGLE_MCP_HTTP_NO_AUTH=1`, no token environment variable, and a missing Codex entry.
+
+
+## Finding 10 (posted 2026-08-22T01:00:19Z)
+
+**Adversarial Review — issue**
+
+Disabling the plain diagnostic log also disables structured JSONL even when `GOOGLE_MCP_JSONL_FILE` is explicitly configured, contradicting the documented independent controls.
+
+Concrete failure scenario:
+1. Set `GOOGLE_MCP_LOG_FILE=0` because only structured diagnostics are wanted.
+2. Set `GOOGLE_MCP_JSONL_FILE=/some/writable/server.jsonl`.
+3. `getStructuredLogFilePath()` begins with `const plainPath = getLogFilePath(); if (!plainPath) return null;`.
+4. Because the plain log is disabled, the function returns before it ever examines `GOOGLE_MCP_JSONL_FILE`.
+5. `logToolCall()` therefore never writes JSONL, and `readRecentToolCalls()` also reports no structured log.
+
+The runbook explicitly says `GOOGLE_MCP_LOG_FILE` “changes or disables the plain file” and `GOOGLE_MCP_JSONL_FILE` “changes or disables JSONL,” and says to set either variable to disable that sink. The current tests always configure a live plain-log path alongside JSONL, so this combination is uncovered.
+
+Smallest fix / acceptance criteria: resolve `GOOGLE_MCP_JSONL_FILE` independently. An explicit JSONL path must remain active when `GOOGLE_MCP_LOG_FILE` is disabled; only the JSONL variable should disable structured logging. Keep any default-path coupling only for the case where JSONL has no explicit path. Add a regression test with `GOOGLE_MCP_LOG_FILE=0` plus an explicit `GOOGLE_MCP_JSONL_FILE` and verify `logToolCall()` creates/writes the JSONL file while no plain log is created.
+
+
+## Finding 11 (posted 2026-08-22T02:00:42Z)
+
+**Adversarial Review — issue**
+
+`google-tools-mcp stop` exits with status 0 even when it explicitly did not stop the recorded live process.
+
+Concrete failure scenario:
+1. `stopHttpService()` reads a live recorded PID but cannot verify ownership, for example because the service is unreachable/unauthorized or the PID now belongs to something else.
+2. It returns `{ status: 'foreign-or-unverified' }` without sending `SIGTERM`.
+3. `dist/index.js` treats every stop result except `stop-timeout` as success: `exitOperationsCli(result.status === 'stop-timeout' ? 1 : 0)`.
+4. Shell scripts, service managers, and operators therefore receive exit code 0 even though the target is still running and the command's requested action did not occur.
+
+The existing `never signals a live foreign or unauthenticated pid` test verifies that no signal is sent, but there is no CLI-level assertion that this non-stop result is a failure.
+
+Smallest fix / acceptance criteria: return a non-zero CLI exit code for `foreign-or-unverified` (and any future status meaning the requested stop was not completed). Add an entrypoint test that exercises this status and asserts the process exits non-zero while preserving the no-signal safety behavior.
+
+
+## Finding 12 (posted 2026-08-22T03:03:50Z)
+
+**Adversarial Review — issue**
+
+Changing a running shared HTTP service from `GOOGLE_MCP_HTTP_NO_AUTH=1` back to authenticated mode can silently leave the old unauthenticated server in place while `start` reports that it attached successfully.
+
+Concrete failure scenario:
+1. Start the managed service with `GOOGLE_MCP_HTTP_NO_AUTH=1`. `startV2HttpServer()` then accepts requests without checking a bearer token.
+2. Remove `GOOGLE_MCP_HTTP_NO_AUTH` (or set it false) and run `google-tools-mcp start` again, expecting the configured profile to now require bearer authentication.
+3. `startHttpService()` calls `getHttpServiceStatus()` using the *new* environment. That probe sends a bearer token, but the already-running no-auth server ignores token authentication and still answers successfully, so status is `healthy`.
+4. `assertHttpServiceConfigurationMatch()` only compares `host`, `port`, `endpoint`, `profile`, identity, and version. The published state also carries no auth-mode field. There is therefore nothing that detects that the live process is still running with `noAuth=true` while the requested configuration is `noAuth=false`.
+5. `startHttpService()` returns `{ status: 'attached' }` without restarting the process. The operator has asked for authenticated mode, but the full Google Workspace MCP surface remains reachable by any local process with no bearer token.
+
+The inverse transition is also not represented in managed state, but this direction is security-sensitive because the requested hardening never takes effect.
+
+Smallest fix / acceptance criteria: make the effective HTTP auth mode part of the managed service configuration/ownership comparison. Persist a non-secret auth descriptor such as `noAuth` in `http-server.json` (or verify equivalent live behavior), include it in `getHttpServiceConfigurationDifferences()`, and refuse attach when it differs so an explicit restart is required. Add a lifecycle regression test that starts a no-auth managed instance, requests authenticated mode, and verifies `start` does not report `attached` while unauthenticated requests still succeed.
+
+
+
+---
+
+# Finding 13 — security issue #114
+
+The correct fix is to stop building a shell command string at all: use `execFile` with
+an argv array so no shell is involved on any platform. Audit the whole file for the same
+pattern while you are there — any other `exec()` with interpolated user data is the same
+bug. Add a test that a title containing shell metacharacters is passed through verbatim
+and executes nothing.
+
+## Issue #114: feedback issue title can execute shell commands through gh CLI
+
+## Summary
+
+The `feedback` tool passes its user-controlled issue title into a shell command built for `child_process.exec()`. `JSON.stringify()` is used as quoting, but JSON quoting is not shell quoting, so command substitution and shell metacharacters can execute locally when `gh` is installed and authenticated.
+
+This defect exists independently of PR #112. The PR changes the confirmation/diagnostics flow around `feedback`, but the vulnerable `tryGhCli()` command construction predates those changes and does not need PR #112 to exist.
+
+## Concrete failure mode
+
+`dist/tools/index.js` currently does:
+
+```js
+await execAsync(
+  `gh issue create --repo ${REPO} --title ${JSON.stringify(title)} --label ${JSON.stringify(label)} --body-file ${JSON.stringify(tmpFile)}`,
+  { maxBuffer: 10 * 1024 * 1024 }
+);
+```
+
+A title such as `$(touch /tmp/gtm-pwned)` becomes a double-quoted shell argument. On POSIX shells, command substitution still runs inside double quotes, so `touch /tmp/gtm-pwned` executes before `gh issue create` receives the resulting title. Windows command parsing has analogous metacharacter problems because JSON escaping is not `cmd.exe` or PowerShell escaping either.
+
+The path is reachable whenever the `feedback` MCP tool is called with `confirmPublicPost: true`, `gh --version` succeeds, and `gh auth status` succeeds. The tool argument `args.title` flows directly into `tryGhCli(args.title, ...)`.
+
+## Evidence
+
+Found while reviewing PR #112's changes to the `feedback` flow:
+- PR: https://github.com/karthikcsq/google-tools-mcp/pull/112
+- Current file at the reviewed head: https://github.com/karthikcsq/google-tools-mcp/blob/220f97fb744289d5cc68943da28f6c2d88baa817/dist/tools/index.js
+
+No matching open or recently closed issue was found before filing.
+
+## Smallest fix / acceptance criteria
+
+- Stop invoking `gh issue create` through a shell string.
+- Use `execFile`/`spawn` with an argv array, for example `['issue','create','--repo',REPO,'--title',title,...]`.
+- Keep the body-file approach for multiline content.
+- Add a regression test with a title containing `$()`, backticks, `;`, `&`, quotes, and spaces. Verify the exact title is passed as one argv element and no secondary command runs.
+
+Found by an automated Adversarial Review on behalf of Elliot.
+
