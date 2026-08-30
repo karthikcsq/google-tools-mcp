@@ -1247,7 +1247,7 @@ function finalizeFormatting(context) {
     const mergedListRanges = [];
     for (const item of validListItems) {
         const last = mergedListRanges[mergedListRanges.length - 1];
-        if (last && last.bulletPreset === item.bulletPreset && item.startIndex <= last.endIndex + 1) {
+        if (last && last.bulletPreset === item.bulletPreset && last.nestingLevel === item.nestingLevel && item.startIndex <= last.endIndex + 1) {
             last.endIndex = Math.max(last.endIndex, item.endIndex);
         }
         else {
@@ -1255,11 +1255,17 @@ function finalizeFormatting(context) {
                 startIndex: item.startIndex,
                 endIndex: item.endIndex,
                 bulletPreset: item.bulletPreset,
+                nestingLevel: item.nestingLevel,
             });
         }
     }
-    // Apply bottom-to-top to avoid index shifts from tab consumption
-    mergedListRanges.sort((a, b) => b.startIndex - a.startIndex);
+    // Create parent levels before their children. Docs uses the leading tabs in
+    // a child paragraph to nest it under an ALREADY-created parent list; doing
+    // child ranges first silently promotes them to level zero when presets
+    // differ (for example an ordered parent with bullet children). Within one
+    // level, work right-to-left because converting a later item consumes its
+    // leading tabs and cannot shift an earlier range.
+    mergedListRanges.sort((a, b) => a.nestingLevel - b.nestingLevel || b.startIndex - a.startIndex);
     for (const merged of mergedListRanges) {
         const rangeLocation = {
             startIndex: merged.startIndex,

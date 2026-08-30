@@ -236,6 +236,39 @@ describe('markdown export round-trips through the importer', () => {
         expect(markdown).toContain('2. Second step.\n\n## Risks');
     });
 
+    it('creates an ordered parent before its nested bullet child (#106)', () => {
+        const doc = {
+            body: {
+                content: [
+                    para([run('Plan the room\n')], { bullet: { listId: 'L1', nestingLevel: 0 } }),
+                    para([run('Follow up on the table count and space capacity.\n')], { bullet: { listId: 'L1', nestingLevel: 1 } }),
+                ],
+            },
+            lists: {
+                L1: {
+                    listProperties: {
+                        nestingLevels: [{ glyphType: 'DECIMAL' }, { glyphSymbol: 'â—' }],
+                    },
+                },
+            },
+        };
+        const markdown = docsJsonToMarkdown(doc);
+        expect(markdown).toMatch(/^1\. Plan the room\n\s+[-*+] Follow up on the table count and space capacity\.$/);
+
+        const { requests, warnings } = convertMarkdownToRequests(markdown, 1);
+        expect(warnings).toEqual([]);
+        const bulletRequests = requests.filter((request) => request.createParagraphBullets);
+        expect(bulletRequests).toHaveLength(2);
+        // Parent first is required by the real Docs API: only then does its
+        // child range's leading tab become a nesting instruction rather than
+        // a tab Docs removes from a new top-level list.
+        expect(bulletRequests.map((request) => request.createParagraphBullets.bulletPreset)).toEqual([
+            'NUMBERED_DECIMAL_ALPHA_ROMAN',
+            'BULLET_DISC_CIRCLE_SQUARE',
+        ]);
+        expect(requests.some((request) => request.insertText?.text === '\t')).toBe(true);
+    });
+
     it('survives both defects in one document (a styled label inside a list, then a header)', () => {
         expectRoundTripStable({
             body: {
