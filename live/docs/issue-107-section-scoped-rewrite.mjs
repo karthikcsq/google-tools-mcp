@@ -12,6 +12,9 @@
 // the nesting survives, and nothing outside the section moves. If a
 // section-scoped markdown replace exists in this build (replaceRangeWithMarkdown
 // / insertMarkdown), it is used instead, because that is the requested fix.
+// replaceRangeWithMarkdown's target parameter is described as "The range to
+// replace", which likely led to the old range key here. That prose/parameter
+// mismatch should be raised separately; this scenario must use the schema key.
 export const name = 'issue-107-section-scoped-rewrite';
 export const issue = 107;
 export const description = 'Rewriting one section must preserve list nesting inside it and leave every other section untouched.';
@@ -31,7 +34,7 @@ export async function run(ctx) {
         await ctx.call('replaceRangeWithMarkdown', {
             documentId: doc.id,
             markdown: NEW_SECTION_MARKDOWN,
-            range: { afterHeading: 'To Do List', untilNextHeadingOfLevel: 2 },
+            target: { afterHeading: 'To Do List', untilNextHeadingOfLevel: 2 },
         });
     } else {
         // The workaround the FORMATTING LOSS warning routes callers to.

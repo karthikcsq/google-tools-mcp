@@ -25,7 +25,7 @@ export async function run(ctx) {
     await ctx.call('replaceRangeWithMarkdown', {
         documentId: doc.id,
         markdown: ctx.fixture('checklist-2-replacement.md'),
-        range: { afterHeading: 'Rewrite This Section', untilNextHeadingOfLevel: 2 },
+        target: { afterHeading: 'Rewrite This Section', untilNextHeadingOfLevel: 2 },
     });
 
     const after = await ctx.call('readDocument', { documentId: doc.id, format: 'markdown' });
