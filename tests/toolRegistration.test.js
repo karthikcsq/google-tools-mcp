@@ -41,11 +41,15 @@ describe('Tool Registration', () => {
                 'appendText',
                 'deleteRange',
                 'modifyText',
+                'batchModifyText',
                 'findAndReplace',
+                'replaceRangeWithMarkdown',
+                'listHeadings',
                 'insertTable',
                 'insertTableWithData',
                 'insertPageBreak',
                 'insertImage',
+                'updateComment',
             ];
             for (const name of expectedTools) {
                 expect(tools.has(name)).toBe(true);
@@ -250,26 +254,26 @@ describe('Total tool count', () => {
     // number so any future change to the default tool surface is a visible,
     // deliberate diff in this test, not a silent regression.
     //
-    // 128 = the 122 pre-Maps consolidated base tools (docs/utils/drive/extras/
-    // sheets/calendar/forms/gmail subset) + the 6 camelCase `maps` tools added
-    // in PR #66 (mapsGeocode, mapsReverseGeocode, mapsSearchNearby,
-    // mapsSearchPlaces, mapsPlaceDetails, mapsDirections). Maps tools have no
-    // legacy snake_case aliases (they were never snake_case), so the alias
+    // 132 = the 128 pre-docs-cluster consolidated base tools (docs/utils/drive/
+    // extras/sheets/calendar/forms/maps/gmail subset) + the 4 new docs-cluster
+    // tools (replaceRangeWithMarkdown, updateComment, batchModifyText,
+    // listHeadings). Maps tools have no legacy snake_case aliases (they were
+    // never snake_case), and neither do the 4 new docs tools, so the alias
     // count added below stays 72.
-    it('registers exactly 128 tools in the consolidated base surface (docs/utils/drive/extras/sheets/calendar/forms/maps/gmail subset)', async () => {
+    it('registers exactly 132 tools in the consolidated base surface (docs/utils/drive/extras/sheets/calendar/forms/maps/gmail subset)', async () => {
         const server = createMockServer();
         await registerBase(server);
-        expect(server.getTools().size).toBe(128);
+        expect(server.getTools().size).toBe(132);
     });
 
-    it('with legacy aliases explicitly enabled, adds exactly 72 snake_case aliases (200 total)', async () => {
+    it('with legacy aliases explicitly enabled, adds exactly 72 snake_case aliases (204 total)', async () => {
         process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES = 'true';
         const server = createMockServer();
         await registerBase(server);
         const { registerLegacyAliases } = await import('../dist/tools/legacyAliases.js');
         const added = registerLegacyAliases(server, server.getTools());
         expect(added).toBe(72);
-        expect(server.getTools().size).toBe(200);
+        expect(server.getTools().size).toBe(204);
     });
 
     it('legacy aliases are opt-in: registerLegacyAliases is a no-op when the env var is unset (issue #31/#33 regression guard)', async () => {
@@ -286,27 +290,30 @@ describe('Total tool count', () => {
     // (help/logout/troubleshoot/feedback) that the real server also registers.
     // Pin the exact counts through the real `registerAllTools` production path
     // too, so the number a client actually sees by default is covered, not just
-    // the test-helper subset. 156 = 150 pre-Maps + the 6 `maps` tools; 228 = 222
-    // pre-Maps (with aliases) + the same 6 (maps tools have no aliases).
-    it('registerAllTools (real production path) registers exactly 156 tools by default (aliases opt-in, unset)', async () => {
+    // the test-helper subset. 160 = 156 pre-docs-cluster + the 4 new docs tools
+    // (replaceRangeWithMarkdown, updateComment, batchModifyText, listHeadings);
+    // 232 = 228 pre-docs-cluster (with aliases) + the same 4 (no aliases for them).
+    it('registerAllTools (real production path) registers exactly 160 tools by default (aliases opt-in, unset)', async () => {
         const server = createMockServer();
         const { registerAllTools } = await import('../dist/tools/index.js');
         const { logger } = await import('../dist/logger.js');
         const info = jest.spyOn(logger, 'info').mockImplementation(() => {});
         try {
             await registerAllTools(server);
-            expect(server.getTools().size).toBe(156);
+            // 156 on this branch before the docs cluster landed; 160 with its
+            // four new tools, which this branch adds none of.
+            expect(server.getTools().size).toBe(160);
             expect(info).toHaveBeenCalledWith(expect.stringMatching(/^Loaded all \d+ categories in \d+ms\.$/));
             expect(server.getTools().get('feedback').parameters.parse({ type: 'bug', title: 'x', description: 'y' }))
                 .toMatchObject({ includeDiagnostics: false, confirmPublicPost: false });
         } finally { info.mockRestore(); }
     });
 
-    it('registerAllTools (real production path) registers exactly 228 tools with legacy aliases explicitly enabled', async () => {
+    it('registerAllTools (real production path) registers exactly 232 tools with legacy aliases explicitly enabled', async () => {
         process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES = 'true';
         const server = createMockServer();
         const { registerAllTools } = await import('../dist/tools/index.js');
         await registerAllTools(server);
-        expect(server.getTools().size).toBe(228);
+        expect(server.getTools().size).toBe(232);
     });
 });

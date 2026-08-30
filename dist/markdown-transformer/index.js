@@ -11,8 +11,9 @@
 //
 import { docsJsonToMarkdown } from './docsToMarkdown.js';
 import { convertMarkdownToRequests } from './markdownToDocs.js';
-import { executeBatchUpdateWithSplitting, findTabById } from '../googleDocsApiHelpers.js';
-export { docsJsonToMarkdown, checkMarkdownFidelity } from './docsToMarkdown.js';
+import { executeBatchUpdateWithSplitting, findTabById, getDefaultTextColor } from '../googleDocsApiHelpers.js';
+import { logger } from '../logger.js';
+export { docsJsonToMarkdown, checkMarkdownFidelity, detectLinkMismatches } from './docsToMarkdown.js';
 /** Formats InsertMarkdownResult into a concise human-readable debug summary. */
 export function formatInsertResult(result) {
     const lines = [];
@@ -96,21 +97,13 @@ export async function insertMarkdown(docs, documentId, markdown, options) {
     // Fetch the document's default text style so we can explicitly set
     // foreground color on inserted text (fixes issue #14 — text without
     // explicit color shows "no color selected" in the Docs color picker).
-    let defaultForegroundColor;
-    try {
-        const styleRes = await docs.documents.get({
-            documentId,
-            fields: 'namedStyles',
-        });
-        const normalTextStyle = styleRes.data.namedStyles?.styles?.find(
-            (s) => s.namedStyleType === 'NORMAL_TEXT'
-        );
-        const fg = normalTextStyle?.textStyle?.foregroundColor?.color?.rgbColor;
-        if (fg) {
-            defaultForegroundColor = fg;
-        }
-    } catch {
-        // Non-fatal — if we can't read styles, proceed without explicit color
+    // Shared with every other insertion path via getDefaultTextColor so the
+    // lookup and its "no rgb / fetch failed" semantics live in one place.
+    const { color: defaultForegroundColor, error: defaultColorError } = await getDefaultTextColor(docs, documentId);
+    if (defaultColorError) {
+        // Operational problem (previously swallowed silently) — proceed
+        // without an explicit color rather than failing the insertion.
+        logger.warn(`insertMarkdown: could not fetch document default text color for ${documentId}: ${defaultColorError.message}`);
     }
     const parseStart = performance.now();
     const conversionOptions = {

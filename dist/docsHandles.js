@@ -18,6 +18,7 @@ import { publicError } from './errors.js';
 import { ReadHandleError } from './readHandles.js';
 import { getRequestContext } from './requestContext.js';
 import { getLastReadRevisionId, requireRereadBeforeMutation, trackMutation } from './readTracker.js';
+import { textSearchFields } from './googleDocsApiHelpers.js';
 import { logger } from './logger.js';
 import {
     cleanupHandleWorkspaces,
@@ -25,13 +26,24 @@ import {
     createHandleWorkspace,
     discardHandleWorkspace,
     getReadHandleStore,
+    getWorkspaceProjection,
     isHandleRuntimeActive,
     isWorkspaceDirtyOnDisk,
     noteWorkspaceExpiry,
     setResultHandle,
     setResultWarning,
+    setWorkspaceProjection,
     syncRuntimeBinding,
 } from './handleRuntime.js';
+import {
+    CHANGE_STATUS,
+    REJECTION_TIER,
+    captureDocsProjection,
+    classifyDocumentChange,
+    classifyTargetAgainstChange,
+    describeRejection,
+    renderProjectionDiff,
+} from './docsChangePrecision.js';
 
 const HANDLE_REQUIRED_MESSAGE =
     'This edit requires a readHandle. Call readDocument for this document (and tab) first, ' +
@@ -107,10 +119,11 @@ async function safeDiscardWorkspace(workspaceId, { context: label }) {
  * @param {string|null} [input.tabId]
  * @param {string|null} [input.revisionId] Docs `revisionId` from this read.
  * @param {object} input.contentSource Document/fragment to fingerprint.
+ * @param {object} [input.projectionSource] Read projection for range precision.
  * @param {string} input.content Exact bytes to seed the editable workspace with.
  * @returns {Promise<null|{readHandle:string, expiresAt:number, editablePath:string, structuralFingerprint:string}>}
  */
-export async function mintDocsReadHandle({ documentId, tabId = null, revisionId = null, contentSource, content }) {
+export async function mintDocsReadHandle({ documentId, tabId = null, revisionId = null, contentSource, projectionSource = contentSource, content }) {
     if (!isHandleRuntimeActive()) return null;
     const context = getRequestContext();
     const store = getReadHandleStore();
@@ -141,6 +154,18 @@ export async function mintDocsReadHandle({ documentId, tabId = null, revisionId 
         throw asPublic(error);
     }
     noteWorkspaceExpiry(created.workspace.workspaceId, issued.expiresAt);
+    // The range-precision layer (#108) can only classify a later change against
+    // what this read actually saw, so the read's text/structure projection is
+    // captured here, at the one point where the document JSON is in hand. A
+    // read whose field mask carried no indices (format='text') produces an
+    // unavailable projection, which the classifier treats as "cannot classify"
+    // rather than "nothing there".
+    try {
+        setWorkspaceProjection(
+            created.workspace.workspaceId,
+            captureDocsProjection(projectionSource, { tabId }),
+        );
+    } catch { /* a projection is an optimization for later precision, never a read failure */ }
     setResultHandle(issued.readHandle, issued.expiresAt);
     if (context.transport === 'stdio') {
         // Connection-pinned implicit state. HTTP deliberately gets none.
@@ -150,6 +175,8 @@ export async function mintDocsReadHandle({ documentId, tabId = null, revisionId 
         readHandle: issued.readHandle,
         expiresAt: issued.expiresAt,
         editablePath: created.editablePath,
+        backedUp: created.backedUp,
+        backupPath: created.backupPath,
         structuralFingerprint,
     };
 }
@@ -190,8 +217,69 @@ function legacyLease(documentId) {
         },
         async complete(newRevisionId) { trackMutation(documentId, newRevisionId); },
         async fail() {},
+        async abort() {},
         async requireReread(reason) { requireRereadBeforeMutation(documentId, reason); },
+        // Range precision is a v2-only capability, and deliberately so: on the
+        // legacy path the document-scoped `readTracker` guard has ALREADY run
+        // (it is the `legacyGuard` callback above) and it has no per-request
+        // read record to compare a range against. Re-implementing classification
+        // on top of the shared no-context tracker would mean deciding "did this
+        // change touch your range" from state another caller may have written.
+        // So the legacy lease passes targets straight through, unchanged and
+        // un-re-resolved, exactly as these tools behaved before #108.
+        async guardTargets({ targets = [] } = {}) {
+            return {
+                changed: false,
+                classified: false,
+                revisionId: getLastReadRevisionId(documentId),
+                snapshot: null,
+                targets: normalizeTargets(targets),
+            };
+        },
     });
+}
+
+/**
+ * The two fetches `guardTargets` can make on behalf of a tool that does not
+ * already hold a snapshot, in one place so all four Docs writers ask Google for
+ * the same thing.
+ *
+ * `fetchSnapshot` deliberately uses `textSearchFields`: it is the mask
+ * `findTextRangeInDoc` needs for re-resolution AND the mask the change
+ * classifier needs for its text/structure projection, so one fetch serves both.
+ *
+ * @param {object} docs Docs API client.
+ * @param {string} documentId
+ * @param {string|null} tabId
+ */
+export function docsSnapshotFetchers(docs, documentId, tabId) {
+    return {
+        fetchRevisionId: async () => {
+            const probe = await docs.documents.get({ documentId, fields: 'revisionId' });
+            return probe?.data?.revisionId ?? null;
+        },
+        fetchSnapshot: async () => {
+            const snapshot = await docs.documents.get({
+                documentId,
+                includeTabsContent: !!tabId,
+                fields: `revisionId,${textSearchFields(tabId)}`,
+            });
+            return { document: snapshot?.data, revisionId: snapshot?.data?.revisionId ?? null };
+        },
+    };
+}
+
+/** Coerce one target or a list of them into the internal array form. */
+function normalizeTargets(targets) {
+    const list = Array.isArray(targets) ? targets : (targets ? [targets] : []);
+    return list.map((target, position) => ({
+        kind: target.kind === 'semantic' ? 'semantic' : 'explicit',
+        startIndex: target.startIndex,
+        endIndex: target.endIndex,
+        label: target.label ?? null,
+        describe: target.describe ?? null,
+        position,
+    }));
 }
 
 /**
@@ -206,16 +294,52 @@ function legacyLease(documentId) {
  * never from caller input — `expectedRevisionId` is only a compare-and-write
  * assertion that must agree with the record.
  *
+ * ### Range precision (#108)
+ *
+ * The lease additionally exposes `guardTargets(...)`, the seam that turns the
+ * document-scoped guard above into a range-scoped one. A tool that knows which
+ * range it is about to edit calls it with that range and a snapshot of the
+ * document as it is NOW; the guard classifies whether the change between the
+ * read and now could have affected that range, and either
+ *
+ *   * permits it and RE-ARMS this lease from the same snapshot (the returned
+ *     targets carry re-resolved indices and `writeControlFor()` starts
+ *     returning the snapshot's revision, so the write can never go out against
+ *     the stale handle revision), or
+ *   * rejects it with an explanation naming what changed, where confidence
+ *     ended, and which read workflow recovers.
+ *
+ * `targetRange`/`reresolve`/`fetchSnapshot` here are the same call made for
+ * you, for a tool whose target is fully known before it fetches anything.
+ *
  * @returns {Promise<{active:boolean, revisionId:string|null, writeControl:object|undefined,
+ *   guardTargets(options:object):Promise<object>,
  *   complete(newRevisionId?:string):Promise<void>, fail():Promise<void>}>}
  */
 export async function beginDocsMutation(documentId, {
     tabId = null, readHandle = null, expectedRevisionId = null, legacyGuard = null,
+    targetRange = null, reresolve = null, fetchSnapshot = null, fetchRevisionId = null,
 } = {}) {
     if (!isHandleRuntimeActive()) {
         if (legacyGuard) await legacyGuard();
         return legacyLease(documentId);
     }
+    const lease = await openV2Lease(documentId, { tabId, readHandle, expectedRevisionId });
+    if (targetRange) {
+        try {
+            await lease.guardTargets({ targets: targetRange, reresolve, fetchSnapshot, fetchRevisionId });
+        } catch (error) {
+            // guardTargets already released the reservation on a classified
+            // rejection; this covers the snapshot fetch itself failing, where
+            // the handle is still untouched and must survive for the retry.
+            await lease.abort();
+            throw error;
+        }
+    }
+    return lease;
+}
+
+async function openV2Lease(documentId, { tabId, readHandle, expectedRevisionId }) {
 
     const context = getRequestContext();
     const store = getReadHandleStore();
@@ -266,15 +390,137 @@ export async function beginDocsMutation(documentId, {
     } catch { /* workspace bookkeeping must never block a validated write */ }
 
     let settled = false;
+    // The revision this lease authorizes. It starts as the validated record's
+    // and only ever moves through `guardTargets`, which advances it to a
+    // snapshot it has just proven cannot affect the caller's target — the
+    // "atomic re-arm" of plan §Implementation step 1.
+    let effectiveRevisionId = record.revisionId ?? null;
     return makeLease({
         active: true,
-        revisionId: record.revisionId,
-        // The WriteControl value always comes from the validated record, never
-        // from caller input (plan §2).
+        // A live getter, not a copy: `replaceRangeWithMarkdown` reads
+        // `lease.revisionId` to seed its WriteControl chain, and a re-armed
+        // lease must hand it the re-armed revision.
+        get revisionId() { return effectiveRevisionId; },
+        // The WriteControl value always comes from the validated record or from
+        // a snapshot this guard itself fetched and classified — never from
+        // caller input (plan §2).
         writeControlFor() {
-            return record.revisionId ? { requiredRevisionId: record.revisionId } : undefined;
+            return effectiveRevisionId ? { requiredRevisionId: effectiveRevisionId } : undefined;
         },
         readHandleRecord: record,
+
+        /**
+         * Range-precise conflict check plus atomic re-arm (#108).
+         *
+         * @param {object} options
+         * @param {object|object[]} options.targets `{startIndex, endIndex?, kind, describe?}`.
+         *   `kind: 'semantic'` means the target came from a text/heading anchor
+         *   and can be resolved again; anything else is an explicit index.
+         * @param {object} [options.snapshot] `{document, revisionId}` the caller
+         *   already fetched. Passing the caller's own snapshot (rather than
+         *   making the guard fetch a second one) is what keeps "what the guard
+         *   classified" and "what the caller resolved against" the same bytes.
+         * @param {function} [options.fetchSnapshot] Used when no snapshot is supplied.
+         * @param {function} [options.reresolve] `(snapshot) => target|target[]|null`,
+         *   positionally aligned with `targets`. Required for semantic targets
+         *   on a changed document; returning null means "no unique match".
+         * @returns {Promise<{changed:boolean, classified:boolean, revisionId:string|null,
+         *   snapshot:object|null, targets:object[]}>}
+         */
+        async guardTargets({
+            targets = [], snapshot = null, fetchSnapshot = null, fetchRevisionId = null, reresolve = null,
+        } = {}) {
+            const normalized = normalizeTargets(targets);
+            const priorRevisionId = record.revisionId ?? null;
+            const unchangedResult = (current) => ({
+                changed: false,
+                classified: false,
+                revisionId: effectiveRevisionId,
+                snapshot: current ?? null,
+                targets: normalized,
+            });
+            // Nothing to be precise about: the write stays protected by the
+            // document-scoped WriteControl exactly as it was before #108.
+            if (normalized.length === 0) return unchangedResult(snapshot);
+
+            // Revision equality is the cheap proof that nothing happened — a
+            // Docs revision advances on every change — so a caller with no
+            // snapshot in hand can offer a `revisionId`-only probe and skip
+            // fetching the document at all on the overwhelmingly common path.
+            if (!snapshot && typeof fetchRevisionId === 'function') {
+                const probed = await fetchRevisionId();
+                if (priorRevisionId && probed && probed === priorRevisionId) return unchangedResult(null);
+            }
+            const current = snapshot ?? (typeof fetchSnapshot === 'function' ? await fetchSnapshot() : null);
+            if (!current || !current.document) {
+                // A programming error in a caller, not a caller-facing failure:
+                // it never reaches the transport as a public message.
+                throw new Error('guardTargets requires a snapshot ({document, revisionId}) or a fetchSnapshot callback.');
+            }
+            const currentRevisionId = current.revisionId ?? null;
+            if (priorRevisionId && currentRevisionId && priorRevisionId === currentRevisionId) {
+                return unchangedResult(current);
+            }
+
+            const after = captureDocsProjection(current.document, { tabId });
+            const before = getWorkspaceProjection(workspaceId);
+            const change = classifyDocumentChange(before, after, { revisionMoved: true });
+
+            // Re-resolution runs BEFORE any verdict and against this exact
+            // snapshot, so a permitted target is never authorized on one
+            // document state and written against another.
+            let reresolved = null;
+            if (typeof reresolve === 'function' && normalized.some((target) => target.kind === 'semantic')) {
+                reresolved = await reresolve(current);
+            }
+            const withResolution = normalized.map((target, position) => {
+                if (target.kind !== 'semantic') return target;
+                const candidate = Array.isArray(reresolved) ? reresolved[position] : (position === 0 ? reresolved : null);
+                const usable = candidate && Number.isInteger(candidate.startIndex) ? candidate : null;
+                return { ...target, resolved: usable };
+            });
+
+            const diff = renderProjectionDiff(before, after, `document ${documentId}`);
+            for (const target of withResolution) {
+                const verdict = target.kind === 'semantic' && !target.resolved
+                    && change.status !== CHANGE_STATUS.UNCHANGED
+                    ? { permitted: false, tier: REJECTION_TIER.AMBIGUOUS }
+                    : classifyTargetAgainstChange(target, change);
+                if (verdict.permitted) continue;
+                // Nothing was written, and the handle is not to blame — release
+                // the reservation so it is not left stuck `reserved`.
+                await this.abort();
+                throw publicError(describeRejection({
+                    tier: verdict.tier,
+                    change,
+                    target,
+                    diff,
+                    revisionFrom: priorRevisionId,
+                    revisionTo: currentRevisionId,
+                }));
+            }
+
+            // --- atomic re-arm -----------------------------------------------
+            // Every target above is proven unaffected by this exact snapshot,
+            // and every semantic one now carries indices resolved against it.
+            // Advancing the authorized revision here, synchronously, in the same
+            // step, is what makes those two facts inseparable: from this point
+            // `writeControlFor()` returns the snapshot's revision, so the batch
+            // cannot go out pinned to the stale handle revision, and
+            // `complete()` still mints the successor from the revision the write
+            // itself returns.
+            if (currentRevisionId) effectiveRevisionId = currentRevisionId;
+            return {
+                changed: true,
+                classified: true,
+                revisionId: effectiveRevisionId,
+                snapshot: current,
+                targets: withResolution.map((target) => (target.resolved
+                    ? { ...target, startIndex: target.resolved.startIndex, endIndex: target.resolved.endIndex }
+                    : target)),
+            };
+        },
+
         async complete(newRevisionId) {
             if (settled) return;
             settled = true;
@@ -418,6 +664,18 @@ export async function beginDocsMutation(documentId, {
             settled = true;
             try { store.completeAfterWriteFailure(lease.operationId); }
             catch { /* the caller is already throwing the real failure */ }
+        },
+        // Release the reservation WITHOUT consuming the handle, for a tool that
+        // decides not to write after taking the lease: a dryRun, or a range that
+        // fails validation before any request reaches Google. Without this the
+        // record would stay `reserved` and the caller's next attempt — the
+        // corrected one — would be rejected as an in-flight mutation even though
+        // the document was never touched.
+        async abort() {
+            if (settled) return;
+            settled = true;
+            try { store.abortBeforeWrite(lease.operationId); }
+            catch { /* the caller is already returning or throwing */ }
         },
         // A write whose resulting revision we cannot observe (the Apps Script
         // image path) leaves this handle unable to guard anything: terminalize

@@ -19,6 +19,7 @@ import * as fs from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'node:crypto';
 
 // Restrict an id to characters that are always safe in a filename. documentId
 // and tabId are Google-issued opaque ids, but sanitizing is cheap defense in
@@ -129,11 +130,93 @@ export async function writeFileSecurely(filePath, content) {
     return filePath;
 }
 
+// absolute mirror path -> ms epoch of the last time THIS process wrote it via
+// writeWorkspaceFile. In-memory and per-process, like every other read/write
+// tracking state in this codebase (dist/readTracker.js, dist/handleRuntime.js):
+// it cannot protect a file across a process restart, so backupIfLocallyModified
+// treats "no record" the same as "modified" — see there for why that is the
+// safe default rather than a gap.
+const mirrorWriteFingerprints = new Map();
+
+function fingerprintContent(content) {
+    return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+/** Record one known-good write to an editable workspace file. */
+export function recordWorkspaceFileWrite(filePath, content) {
+    mirrorWriteFingerprints.set(filePath, fingerprintContent(content));
+}
+
 // Write content to the shared workspace file for documentId/tabId. Returns the
 // absolute path written. Throws on any failure (callers decide whether that is
 // fatal). This is the legacy (session-era) shared copy; the SDK v2 runtime uses
 // a per-handle editable copy instead — see dist/handleRuntime.js.
 export async function writeWorkspaceFile(documentId, content, tabId = null) {
     await ensureSafeBaseDir();
-    return writeFileSecurely(getWorkspacePath(documentId, tabId), content);
+    const filePath = getWorkspacePath(documentId, tabId);
+    const written = await writeFileSecurely(filePath, content);
+    // Recorded AFTER the write actually lands, so backupIfLocallyModified can
+    // tell "the file on disk is exactly what THIS write just put there" apart
+    // from "something else touched it since" (issue #122). Any writer of this
+    // file counts as legitimate here — readDocument seeding/refreshing the
+    // mirror, and replaceDocumentWithMarkdown echoing a push back into it —
+    // both are the tool's own hand, not a conflict to protect against.
+    recordWorkspaceFileWrite(written, content);
+    return written;
+}
+
+/**
+ * Guard and write any per-user editable workspace file, including SDK v2
+ * handle copies. The legacy wrapper above derives its path from document/tab;
+ * the handle runtime already owns an exact per-handle path and uses this form.
+ */
+export async function writeEditableWorkspaceFile(filePath, content) {
+    const backup = await backupIfLocallyModified(filePath);
+    const written = await writeFileSecurely(filePath, content);
+    recordWorkspaceFileWrite(written, content);
+    return { written, ...backup };
+}
+
+/**
+ * Before overwriting the local mirror at `filePath`, check whether something
+ * OTHER than this process's own last write has touched it since — i.e. a
+ * human editing the working copy readDocument told them to edit — and if so,
+ * copy the current on-disk content to `${filePath}.bak` first so the next
+ * write does not silently destroy it (issue #122: a later readDocument call
+ * used to overwrite an in-progress local edit with no warning and no backup).
+ *
+ * "No record of ever writing this exact path" (first read of this
+ * document+tab in this process, or the process restarted since) is treated
+ * the SAME as "modified more recently than we wrote it": there is no way to
+ * prove the file is safe to clobber, so this errs toward one extra,
+ * essentially free backup file over the alternative of silently repeating
+ * the bug being fixed. A backup is best-effort — a failure here must never
+ * block the read that triggered it; the caller decides what to do with a
+ * failed attempt.
+ *
+ * @param {string} filePath absolute path of the mirror file about to be overwritten.
+ * @returns {Promise<{backedUp: boolean, backupPath?: string, backupError?: string}>}
+ */
+export async function backupIfLocallyModified(filePath) {
+    let content;
+    try {
+        content = await fs.readFile(filePath, 'utf-8');
+    }
+    catch {
+        return { backedUp: false }; // nothing on disk yet — nothing to protect
+    }
+    const recordedFingerprint = mirrorWriteFingerprints.get(filePath);
+    const locallyModified = recordedFingerprint === undefined
+        || fingerprintContent(content) !== recordedFingerprint;
+    if (!locallyModified) {
+        return { backedUp: false };
+    }
+    const backupPath = `${filePath}.bak`;
+    try {
+        await writeFileSecurely(backupPath, content);
+        return { backedUp: true, backupPath };
+    }
+    catch (error) {
+        return { backedUp: false, backupError: error.message };
+    }
 }

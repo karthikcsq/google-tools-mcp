@@ -6,7 +6,93 @@ import {
     getTabTextLength,
     buildUpdateTextStyleRequest,
     buildUpdateParagraphStyleRequest,
+    getDefaultTextColor,
+    buildDefaultColorStyleRequest,
 } from '../dist/googleDocsApiHelpers.js';
+
+// ---------------------------------------------------------------------------
+// getDefaultTextColor / buildDefaultColorStyleRequest (issue #14)
+// ---------------------------------------------------------------------------
+describe('getDefaultTextColor', () => {
+    it('returns the rgb color of the NORMAL_TEXT named style', async () => {
+        const rgb = { red: 0.2, green: 0.3, blue: 0.4 };
+        const docs = {
+            documents: {
+                get: async () => ({
+                    data: {
+                        namedStyles: {
+                            styles: [
+                                { namedStyleType: 'TITLE' },
+                                { namedStyleType: 'NORMAL_TEXT', textStyle: { foregroundColor: { color: { rgbColor: rgb } } } },
+                            ],
+                        },
+                    },
+                }),
+            },
+        };
+        const result = await getDefaultTextColor(docs, 'doc-1');
+        expect(result).toEqual({ color: rgb, error: null });
+    });
+
+    it('returns a representable explicit black when NORMAL_TEXT uses a theme color', async () => {
+        const docs = {
+            documents: {
+                get: async () => ({
+                    data: {
+                        namedStyles: {
+                            styles: [{ namedStyleType: 'NORMAL_TEXT', textStyle: { foregroundColor: { color: { themeColor: 'TEXT1' } } } }],
+                        },
+                    },
+                }),
+            },
+        };
+        const result = await getDefaultTextColor(docs, 'doc-1');
+        expect(result).toEqual({ color: { red: 0, green: 0, blue: 1 / 255 }, error: null });
+    });
+
+    it('uses a representable explicit black when NORMAL_TEXT is absent', async () => {
+        const docs = { documents: { get: async () => ({ data: { namedStyles: { styles: [] } } }) } };
+        const result = await getDefaultTextColor(docs, 'doc-1');
+        expect(result).toEqual({ color: { red: 0, green: 0, blue: 1 / 255 }, error: null });
+    });
+
+    it('does not throw on fetch failure — returns the error for the caller to log', async () => {
+        const boom = new Error('network exploded');
+        const docs = { documents: { get: async () => { throw boom; } } };
+        const result = await getDefaultTextColor(docs, 'doc-1');
+        expect(result.color).toBeNull();
+        expect(result.error).toBe(boom);
+    });
+});
+
+describe('buildDefaultColorStyleRequest', () => {
+    const rgb = { red: 1, green: 0, blue: 0 };
+
+    it('builds an updateTextStyle request painting the range with the given color', () => {
+        const req = buildDefaultColorStyleRequest(5, 10, rgb);
+        expect(req).toEqual({
+            updateTextStyle: {
+                range: { startIndex: 5, endIndex: 10 },
+                textStyle: { foregroundColor: { color: { rgbColor: rgb } } },
+                fields: 'foregroundColor',
+            },
+        });
+    });
+
+    it('includes tabId when provided', () => {
+        const req = buildDefaultColorStyleRequest(5, 10, rgb, 'tab-1');
+        expect(req.updateTextStyle.range.tabId).toBe('tab-1');
+    });
+
+    it('returns null when color is null', () => {
+        expect(buildDefaultColorStyleRequest(5, 10, null)).toBeNull();
+    });
+
+    it('returns null when the range is empty (endIndex <= startIndex)', () => {
+        expect(buildDefaultColorStyleRequest(5, 5, rgb)).toBeNull();
+        expect(buildDefaultColorStyleRequest(10, 5, rgb)).toBeNull();
+    });
+});
 
 // ---------------------------------------------------------------------------
 // findTabById

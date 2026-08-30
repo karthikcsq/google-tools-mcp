@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { UserError } from '../../errors.js';
 import { getGmailClient } from '../../clients.js';
-import { processMessagePart, formatMessageClean, formatMessageMetadata, capToResponseBudget, makeOmissionStub, DEFAULT_MAX_RESPONSE_CHARS } from '../../helpers.js';
+import { formatMessageForOutput, capToResponseBudget, makeOmissionStub, DEFAULT_MAX_RESPONSE_CHARS } from '../../helpers.js';
 
 // A single message can exceed maxResponseChars on its own (maxBodyChars only
 // caps each MIME part independently, and headers/metadata add more on top).
@@ -73,6 +73,21 @@ const capThreadMessages = (thread, maxResponseChars) => {
     return thread;
 };
 
+// Shared by getThread/listThreads/batchGetThreads: applies the "latest N"
+// maxMessages slice (0 and negatives = unlimited; fractional values are
+// floored for compatibility), dispatches
+// each remaining message through the shared
+// clean/metadata/full formatter, then caps the whole thread against
+// maxResponseChars. messageIds filtering (getThread-only) happens before this
+// is called, since only getThread supports it. No-op when the thread has no
+// messages (e.g. an error stub already substituted in its place).
+const applyThreadMessageFormatting = (thread, params) => {
+    if (!thread.messages) return thread;
+    if (params.maxMessages > 0) thread.messages = thread.messages.slice(-Math.floor(params.maxMessages));
+    thread.messages = thread.messages.map(message => formatMessageForOutput(message, params));
+    return capThreadMessages(thread, params.maxResponseChars);
+};
+
 export function register(server) {
     server.addTool({
         name: 'getThread',
@@ -84,7 +99,7 @@ export function register(server) {
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: skip quote detection entirely and always return the full body, including any quoted reply history. Default false. Use this if quotedHistoryAmbiguous keeps showing up and you'd rather have the full text every time than a per-message flag."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
             messageIds: z.array(z.string()).optional().describe("Only include messages with these IDs in the thread response. An empty array is treated as no filter."),
-            maxMessages: z.number().optional().describe("Only include the latest N messages of the thread (applied after messageIds). Omit for all. Use 1-2 for the usual 'just the latest reply' case."),
+            maxMessages: z.number().optional().describe("Only include the latest N messages of the thread (applied after messageIds). Omit for all. 0 or a negative value means unlimited. Fractional values are floored. Use 1-2 for the usual 'just the latest reply' case."),
             maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across all messages combined (unlike maxBodyChars, which only caps each message independently). When exceeded, the oldest messages are dropped (keeping the latest) and the response reports responseTruncated/totalMessages/includedMessages/truncationNote. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
@@ -92,14 +107,7 @@ export function register(server) {
             const { data } = await gmail.users.threads.get({ userId: 'me', id: params.id, format: 'full' });
             if (data.messages) {
                 if (params.messageIds?.length) data.messages = data.messages.filter(message => params.messageIds.includes(message.id));
-                if (params.maxMessages > 0) data.messages = data.messages.slice(-params.maxMessages);
-                data.messages = data.messages.map(message => {
-                    if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
-                    if (params.format === 'metadata') return formatMessageMetadata(message);
-                    if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml, params.maxBodyChars);
-                    return message;
-                });
-                capThreadMessages(data, params.maxResponseChars);
+                applyThreadMessageFormatting(data, params);
             }
             return JSON.stringify(data);
         },
@@ -118,7 +126,7 @@ export function register(server) {
             maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: skip quote detection entirely and always return the full body, including any quoted reply history. Default false. Use this if quotedHistoryAmbiguous keeps showing up and you'd rather have the full text every time than a per-message flag."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
-            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all."),
+            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all. 0 or a negative value means unlimited. Fractional values are floored."),
             maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across every thread this call fetches combined (unlike maxBodyChars, which only caps each message independently, and applies per-thread besides). When exceeded, whole threads are dropped from the end of the list first; each retained thread is also capped individually. Reports responseTruncated/totalThreads/includedThreads/truncationNote at the top level, and the same per-thread when an individual thread's messages were cut. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
@@ -136,16 +144,7 @@ export function register(server) {
                     data.threads.map(async ({ id }) => {
                         try {
                             const { data: thread } = await gmail.users.threads.get({ userId: 'me', id, format: 'full' });
-                            if (thread.messages) {
-                                if (params.maxMessages > 0) thread.messages = thread.messages.slice(-params.maxMessages);
-                                thread.messages = thread.messages.map(message => {
-                                    if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
-                                    if (params.format === 'metadata') return formatMessageMetadata(message);
-                                    if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml, params.maxBodyChars);
-                                    return message;
-                                });
-                                capThreadMessages(thread, params.maxResponseChars);
-                            }
+                            applyThreadMessageFormatting(thread, params);
                             return thread;
                         } catch (e) {
                             return { id, error: e.message || 'Failed to retrieve thread' };
@@ -183,7 +182,7 @@ export function register(server) {
             maxBodyChars: z.number().optional().default(3000).describe("Max decoded chars per text body — per message in clean mode, per MIME text part in full mode; not a whole-response cap. Oversized undecoded parts (e.g. HTML) are omitted with a totalChars note. 0 = unlimited."),
             includeQuoted: z.boolean().optional().default(false).describe("In clean mode: skip quote detection entirely and always return the full body, including any quoted reply history. Default false. Use this if quotedHistoryAmbiguous keeps showing up and you'd rather have the full text every time than a per-message flag."),
             includeBodyHtml: z.boolean().optional().describe("In full mode only: whether to include parsed HTML body parts"),
-            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all."),
+            maxMessages: z.number().optional().describe("Only include the latest N messages per thread. Omit for all. 0 or a negative value means unlimited. Fractional values are floored."),
             maxResponseChars: z.number().optional().default(DEFAULT_MAX_RESPONSE_CHARS).describe(`Whole-response character budget across every requested thread combined (unlike maxBodyChars, which only caps each message independently, and applies per-thread besides). When exceeded, whole threads are dropped from the end of the ids list first; each retained thread is also capped individually. Truncation is reported on the last returned thread via batchResponseTruncated/totalThreadsRequested/includedThreads/truncationNote, and per-thread when an individual thread's messages were cut. Default ${DEFAULT_MAX_RESPONSE_CHARS}. 0 = unlimited.`),
         }),
         execute: async (params) => {
@@ -192,16 +191,7 @@ export function register(server) {
                 params.ids.map(async (id) => {
                     try {
                         const { data } = await gmail.users.threads.get({ userId: 'me', id, format: 'full' });
-                        if (data.messages) {
-                            if (params.maxMessages > 0) data.messages = data.messages.slice(-params.maxMessages);
-                            data.messages = data.messages.map(message => {
-                                if (params.format === 'clean') return formatMessageClean(message, params.maxBodyChars, params.includeQuoted);
-                                if (params.format === 'metadata') return formatMessageMetadata(message);
-                                if (message.payload) message.payload = processMessagePart(message.payload, params.includeBodyHtml, params.maxBodyChars);
-                                return message;
-                            });
-                            capThreadMessages(data, params.maxResponseChars);
-                        }
+                        applyThreadMessageFormatting(data, params);
                         return data;
                     } catch (error) {
                         return { id, error: error.message || 'Failed to retrieve thread' };

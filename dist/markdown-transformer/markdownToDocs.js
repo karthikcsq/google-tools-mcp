@@ -1,5 +1,5 @@
 import MarkdownIt from 'markdown-it';
-import { buildUpdateTextStyleRequest, buildUpdateParagraphStyleRequest, } from '../googleDocsApiHelpers.js';
+import { buildDefaultForegroundColorStyle, buildUpdateTextStyleRequest, buildUpdateParagraphStyleRequest, } from '../googleDocsApiHelpers.js';
 import { MarkdownConversionError } from '../types.js';
 // --- Markdown-it Setup ---
 function createParser() {
@@ -1015,6 +1015,8 @@ function popFormatting(context, type) {
 }
 // --- Finalization ---
 function finalizeFormatting(context) {
+    let baseColorRequest = null;
+    const inlineTextStyleRequests = [];
     // Apply the document's default foreground color to the entire inserted range
     // so text has an explicit color value in Google Docs (fixes issue #14).
     // This goes first so intentional colors (code blocks, links) override it.
@@ -1026,17 +1028,17 @@ function finalizeFormatting(context) {
         if (context.tabId) {
             baseRange.tabId = context.tabId;
         }
-        context.formatRequests.push({
+        baseColorRequest = {
             updateTextStyle: {
                 range: baseRange,
                 textStyle: {
                     foregroundColor: {
-                        color: { rgbColor: context.defaultForegroundColor },
+                        color: buildDefaultForegroundColorStyle(context.defaultForegroundColor),
                     },
                 },
                 fields: 'foregroundColor',
             },
-        });
+        };
     }
     // Character-level formatting (bold, italic, strikethrough, code, links)
     for (const range of context.textRanges) {
@@ -1058,13 +1060,13 @@ function finalizeFormatting(context) {
             range.formatting.fontFamily) {
             const styleRequest = buildUpdateTextStyleRequest(range.startIndex, range.endIndex, formattingToTextStyle(range.formatting), context.tabId);
             if (styleRequest) {
-                context.formatRequests.push(styleRequest.request);
+                inlineTextStyleRequests.push(styleRequest.request);
             }
         }
         if (range.formatting.link) {
             const linkRequest = buildUpdateTextStyleRequest(range.startIndex, range.endIndex, { linkUrl: range.formatting.link }, context.tabId);
             if (linkRequest) {
-                context.formatRequests.push(linkRequest.request);
+                inlineTextStyleRequests.push(linkRequest.request);
             }
         }
     }
@@ -1077,6 +1079,13 @@ function finalizeFormatting(context) {
             }
         }
     }
+    // Applying a named paragraph style after a direct text style clears the
+    // direct color on heading runs in the live Docs API. Apply the base paint
+    // after those paragraph styles, then restore intentional inline styles.
+    if (baseColorRequest) {
+        context.formatRequests.push(baseColorRequest);
+    }
+    context.formatRequests.push(...inlineTextStyleRequests);
     // Normal paragraph spacing (spaceBelow so paragraphs have visible gaps between them,
     // matching the visual separation expected from markdown-rendered paragraphs).
     // The default Google Docs NORMAL_TEXT style has 0pt spacing, so without this
@@ -1255,11 +1264,17 @@ function finalizeFormatting(context) {
                 startIndex: item.startIndex,
                 endIndex: item.endIndex,
                 bulletPreset: item.bulletPreset,
+                nestingLevel: item.nestingLevel,
             });
         }
     }
-    // Apply bottom-to-top to avoid index shifts from tab consumption
-    mergedListRanges.sort((a, b) => b.startIndex - a.startIndex);
+    // Create parent levels before their children. Docs uses the leading tabs in
+    // a child paragraph to nest it under an ALREADY-created parent list; doing
+    // child ranges first silently promotes them to level zero when presets
+    // differ (for example an ordered parent with bullet children). Within one
+    // level, work right-to-left because converting a later item consumes its
+    // leading tabs and cannot shift an earlier range.
+    mergedListRanges.sort((a, b) => a.nestingLevel - b.nestingLevel || b.startIndex - a.startIndex);
     for (const merged of mergedListRanges) {
         const rangeLocation = {
             startIndex: merged.startIndex,
