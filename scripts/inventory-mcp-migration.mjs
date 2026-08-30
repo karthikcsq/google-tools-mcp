@@ -46,10 +46,19 @@ function repositorySourceFiles(repositoryRoot) {
         ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--cached', '--others', '--exclude-standard', '--', 'dist/**', 'tests/**'],
         { cwd: repositoryRoot, encoding: 'utf8' },
     );
+    // `--cached` still lists index entries whose working file is gone, so a
+    // snapshot regenerated before a deletion is staged would report files that
+    // no longer exist. Drop those, for the same reason `--others` is included.
+    const deleted = new Set(execFileSync(
+        'git',
+        ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--deleted', '--', 'dist/**', 'tests/**'],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+    ).split(/\r?\n/).filter(Boolean));
 
     const files = output
         .split(/\r?\n/)
         .filter(Boolean)
+        .filter((file) => !deleted.has(file))
         .filter((file) => SOURCE_EXTENSIONS.has(path.extname(file)))
         .sort();
 

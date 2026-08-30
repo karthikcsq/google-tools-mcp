@@ -224,6 +224,16 @@ async function authenticate() {
     const authorizeUrl = oAuth2Client.generateAuthUrl({
         access_type: 'offline',
         scope: SCOPES.join(' '),
+        // Google only guarantees a refresh_token on the FIRST exchange for a
+        // given client/user/scope combination — without forcing re-consent, a
+        // returning user (stale/deleted token.json, invalid_grant recovery,
+        // a fresh machine reusing the same Google account) can complete the
+        // exchange without one, silently losing persistent offline access
+        // (issue #115). Google always shows the consent screen anyway on a
+        // genuinely first-time authorization, so this costs first-time users
+        // nothing while making every other case obtain a refresh token too
+        // (https://developers.google.com/identity/protocols/oauth2/web-server).
+        prompt: 'consent',
     });
     logger.info('Opening browser for Google authorization...');
     logger.info('If the browser does not open, visit this URL:', authorizeUrl);
@@ -267,11 +277,20 @@ async function authenticate() {
     });
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
-    if (tokens.refresh_token) {
-        await saveCredentials(oAuth2Client);
-    } else {
-        logger.warn('Did not receive refresh token. Token might expire.');
+    if (!tokens.refresh_token) {
+        // Nothing durable was saved: the next process still has no token.json
+        // and will have to run this whole interactive browser flow again.
+        // Reporting "Authentication successful!" here would tell the caller
+        // persistent offline access exists when it does not — the exact
+        // failure mode of issue #115. Fail loudly instead of degrading to a
+        // silently-temporary access-token-only client. Consent was already
+        // forced above, so this means Google still didn't mint one — revoking
+        // access is the only remaining lever.
+        throw new Error('Google did not return a refresh token, so persistent offline access ' +
+            'could not be saved, even with re-consent requested. Revoke access for this app at ' +
+            'https://myaccount.google.com/permissions and run `google-tools-mcp auth` again.');
     }
+    await saveCredentials(oAuth2Client);
     logger.info('Authentication successful!');
     return oAuth2Client;
 }
