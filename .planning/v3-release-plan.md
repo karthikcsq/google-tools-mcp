@@ -127,29 +127,49 @@ than `Tests:`.
 
 ---
 
-## PAUSE POINT — 2026-08-29, resume here
+## STATUS — 2026-08-30
 
-Everything is committed and pushed. No agents running, no monitor running, every worktree
-clean. Nothing lives only on this machine.
+Everything below is committed and pushed. Nothing lives only on this machine.
 
 ### Branch heads (all pushed)
 
 | Branch | Head | State |
 |---|---|---|
 | `docs/mcp-plan-client-evidence` (#109) | `45fc243` | closed out |
-| `feat/docs-cluster` (#110) | `37a7686` | **NOT mergeable — see live gaps below** |
-| `feat/gmail-cluster` (#111) | `8a112be` | closed out, one live gap (#73 filenames) |
+| `feat/docs-cluster` (#110) | `eea7725` | **NOT mergeable — 3 live gaps open, see below** |
+| `feat/gmail-cluster` (#111) | `078ba94` | closed out, #73 filenames now PASS live |
 | `feat/ops-cluster` (#112) | `5c20ee8` | closed out, all 24 findings answered |
 | `feat/independents` (#113) | `4f76e3f` | closed out |
-| `feat/live-smoke` | `533e5cc` | built, no PR opened yet |
-| `feat/v3-integration` | `3c60eec` | all four clusters merged, 90 suites / 1287 tests |
-| `verify/live-smoke-on-fixes` | `e49833a` | integration + live-smoke, used to run scenarios against the fixed build |
+| `feat/live-smoke` | `841a2a7` | scenarios recalibrated, **no PR opened yet (task #52)** |
+| `verify/live-smoke-on-fixes` | `e205d93` | all five branches merged; 91 suites / 1295 tests green |
 
-### The live smoke result that changes the plan
+### Live smoke, run 2 — 2026-08-30T03-18-54 (journal in `google-tools-mcp-int/live-smoke-results/`)
 
-Running the 22 scenarios against `verify/live-smoke-on-fixes` (every fix present):
-**11 passed, 7 failed.** Ten scenarios flipped FAIL -> PASS versus the unfixed base, which
-calibrates the harness. The failures below are real and were invisible to unit tests.
+**19 passed, 3 failed of 22**, up from 11/22 on run 1. Fourteen of the seventeen scenarios
+that were expected-fail on base now pass, which is the calibration working as intended.
+Cleanup trashed 28 of 28 created items, folder empty afterwards, 0 stdout leaks, 0 drafts left.
+
+Confirmed fixed live since run 1: **#122** (mirror backup guard on the v2 handle path) and
+**#73** (long non-ASCII attachment filename). **#105** and **#107** pass with their
+recalibrated assertions.
+
+Still failing, all Docs, all previously reported as FIXED with passing unit tests:
+
+1. **#14** — `replaceDocumentWithMarkdown` writes runs with no `foregroundColor`. Confirmed by
+   grep: `buildDefaultColorStyleRequest` is called from `appendToGoogleDoc`, `batchModifyText`,
+   `insertTableWithData` and `modifyText`, and from no markdown write path.
+2. **#106** — nested list sub-items lose their indent through the export/import round trip.
+   The prior fix went onto the **export** side (`renderListItem` in `docsToMarkdown.js`); the
+   loss may be on the import side. Determine which half before changing anything.
+3. **#108** — a title-only rename still blocks an unrelated body edit, and reports
+   `last modified` 1.4s **earlier** than `last read`. Guard is `dist/readTracker.js:244,257`.
+
+**The lesson, twice over:** a passing unit test has now falsely certified a Docs fix on two
+separate occasions. The gate for #110 is the live table, not `npm test`.
+
+### Historical — run 1, 2026-08-29 (11 passed, 7 failed)
+
+Kept for the reasoning trail.
 
 Run it again with:
 ```
