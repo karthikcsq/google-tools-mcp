@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -65,18 +65,17 @@ export function register(server) {
 
                 return JSON.stringify(results, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing recurring instances: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(
+                    throw publicError(
                         'Recurring event not found. Check the event_id — it should be the parent recurring event ID.'
                     );
                 if (error.code === 400)
-                    throw new UserError(
+                    throw publicError(
                         'The specified event_id does not appear to be a recurring event.'
                     );
-                throw new UserError(
-                    `Failed to list recurring instances: ${error.message || 'Unknown error'}`
-                );
+                throw wrapOperationError('list recurring instances', error, { status: error?.code });
             }
         },
     });

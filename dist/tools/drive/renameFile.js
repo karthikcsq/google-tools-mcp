@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -27,12 +27,13 @@ export function register(server) {
                 return `Successfully renamed to "${file.name}" (ID: ${file.id})\nLink: ${file.webViewLink}`;
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error renaming file: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('File not found. Check the file ID.');
+                    throw publicError('File not found. Check the file ID.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have write access to this file.');
-                throw new UserError(`Failed to rename file: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have write access to this file.');
+throw wrapOperationError('rename file', error, { status: error?.code });
             }
         },
     });

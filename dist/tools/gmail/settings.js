@@ -2,7 +2,7 @@
 // manageGmailSettings/manageSmime/manageFilter replace the former ~34 granular
 // account-config tools. Profile/watch stay granular (renamed to camelCase).
 import { z } from 'zod';
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { getGmailClient } from '../../clients.js';
 
 // ---------------------------------------------------------------------------

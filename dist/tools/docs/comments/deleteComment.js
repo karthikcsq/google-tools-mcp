@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { z } from 'zod';
 import { google } from 'googleapis';
 import { getAuthClient } from '../../../clients.js';
@@ -23,8 +23,9 @@ export function register(server) {
                 return `${docUrl}\nComment ${args.commentId} has been deleted.`;
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error deleting comment: ${error.message || error}`);
-                throw new UserError(`Failed to delete comment: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('delete document comment', error, { status: error?.code });
             }
         },
     });

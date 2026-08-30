@@ -1,9 +1,9 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'addTab',
@@ -27,6 +27,7 @@ export function register(server) {
                 .string()
                 .optional()
                 .describe('An emoji to display as the tab icon (e.g., "📋").'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -41,7 +42,7 @@ export function register(server) {
                     });
                     const parentTab = GDocsHelpers.findTabById(docInfo.data, args.parentTabId);
                     if (!parentTab) {
-                        throw new UserError(`Parent tab with ID "${args.parentTabId}" not found in document.`);
+                        throw publicError(`Parent tab with ID "${args.parentTabId}" not found in document.`);
                     }
                 }
                 const tabProperties = {};
@@ -53,15 +54,22 @@ export function register(server) {
                     tabProperties.index = args.index;
                 if (args.iconEmoji !== undefined)
                     tabProperties.iconEmoji = args.iconEmoji;
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
-                    {
-                        addDocumentTab: {
-                            tabProperties,
+                // Document-scoped: adding a tab changes the document's tab
+                // structure, so the authorizing read is a whole-document read.
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: null,
+                    readHandle: args.readHandle,
+                });
+                const response = await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                        {
+                            addDocumentTab: {
+                                tabProperties,
+                            },
                         },
-                    },
-                ], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, response?.writeControl?.requiredRevisionId);
+                    ], writeControl),
+                    (result) => result?.writeControl?.requiredRevisionId,
+                );
                 const newTabProps = response.replies?.[0]?.addDocumentTab?.tabProperties;
                 if (newTabProps) {
                     return JSON.stringify({
@@ -78,13 +86,13 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error adding tab to doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
                 if (error.code === 404)
-                    throw new UserError(`Document not found (ID: ${args.documentId}).`);
+                    throw publicError(`Document not found (ID: ${args.documentId}).`);
                 if (error.code === 403)
-                    throw new UserError(`Permission denied for document (ID: ${args.documentId}).`);
-                throw new UserError(`Failed to add tab: ${error.message || 'Unknown error'}`);
+                    throw publicError(`Permission denied for document (ID: ${args.documentId}).`);
+throw wrapOperationError('add document tab', error, { status: error?.code });
             }
         },
     });

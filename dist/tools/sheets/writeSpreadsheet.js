@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -39,7 +39,7 @@ export function register(server) {
                 log.error(`Error writing to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to write to spreadsheet: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('write to spreadsheet', error, { status: error?.code });
             }
         },
     });

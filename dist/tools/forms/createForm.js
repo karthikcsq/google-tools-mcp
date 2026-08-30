@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getFormsClient } from '../../clients.js';
 
@@ -44,10 +44,11 @@ export function register(server) {
                     2,
                 );
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error creating form: ${error.message || error}`);
                 if (error.code === 401)
-                    throw new UserError('Authentication failed. Try logging out and re-authenticating.');
-                throw new UserError(`Failed to create form: ${error.message || 'Unknown error'}`);
+                    throw publicError('Authentication failed. Try logging out and re-authenticating.');
+throw wrapOperationError('create form', error, { status: error?.code });
             }
         },
     });

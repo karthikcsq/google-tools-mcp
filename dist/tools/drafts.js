@@ -1,6 +1,6 @@
 // Gmail Draft tools
 import { z } from 'zod';
-import { UserError } from 'fastmcp';
+import { UserError } from '../errors.js';
 import { getGmailClient } from '../clients.js';
 import { processMessagePart, constructRawMessage, constructRawMessageWithAttachments } from '../helpers.js';
 

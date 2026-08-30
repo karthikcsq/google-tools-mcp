@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
@@ -55,7 +55,7 @@ export function register(server) {
                 if (error.code === 403) {
                     throw new UserError(`Permission denied for spreadsheet (ID: ${args.spreadsheetId}). Ensure you have write access.`);
                 }
-                throw new UserError(`Failed to batch write to spreadsheet: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('batch write to spreadsheet', error, { status: error?.code });
             }
         },
     });

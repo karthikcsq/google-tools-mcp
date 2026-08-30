@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -80,12 +80,13 @@ export function register(server) {
                     2
                 );
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error getting events: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Calendar or event not found. Check the calendar_id or event_id.');
+                    throw publicError('Calendar or event not found. Check the calendar_id or event_id.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. The calendar may not be shared with you.');
-                throw new UserError(`Failed to get events: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. The calendar may not be shared with you.');
+throw wrapOperationError('get calendar events', error, { status: error?.code });
             }
         },
     });

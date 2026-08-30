@@ -1,9 +1,9 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'renameTab',
@@ -13,6 +13,7 @@ export function register(server) {
                 .string()
                 .describe('The ID of the tab to rename. Use listDocumentTabs to get tab IDs.'),
             newTitle: z.string().min(1).describe('The new title for the tab.'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -26,34 +27,42 @@ export function register(server) {
                 });
                 const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                 if (!targetTab) {
-                    throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                    throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                 }
                 const oldTitle = targetTab.tabProperties?.title || '(untitled)';
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
-                    {
-                        updateDocumentTabProperties: {
-                            tabProperties: {
-                                tabId: args.tabId,
-                                title: args.newTitle,
+                // Document-scoped: renaming a tab edits the document's tab
+                // properties, not that tab's content, so the authorizing read is
+                // a whole-document read rather than a read of this tab.
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: null,
+                    readHandle: args.readHandle,
+                });
+                const response = await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+                        {
+                            updateDocumentTabProperties: {
+                                tabProperties: {
+                                    tabId: args.tabId,
+                                    title: args.newTitle,
+                                },
+                                fields: 'title',
                             },
-                            fields: 'title',
                         },
-                    },
-                ], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, response?.writeControl?.requiredRevisionId);
+                    ], writeControl),
+                    (result) => result?.writeControl?.requiredRevisionId,
+                );
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully renamed tab from "${oldTitle}" to "${args.newTitle}".`;
             }
             catch (error) {
                 log.error(`Error renaming tab ${args.tabId} in doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
                 if (error.code === 404)
-                    throw new UserError(`Document not found (ID: ${args.documentId}).`);
+                    throw publicError(`Document not found (ID: ${args.documentId}).`);
                 if (error.code === 403)
-                    throw new UserError(`Permission denied for document (ID: ${args.documentId}).`);
-                throw new UserError(`Failed to rename tab: ${error.message || 'Unknown error'}`);
+                    throw publicError(`Permission denied for document (ID: ${args.documentId}).`);
+throw wrapOperationError('rename document tab', error, { status: error?.code });
             }
         },
     });

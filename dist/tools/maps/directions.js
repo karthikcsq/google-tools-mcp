@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { getMapsApiKey, mapsFetch } from './mapsClient.js';
 
 const waypoint = z.union([

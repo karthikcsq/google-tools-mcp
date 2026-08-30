@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getTasksClient } from '../../clients.js';
 
@@ -18,12 +18,13 @@ export function register(server) {
                 await tasks.tasks.delete({ tasklist: args.taskListId, task: args.taskId });
                 return JSON.stringify({ deleted: true, taskId: args.taskId, taskListId: args.taskListId }, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error deleting task: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`Task not found (taskId: ${args.taskId}, listId: ${args.taskListId}).`);
+                    throw publicError(`Task not found (taskId: ${args.taskId}, listId: ${args.taskListId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have access to this task.');
-                throw new UserError(`Failed to delete task: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have access to this task.');
+throw wrapOperationError('delete task', error, { status: error?.code });
             }
         },
     });

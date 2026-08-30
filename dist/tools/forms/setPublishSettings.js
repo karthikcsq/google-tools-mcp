@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getFormsClient } from '../../clients.js';
 
@@ -31,7 +31,7 @@ export function register(server) {
             }
 
             if (Object.keys(body).length === 0) {
-                throw new UserError('At least one setting (publishAsTemplate or requireAuthentication) must be provided.');
+                throw publicError('At least one setting (publishAsTemplate or requireAuthentication) must be provided.');
             }
 
             try {
@@ -48,11 +48,12 @@ export function register(server) {
                     appliedSettings: body,
                 }, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error setting publish settings: ${error.message || error}`);
                 if (error.code === 401)
-                    throw new UserError('Authentication failed. Try logging out and re-authenticating.');
-                if (error.code === 404) throw new UserError(`Form not found: ${args.formId}`);
-                throw new UserError(`Failed to set publish settings: ${error.message || 'Unknown error'}`);
+                    throw publicError('Authentication failed. Try logging out and re-authenticating.');
+                if (error.code === 404) throw publicError(`Form not found: ${args.formId}`);
+throw wrapOperationError('set form publish settings', error, { status: error?.code });
             }
         },
     });

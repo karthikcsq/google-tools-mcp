@@ -11,7 +11,7 @@ import { promisify } from 'util';
 import { getTokenPath, getConfigDir, SCOPES } from '../auth.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { logger } from '../logger.js';
-import { runWithSession } from '../sessionContext.js';
+import { getPublicErrorMessage, publicError } from '../errors.js';
 import { google } from 'googleapis';
 import { registerLegacyAliases } from './legacyAliases.js';
 
@@ -80,8 +80,12 @@ function appendHintToError(error, toolName) {
     if (HINT_EXCLUDED_TOOLS.has(toolName)) return error;
     if (!error) return error;
     // Avoid double-appending if something else (or a retry) already added it.
-    const existingMsg = error.message || '';
+    const publicMessage = getPublicErrorMessage(error);
+    const existingMsg = publicMessage ?? (error.message || '');
     if (existingMsg.includes('`troubleshoot` tool')) return error;
+    // Public errors are immutable by design. Preserve their explicit caller-safe
+    // status while adding the established troubleshooting guidance.
+    if (publicMessage !== undefined) return publicError(existingMsg + ERROR_HINT);
     try {
         error.message = existingMsg + ERROR_HINT;
     } catch {
@@ -100,18 +104,15 @@ function wrapServerWithAuthRetry(server) {
         const toolName = toolDef.name;
         if (originalExecute) {
             toolDef.execute = async function (...args) {
-                // Bind this request's MCP session so per-session state (e.g. the
-                // read-before-edit tracker) is isolated across concurrent HTTP
-                // clients. context.sessionId is undefined for stdio (single
-                // client), which maps to the default namespace. (PR #36 review)
-                const sessionKey = args[1]?.sessionId ?? null;
-                return runWithSession(sessionKey, async () => {
-                    try {
-                        return await withAuthRetry(() => originalExecute.apply(this, args));
-                    } catch (err) {
-                        throw appendHintToError(err, toolName);
-                    }
-                });
+                // No session binding here any more: the request context that
+                // scopes per-request state (e.g. the read-before-edit tracker)
+                // is established once by the transport in dist/mcpServer.js and
+                // read ambiently, so this layer is purely auth-retry + hints.
+                try {
+                    return await withAuthRetry(() => originalExecute.apply(this, args));
+                } catch (err) {
+                    throw appendHintToError(err, toolName);
+                }
             };
         }
         return originalAddTool(toolDef);

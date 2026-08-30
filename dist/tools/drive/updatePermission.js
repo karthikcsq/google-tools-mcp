@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -21,7 +21,7 @@ export function register(server) {
         }),
         execute: async (args, { log }) => {
             if (args.role === 'owner' && !args.transferOwnership) {
-                throw new UserError("Role 'owner' requires transferOwnership=true.");
+                throw publicError("Role 'owner' requires transferOwnership=true.");
             }
             const drive = await getDriveClient();
             log.info(`Updating permission ${args.permissionId} on ${args.fileId} to role=${args.role}`);
@@ -37,13 +37,17 @@ export function register(server) {
                 return JSON.stringify(response.data, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error updating permission: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`Permission or file not found (fileId: ${args.fileId}, permissionId: ${args.permissionId}).`);
+                    throw publicError(`Permission or file not found (fileId: ${args.fileId}, permissionId: ${args.permissionId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. You need writer+ access (or be the owner) to modify sharing.');
-                const apiMsg = error.response?.data?.error?.message || error.message || 'Unknown error';
-                throw new UserError(`Failed to update permission: ${apiMsg}`);
+                    throw publicError('Permission denied. You need writer+ access (or be the owner) to modify sharing.');
+                // Validated upstream detail (e.g. an illegal role change) stays
+                // caller-visible; the raw thrown text does not.
+                const detail = getApiErrorDetail(error);
+                if (!detail) throw wrapOperationError('update Drive permission', error, { status: error?.code });
+                throw publicError(`Failed to update permission: ${detail.description}`);
             }
         },
     });

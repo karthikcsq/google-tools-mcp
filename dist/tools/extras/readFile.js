@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 import { trackRead } from '../../readTracker.js';
@@ -77,7 +77,7 @@ export function register(server) {
                     throw new UserError(`File not found: ${fileId}`);
                 if (error.code === 403)
                     throw new UserError('Permission denied. Check that the file is shared with this account.');
-                throw new UserError(`Failed to read file: ${error.message}`);
+                throw wrapOperationError('read file', error, { status: error?.code });
             }
         },
     });

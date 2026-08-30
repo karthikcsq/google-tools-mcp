@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 
@@ -98,14 +98,13 @@ export function register(server) {
 
                 return JSON.stringify({ files }, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing Drive files: ${error.message || error}`);
                 if (error.code === 403)
-                    throw new UserError(
+                    throw publicError(
                         'Permission denied. Make sure you have granted Google Drive access to the application.'
                     );
-                throw new UserError(
-                    `Failed to list files: ${error.message || 'Unknown error'}`
-                );
+                throw wrapOperationError('list Drive files', error, { status: error?.code });
             }
         },
     });

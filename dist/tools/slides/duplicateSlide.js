@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -30,7 +30,7 @@ export function register(server) {
                 });
             } catch (error) {
                 log.error(`Error duplicating slide: ${error.message || error}`);
-                throw new UserError(`Failed to duplicate slide: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('duplicate slide', error, { status: error?.code });
             }
         },
     });

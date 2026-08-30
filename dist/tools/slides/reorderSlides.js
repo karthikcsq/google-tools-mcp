@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -34,7 +34,7 @@ export function register(server) {
                 });
             } catch (error) {
                 log.error(`Error reordering slides: ${error.message || error}`);
-                throw new UserError(`Failed to reorder slides: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('reorder slides', error, { status: error?.code });
             }
         },
     });

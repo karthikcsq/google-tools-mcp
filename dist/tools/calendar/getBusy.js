@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -56,8 +56,9 @@ export function register(server) {
 
                 return JSON.stringify(results, null, 2);
             } catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error querying freebusy: ${error.message || error}`);
-                throw new UserError(`Failed to query busy times: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('query busy calendar times', error, { status: error?.code });
             }
         },
     });

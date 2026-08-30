@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } from '../../../errors.js';
 import { z } from 'zod';
 import { google } from 'googleapis';
 import { getAuthClient } from '../../../clients.js';
@@ -46,10 +46,16 @@ export function register(server) {
                 }
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error resolving comment: ${error.message || error}`);
-                const errorDetails = error.response?.data?.error?.message || error.message || 'Unknown error';
-                const errorCode = error.response?.data?.error?.code;
-                throw new UserError(`Failed to resolve comment: ${errorDetails}${errorCode ? ` (Code: ${errorCode})` : ''}`);
+                // The Drive comments API's own description plus its structured
+                // numeric code. Both are validated upstream fields; the thrown
+                // object's own message and `code` are not consulted.
+                const detail = getApiErrorDetail(error);
+                if (!detail) throw wrapOperationError('resolve document comment', error, { status: error?.code });
+                throw publicError(
+                    `Failed to resolve comment: ${detail.description}${detail.code ? ` (Code: ${detail.code})` : ''}`
+                );
             }
         },
     });

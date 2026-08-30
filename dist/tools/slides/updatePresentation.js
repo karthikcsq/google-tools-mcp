@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -121,7 +121,7 @@ export function register(server) {
             } catch (error) {
                 if (error instanceof UserError) throw error;
                 log.error(`Error updating presentation: ${error.message || error}`);
-                throw new UserError(`Failed to update presentation: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('update presentation', error, { status: error?.code });
             }
         },
     });

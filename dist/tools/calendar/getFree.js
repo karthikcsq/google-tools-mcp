@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -73,7 +73,7 @@ export function register(server) {
                     }
                 }
                 if (errors.length) {
-                    throw new UserError(
+                    throw publicError(
                         `Could not check availability for some calendars:\n${errors.join('\n')}`
                     );
                 }
@@ -167,9 +167,9 @@ export function register(server) {
                     2
                 );
             } catch (error) {
-                if (error instanceof UserError) throw error;
+                if (isPublicError(error)) throw error;
                 log.error(`Error finding free slots: ${error.message || error}`);
-                throw new UserError(`Failed to find available slots: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('find available calendar slots', error, { status: error?.code });
             }
         },
     });

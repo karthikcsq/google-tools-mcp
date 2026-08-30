@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSheetsClient } from '../../clients.js';
 export function register(server) {
@@ -37,7 +37,7 @@ export function register(server) {
                 log.error(`Error deleting sheet in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;
-                throw new UserError(`Failed to delete sheet: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('delete sheet', error, { status: error?.code });
             }
         },
     });

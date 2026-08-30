@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -39,7 +39,7 @@ export function register(server) {
                 });
             } catch (error) {
                 log.error(`Error replacing text: ${error.message || error}`);
-                throw new UserError(`Failed to replace text: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('replace text', error, { status: error?.code });
             }
         },
     });

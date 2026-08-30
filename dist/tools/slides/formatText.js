@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -77,7 +77,7 @@ export function register(server) {
                 return JSON.stringify({ success: true, message: `Applied text formatting to ${args.objectId}` });
             } catch (error) {
                 log.error(`Error formatting text: ${error.message || error}`);
-                throw new UserError(`Failed to format text: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('format text', error, { status: error?.code });
             }
         },
     });

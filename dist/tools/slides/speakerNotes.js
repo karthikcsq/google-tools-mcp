@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -43,7 +43,7 @@ export function register(server) {
             } catch (error) {
                 if (error instanceof UserError) throw error;
                 log.error(`Error getting speaker notes: ${error.message || error}`);
-                throw new UserError(`Failed to get speaker notes: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('get speaker notes', error, { status: error?.code });
             }
         },
     });
@@ -95,7 +95,7 @@ export function register(server) {
             } catch (error) {
                 if (error instanceof UserError) throw error;
                 log.error(`Error updating speaker notes: ${error.message || error}`);
-                throw new UserError(`Failed to update speaker notes: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('update speaker notes', error, { status: error?.code });
             }
         },
     });

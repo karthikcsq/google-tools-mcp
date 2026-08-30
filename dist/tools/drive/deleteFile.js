@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 import { guardMutation } from '../../readTracker.js';
@@ -62,12 +62,13 @@ export function register(server) {
                 }
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error deleting file: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('File not found. Check the file ID.');
+                    throw publicError('File not found. Check the file ID.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have delete access to this file.');
-                throw new UserError(`Failed to delete file: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have delete access to this file.');
+throw wrapOperationError('delete file', error, { status: error?.code });
             }
         },
     });

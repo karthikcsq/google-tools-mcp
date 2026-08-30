@@ -1,6 +1,16 @@
 // Tests for the shared HTTP transport's application-level auth + origin guard
-// (PR #36 review). These exercise the pure auth helpers and the authenticate()
-// function FastMCP invokes before any tool runs — no network or Google APIs.
+// (PR #36 review). These exercise the pure auth helpers and `checkHttpAuth`,
+// the single gate the facade in dist/mcpServer.js runs ahead of routing — no
+// network or Google APIs.
+//
+// The session era's two extra entry points are gone with the FastMCP runtime:
+// `createHttpAuthenticate` (the hook FastMCP called on session creation) and
+// `createHttpRequestGuard` / `startWithRequestGuard` (the http.createServer
+// monkey-patch that covered the Mcp-Session-Id-dispatched GET/DELETE branches
+// and mcp-proxy's unremovable /sse and /messages routes). Their coverage lives
+// on here as `checkHttpAuth` cases, plus the facade's own wire tests in
+// tests/mcpServerFacade.test.js, which assert the gate runs before /healthz,
+// before /mcp, and before the 404 that former session routes now get.
 import { describe, it, expect } from '@jest/globals';
 import {
     resolveHttpAuthConfig,
@@ -10,8 +20,7 @@ import {
     isOriginAllowed,
     extractBearerToken,
     tokensMatch,
-    createHttpAuthenticate,
-    createHttpRequestGuard,
+    checkHttpAuth,
 } from '../dist/httpAuth.js';
 
 // Minimal http.IncomingMessage stand-in: only headers are read.
@@ -166,157 +175,81 @@ describe('httpAuth', () => {
         });
     });
 
-    describe('createHttpAuthenticate', () => {
+    // The gate the facade applies to every HTTP request before it routes.
+    // Ported from the removed createHttpAuthenticate/createHttpRequestGuard
+    // suites: same accept/reject matrix, now asserted on the one function that
+    // survived the cutover.
+    describe('checkHttpAuth', () => {
         const token = 'correct-horse-battery-staple';
+        const headers = (h = {}) => h;
 
-        it('is inert for stdio (no request)', async () => {
-            const authenticate = createHttpAuthenticate({ token });
-            await expect(authenticate(undefined)).resolves.toEqual({});
+        it('accepts a request with the correct bearer token', () => {
+            expect(checkHttpAuth(headers({ authorization: `Bearer ${token}` }), { token })).toEqual({ ok: true });
         });
 
-        it('accepts a request with the correct bearer token', async () => {
-            const authenticate = createHttpAuthenticate({ token });
-            await expect(
-                authenticate(req({ authorization: `Bearer ${token}` })),
-            ).resolves.toEqual({ authenticated: true });
+        it('accepts the X-MCP-Token alternative header', () => {
+            expect(checkHttpAuth(headers({ 'x-mcp-token': token }), { token })).toEqual({ ok: true });
         });
 
-        it('rejects a request with a missing token', async () => {
-            const authenticate = createHttpAuthenticate({ token });
-            await expect(authenticate(req({}))).rejects.toThrow(/Unauthorized/);
+        it('rejects a missing token with 401', () => {
+            const result = checkHttpAuth(headers({}), { token });
+            expect(result.ok).toBe(false);
+            expect(result.status).toBe(401);
+            expect(result.message).toMatch(/Unauthorized/);
         });
 
-        it('rejects a request with a wrong token', async () => {
-            const authenticate = createHttpAuthenticate({ token });
-            await expect(
-                authenticate(req({ authorization: 'Bearer wrong' })),
-            ).rejects.toThrow(/Unauthorized/);
+        it('rejects a wrong token with 401', () => {
+            const result = checkHttpAuth(headers({ authorization: 'Bearer wrong' }), { token });
+            expect(result.ok).toBe(false);
+            expect(result.status).toBe(401);
         });
 
-        it('rejects a foreign browser Origin even with a valid token', async () => {
-            const authenticate = createHttpAuthenticate({ token });
-            await expect(
-                authenticate(req({ authorization: `Bearer ${token}`, origin: 'https://evil.example' })),
-            ).rejects.toThrow(/Origin/);
+        it('rejects a foreign browser Origin with 403 even when the token is right', () => {
+            const result = checkHttpAuth(
+                headers({ authorization: `Bearer ${token}`, origin: 'https://evil.example' }),
+                { token },
+            );
+            expect(result.ok).toBe(false);
+            expect(result.status).toBe(403);
+            expect(result.message).toMatch(/Origin/);
         });
 
-        it('allows a loopback Origin with a valid token', async () => {
-            const authenticate = createHttpAuthenticate({ token });
-            await expect(
-                authenticate(req({ authorization: `Bearer ${token}`, origin: 'http://localhost:5173' })),
-            ).resolves.toEqual({ authenticated: true });
+        it('checks Origin before the token, so a disallowed Origin is 403 and not 401', () => {
+            const result = checkHttpAuth(headers({ origin: 'https://evil.example' }), { token });
+            expect(result.status).toBe(403);
         });
 
-        it('skips the token check when noAuth is set but still guards Origin', async () => {
-            const authenticate = createHttpAuthenticate({ noAuth: true });
-            await expect(authenticate(req({}))).resolves.toEqual({ authenticated: true });
-            await expect(
-                authenticate(req({ origin: 'https://evil.example' })),
-            ).rejects.toThrow(/Origin/);
-        });
-    });
-
-    // --- request guard: every method, not just POST -------------------------
-    // FastMCP's authenticate() only runs on session creation (POST). GET
-    // (stream attach) and DELETE (session kill) are dispatched on the
-    // Mcp-Session-Id header alone, so they need their own gate.
-    describe('createHttpRequestGuard', () => {
-        const token = 'guard-token';
-        const guardReq = (method, headers = {}, url = '/mcp') => ({ method, url, headers });
-        const fakeRes = () => {
-            const res = { statusCode: null, body: null, headers: {} };
-            res.setHeader = (k, v) => { res.headers[k] = v; };
-            res.writeHead = (code) => { res.statusCode = code; return res; };
-            res.end = (body) => { res.body = body; return res; };
-            return res;
-        };
-
-        it.each(['GET', 'DELETE', 'POST'])('rejects %s with no token', (method) => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const res = fakeRes();
-            expect(guard(guardReq(method, { 'mcp-session-id': 'leaked' }), res)).toBe(true);
-            expect(res.statusCode).toBe(401);
+        it('allows a loopback Origin with a valid token', () => {
+            expect(checkHttpAuth(
+                headers({ authorization: `Bearer ${token}`, origin: 'http://localhost:5173' }),
+                { token },
+            )).toEqual({ ok: true });
         });
 
-        it.each(['GET', 'DELETE'])('lets %s through with a valid token', (method) => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const res = fakeRes();
-            expect(guard(guardReq(method, { authorization: `Bearer ${token}` }), res)).toBe(false);
-            expect(res.statusCode).toBeNull();
-        });
-
-        it('rejects a disallowed Origin with 403 even when the token is right', () => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const res = fakeRes();
-            expect(guard(guardReq('GET', {
-                authorization: `Bearer ${token}`,
-                origin: 'https://evil.example',
-            }), res)).toBe(true);
-            expect(res.statusCode).toBe(403);
-        });
-
-        it('leaves OPTIONS preflight alone (browsers never send Authorization on it)', () => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const res = fakeRes();
-            expect(guard(guardReq('OPTIONS'), res)).toBe(false);
-        });
-
-        it('leaves GET /ping alone, so the health check stays reachable', () => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const res = fakeRes();
-            expect(guard(guardReq('GET', {}, '/ping'), res)).toBe(false);
-        });
-
-        it('does not exempt POST /ping (mcp-proxy itself only special-cases GET)', () => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const res = fakeRes();
-            expect(guard(guardReq('POST', {}, '/ping'), res)).toBe(true);
-            expect(res.statusCode).toBe(401);
-        });
-
-        // Regression coverage for the merge-blocking finding on PR #59: FastMCP's
-        // call into mcp-proxy's startHTTPServer never passes `sseEndpoint`, so
-        // mcp-proxy's default `/sse` GET route and its companion `/messages`
-        // POST route are live alongside the configured streamable endpoint no
-        // matter what GOOGLE_MCP_ENDPOINT is set to. A guard that only matched
-        // one configured endpoint would leave those two completely open.
-        it('guards the legacy SSE endpoint (GET /sse) exactly like the streamable endpoint', () => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const rejected = fakeRes();
-            expect(guard(guardReq('GET', {}, '/sse'), rejected)).toBe(true);
-            expect(rejected.statusCode).toBe(401);
-
-            const allowed = fakeRes();
-            expect(guard(guardReq('GET', { authorization: `Bearer ${token}` }, '/sse'), allowed)).toBe(false);
-        });
-
-        it('guards the legacy SSE message endpoint (POST /messages)', () => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const rejected = fakeRes();
-            expect(guard(guardReq('POST', {}, '/messages?sessionId=leaked'), rejected)).toBe(true);
-            expect(rejected.statusCode).toBe(401);
-
-            const allowed = fakeRes();
-            expect(guard(guardReq(
-                'POST',
-                { authorization: `Bearer ${token}` },
-                '/messages?sessionId=leaked',
-            ), allowed)).toBe(false);
-        });
-
-        it('guards the configured endpoint even when it differs from the /mcp default', () => {
-            const guard = createHttpRequestGuard({ token }, undefined);
-            const res = fakeRes();
-            expect(guard(guardReq('GET', {}, '/custom'), res)).toBe(true);
-            expect(res.statusCode).toBe(401);
+        it('honors the explicit Origin allow-list', () => {
+            expect(checkHttpAuth(
+                headers({ authorization: `Bearer ${token}`, origin: 'https://trusted.example' }),
+                { token, allowedOrigins: ['https://trusted.example'] },
+            )).toEqual({ ok: true });
         });
 
         it('skips the token check when noAuth is set but still guards Origin', () => {
-            const guard = createHttpRequestGuard({ noAuth: true }, undefined);
-            expect(guard(guardReq('DELETE', {}), fakeRes())).toBe(false);
-            const res = fakeRes();
-            expect(guard(guardReq('DELETE', { origin: 'https://evil.example' }), res)).toBe(true);
-            expect(res.statusCode).toBe(403);
+            expect(checkHttpAuth(headers({}), { noAuth: true })).toEqual({ ok: true });
+            const rejected = checkHttpAuth(headers({ origin: 'https://evil.example' }), { noAuth: true });
+            expect(rejected.ok).toBe(false);
+            expect(rejected.status).toBe(403);
+        });
+
+        it('carries a server-side reason distinct from the caller-facing message', () => {
+            const result = checkHttpAuth(headers({}), { token });
+            expect(result.reason).toMatch(/Rejected HTTP request/);
+            expect(result.reason).not.toBe(result.message);
+        });
+
+        it('does not leak the configured token in either string', () => {
+            const result = checkHttpAuth(headers({ authorization: 'Bearer wrong' }), { token });
+            expect(result.message).not.toContain(token);
+            expect(result.reason).not.toContain(token);
         });
     });
 });

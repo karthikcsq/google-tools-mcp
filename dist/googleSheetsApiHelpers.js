@@ -1,4 +1,15 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError, getApiErrorDetail } from './errors.js';
+
+/**
+ * The Sheets API's own description of what was wrong with a request. Validated
+ * upstream detail, so it may be shown to a caller; null when the structured
+ * field is absent, in which case the call site falls back to an internal
+ * OperationError rather than the raw `error.message`.
+ */
+function apiErrorDescription(error) {
+    return getApiErrorDetail(error)?.description ?? null;
+}
+
 // --- Core Helper Functions ---
 /**
  * Converts A1 notation to row/column indices (0-based)
@@ -70,7 +81,7 @@ export async function readRange(sheets, spreadsheetId, range, valueRenderOption 
         if (error.code === 403) {
             throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have read access.`);
         }
-        throw new UserError(`Failed to read range: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('read range', error, { status: error?.code });
     }
 }
 /**
@@ -95,7 +106,7 @@ export async function writeRange(sheets, spreadsheetId, range, values, valueInpu
         if (error.code === 403) {
             throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
         }
-        throw new UserError(`Failed to write range: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('write range', error, { status: error?.code });
     }
 }
 /**
@@ -121,7 +132,7 @@ export async function appendValues(sheets, spreadsheetId, range, values, valueIn
         if (error.code === 403) {
             throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
         }
-        throw new UserError(`Failed to append values: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('append values', error, { status: error?.code });
     }
 }
 /**
@@ -142,7 +153,7 @@ export async function clearRange(sheets, spreadsheetId, range) {
         if (error.code === 403) {
             throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
         }
-        throw new UserError(`Failed to clear range: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('clear range', error, { status: error?.code });
     }
 }
 /**
@@ -163,7 +174,7 @@ export async function getSpreadsheetMetadata(sheets, spreadsheetId) {
         if (error.code === 403) {
             throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have read access.`);
         }
-        throw new UserError(`Failed to get spreadsheet metadata: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('get spreadsheet metadata', error, { status: error?.code });
     }
 }
 /**
@@ -194,7 +205,7 @@ export async function addSheet(sheets, spreadsheetId, sheetTitle) {
         if (error.code === 403) {
             throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
         }
-        throw new UserError(`Failed to add sheet: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('add sheet', error, { status: error?.code });
     }
 }
 /**
@@ -384,7 +395,7 @@ export async function formatCells(sheets, spreadsheetId, range, format) {
         }
         if (error instanceof UserError)
             throw error;
-        throw new UserError(`Failed to format cells: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('format cells', error, { status: error?.code });
     }
 }
 /**
@@ -430,7 +441,7 @@ export async function freezeRowsAndColumns(sheets, spreadsheetId, sheetName, fro
         }
         if (error instanceof UserError)
             throw error;
-        throw new UserError(`Failed to freeze rows/columns: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('freeze rows/columns', error, { status: error?.code });
     }
 }
 /**
@@ -478,7 +489,7 @@ export async function setDropdownValidation(sheets, spreadsheetId, range, values
         }
         if (error instanceof UserError)
             throw error;
-        throw new UserError(`Failed to set dropdown validation: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('set dropdown validation', error, { status: error?.code });
     }
 }
 /**
@@ -530,7 +541,7 @@ export async function setColumnWidths(sheets, spreadsheetId, sheetName, columnWi
         }
         if (error instanceof UserError)
             throw error;
-        throw new UserError(`Failed to set column widths: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('set column widths', error, { status: error?.code });
     }
 }
 /**
@@ -589,7 +600,7 @@ export async function addConditionalFormatRule(sheets, spreadsheetId, ranges, co
         if (error.code === 403) {
             throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
         }
-        throw new UserError(`Failed to add conditional format rule: ${error.message || 'Unknown error'}`);
+        throw wrapOperationError('add conditional format rule', error, { status: error?.code });
     }
 }
 // --- Table Helper Functions ---
@@ -687,7 +698,9 @@ export async function createTableHelper(sheets, spreadsheetId, tableDefinition) 
     }
     catch (error) {
         if (error.code === 400) {
-            throw new UserError(`Invalid table definition: ${error.message}`);
+            const description = apiErrorDescription(error);
+            if (!description) throw wrapOperationError('create spreadsheet table', error, { status: error?.code });
+            throw new UserError(`Invalid table definition: ${description}`);
         }
         if (error.code === 403) {
             throw new UserError(`Permission denied. Ensure you have write access to this spreadsheet.`);
@@ -754,7 +767,9 @@ export async function updateTableRangeHelper(sheets, spreadsheetId, tableId, new
             throw new UserError(`Table not found (ID: ${tableId}).`);
         }
         if (error.code === 400) {
-            throw new UserError(`Invalid range: ${error.message}`);
+            const description = apiErrorDescription(error);
+            if (!description) throw wrapOperationError('update spreadsheet table range', error, { status: error?.code });
+            throw new UserError(`Invalid range: ${description}`);
         }
         if (error.code === 403) {
             throw new UserError(`Permission denied. Ensure you have write access to this spreadsheet.`);
@@ -798,7 +813,9 @@ export async function appendToTableHelper(sheets, spreadsheetId, tableId, values
             throw new UserError(`Table or spreadsheet not found (ID: ${tableId}).`);
         }
         if (error.code === 400) {
-            throw new UserError(`Invalid data: ${error.message}`);
+            const description = apiErrorDescription(error);
+            if (!description) throw wrapOperationError('append spreadsheet table rows', error, { status: error?.code });
+            throw new UserError(`Invalid data: ${description}`);
         }
         if (error.code === 403) {
             throw new UserError(`Permission denied. Ensure you have write access to this spreadsheet.`);

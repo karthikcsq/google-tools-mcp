@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 import { isDocx, isPdf, downloadBuffer, extractText } from './readFile.js';
@@ -62,7 +62,11 @@ export function register(server) {
 
                             results.push(`**${file.name}** (ID: \`${file.id}\`)\n\n${snippet}`);
                         } catch (e) {
-                            results.push(`**${file.name}** (ID: \`${file.id}\`)\n\n[Could not read: ${e.message}]`);
+                            // Same boundary as a thrown public error: this string is
+                            // returned to the caller, so the caught text is logged
+                            // rather than embedded in the result.
+                            log.error(`Could not read file ${file.id} while searching contents: ${e.message || e}`);
+                            results.push(`**${file.name}** (ID: \`${file.id}\`)\n\n[Could not read this file's contents.]`);
                         }
                     } else {
                         results.push(`**${file.name}** (ID: \`${file.id}\`, type: ${file.mimeType})`);
@@ -74,7 +78,7 @@ export function register(server) {
                 log.error(`Error searching files: ${error.message}`);
                 if (error.code === 403)
                     throw new UserError('Permission denied. Check Drive access.');
-                throw new UserError(`Failed to search files: ${error.message}`);
+                throw wrapOperationError('search files', error, { status: error?.code });
             }
         },
     });

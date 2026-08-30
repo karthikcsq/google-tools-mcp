@@ -1,6 +1,6 @@
 // Gmail Thread tools
 import { z } from 'zod';
-import { UserError } from 'fastmcp';
+import { UserError } from '../../errors.js';
 import { getGmailClient } from '../../clients.js';
 import { processMessagePart, formatMessageClean, formatMessageMetadata, capToResponseBudget, makeOmissionStub, DEFAULT_MAX_RESPONSE_CHARS } from '../../helpers.js';
 

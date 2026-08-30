@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient, getDriveClient } from '../../clients.js';
 
@@ -97,7 +97,7 @@ export function register(server) {
             } catch (error) {
                 log.error(`Error creating presentation: ${error.message || error}`);
                 if (error.code === 401) throw new UserError('Authentication failed. Try logging out and re-authenticating.');
-                throw new UserError(`Failed to create presentation: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('create presentation', error, { status: error?.code });
             }
         },
     });

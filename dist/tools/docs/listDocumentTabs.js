@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
@@ -48,12 +48,13 @@ export function register(server) {
                 return JSON.stringify({ documentTitle: docTitle, tabs }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing tabs for doc ${args.documentId}: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`Document not found (ID: ${args.documentId}).`);
+                    throw publicError(`Document not found (ID: ${args.documentId}).`);
                 if (error.code === 403)
-                    throw new UserError(`Permission denied for document (ID: ${args.documentId}).`);
-                throw new UserError(`Failed to list tabs: ${error.message || 'Unknown error'}`);
+                    throw publicError(`Permission denied for document (ID: ${args.documentId}).`);
+throw wrapOperationError('list document tabs', error, { status: error?.code });
             }
         },
     });

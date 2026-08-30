@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { z } from 'zod';
 import { google } from 'googleapis';
 import { getAuthClient } from '../../../clients.js';
@@ -37,8 +37,9 @@ export function register(server) {
                 }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error getting comment: ${error.message || error}`);
-                throw new UserError(`Failed to get comment: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('get document comment', error, { status: error?.code });
             }
         },
     });

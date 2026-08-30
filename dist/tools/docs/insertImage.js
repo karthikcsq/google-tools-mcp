@@ -1,9 +1,9 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient, getDriveClient, getScriptClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, requireRereadBeforeMutation, trackMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'insertImage',
@@ -29,6 +29,7 @@ export function register(server) {
                 .string()
                 .optional()
                 .describe('The ID of the specific tab to insert into. Use listDocumentTabs to get tab IDs. If not specified, inserts into the first tab.'),
+            readHandle: ReadHandleParameter,
         })
             .refine((data) => data.imageUrl || data.localImagePath, {
             message: 'Either imageUrl or localImagePath must be provided.',
@@ -48,10 +49,10 @@ export function register(server) {
                     });
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
                 // --- Apps Script path: local files when APPS_SCRIPT_DEPLOYMENT_ID is set ---
@@ -76,8 +77,17 @@ export function register(server) {
                     const driveFileId = await GDocsHelpers.uploadImageToDrive(drive, args.localImagePath, parentFolderId, true // skipPublicSharing
                     );
                     log.info(`[AppsScript] Inserting image via marker at index ${args.index} (fileId: ${driveFileId})`);
-                    const appsScriptRevisionId = getLastReadRevisionId(args.documentId);
-                    await GDocsHelpers.insertImageViaAppsScript(docs, scriptClient, appsScriptDeploymentId, args.documentId, driveFileId, args.index, args.tabId, appsScriptRevisionId ? { requiredRevisionId: appsScriptRevisionId } : undefined);
+                    const appsScriptLease = await beginDocsMutation(args.documentId, {
+                        tabId: args.tabId ?? null,
+                        readHandle: args.readHandle,
+                    });
+                    try {
+                        await GDocsHelpers.insertImageViaAppsScript(docs, scriptClient, appsScriptDeploymentId, args.documentId, driveFileId, args.index, args.tabId, appsScriptLease.writeControlFor());
+                    }
+                    catch (appsScriptError) {
+                        await appsScriptLease.fail();
+                        throw appsScriptError;
+                    }
                     // The Apps Script call that replaces the marker with the image mutates
                     // the document outside our batchUpdate visibility, so we have no way to
                     // learn the true post-write revision here. trackMutation would clear the
@@ -86,7 +96,7 @@ export function register(server) {
                     // Require a fresh read instead.
                     log.warn(`Document ${args.documentId} must be read again before the next write ` +
                         '(the Apps Script mutates the doc outside batchUpdate visibility, so no true post-write revision is available).');
-                    requireRereadBeforeMutation(args.documentId, 'an Apps Script inserted an image and its resulting revision is not visible to us.');
+                    await appsScriptLease.requireReread('an Apps Script inserted an image and its resulting revision is not visible to us.');
                     const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                     return `${docUrl}\nSuccessfully inserted local image at index ${args.index} via Apps Script${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
                 }
@@ -116,9 +126,14 @@ export function register(server) {
                     resolvedUrl = args.imageUrl;
                     log.info(`Inserting image from URL ${resolvedUrl} at index ${args.index} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 }
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const writeResponse = await GDocsHelpers.insertInlineImage(docs, args.documentId, resolvedUrl, args.index, args.width, args.height, args.tabId, revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: args.tabId ?? null,
+                    readHandle: args.readHandle,
+                });
+                await lease.write(
+                    (writeControl) => GDocsHelpers.insertInlineImage(docs, args.documentId, resolvedUrl, args.index, args.width, args.height, args.tabId, writeControl),
+                    (response) => response?.writeControl?.requiredRevisionId,
+                );
                 let sizeInfo = '';
                 if (args.width && args.height) {
                     sizeInfo = ` with size ${args.width}x${args.height}pt`;
@@ -128,9 +143,9 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
-                throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('insert document image', error, { status: error?.code });
             }
         },
     });

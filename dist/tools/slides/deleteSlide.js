@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getSlidesClient } from '../../clients.js';
 
@@ -23,7 +23,7 @@ export function register(server) {
                 return JSON.stringify({ success: true, message: `Deleted slide ${args.slideObjectId}` });
             } catch (error) {
                 log.error(`Error deleting slide: ${error.message || error}`);
-                throw new UserError(`Failed to delete slide: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('delete slide', error, { status: error?.code });
             }
         },
     });

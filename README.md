@@ -140,7 +140,7 @@ For larger arguments, put JSON in a file and pass it with `@`:
 npm run local:tool -- replaceDocumentWithMarkdown @args.json
 ```
 
-> **Why `npm install -g` instead of `npx`?** The guided setup wizard installs the package globally and points your MCP client straight at it, instead of using `npx -y google-tools-mcp`. `npx` re-resolves the whole dependency tree on every single launch, which can take 30+ seconds on some machines (this package pulls in `fastmcp` + the full `googleapis` client library). That's long enough to lose the race against Claude Code's fixed 30s stdio MCP connection timeout. See [Troubleshooting](#troubleshooting) below if you're setting this up by hand.
+> **Why `npm install -g` instead of `npx`?** The guided setup wizard installs the package globally and points your MCP client straight at it, instead of using `npx -y google-tools-mcp`. `npx` re-resolves the whole dependency tree on every single launch, which can take 30+ seconds on some machines (this package pulls in the full `googleapis` client library). That's long enough to lose the race against Claude Code's fixed 30s stdio MCP connection timeout. See [Troubleshooting](#troubleshooting) below if you're setting this up by hand.
 
 First, install once:
 
@@ -273,7 +273,7 @@ This stores tokens in `~/.config/google-tools-mcp/work/` instead of the default 
 
 **Symptom:** Claude Code (or another MCP client) reports that the `google` server failed to connect, timed out, or keeps disconnecting, with no other visible error. It may work sometimes and fail other times on the same machine.
 
-**Cause:** If your MCP config launches the server with `npx -y google-tools-mcp`, `npx` re-resolves and verifies the entire dependency tree (this package pulls in `fastmcp` + the full `googleapis` client library, a large `node_modules`) on **every single launch**, not just the first. On some machines, especially Windows (likely antivirus real-time scanning of npm's file I/O during install/verify), this reliably takes 30-34 seconds, even when the exact version is already cached locally. Claude Code's stdio MCP connection timeout is a fixed 30 seconds, so `npx`-launched servers are right on the failure line and frequently lose the race.
+**Cause:** If your MCP config launches the server with `npx -y google-tools-mcp`, `npx` re-resolves and verifies the entire dependency tree (this package pulls in the full `googleapis` client library, a large `node_modules`) on **every single launch**, not just the first. On some machines, especially Windows (likely antivirus real-time scanning of npm's file I/O during install/verify), this reliably takes 30-34 seconds, even when the exact version is already cached locally. Claude Code's stdio MCP connection timeout is a fixed 30 seconds, so `npx`-launched servers are right on the failure line and frequently lose the race.
 
 Launching directly (`node dist/index.js`, or the global-install path below) is faster, but it is not a guarantee. Measured on one affected Windows machine on 2026-07-24, three runs each: `npx` took 23.0s, 25.3s and 24.6s, a direct `node` launch took 14.7s, 26.0s and 12.2s. So skipping `npx` is worth roughly 7 seconds on average and removes a large source of variance, but on a machine with slow disk I/O a direct launch can still come close to the limit. If it still times out after you switch, what is left is the cost of reading this package's dependency tree off disk, tracked in [issue #71](https://github.com/karthikcsq/google-tools-mcp/issues/71). Full writeup in [issue #46](https://github.com/karthikcsq/google-tools-mcp/issues/46), and see [docs/startup-performance.md](docs/startup-performance.md) for the per-import breakdown and how to measure any of this on your own machine.
 
@@ -435,7 +435,7 @@ These files live in a per-user directory under the OS temp dir (`google-tools-mc
 | `GOOGLE_CLIENT_SECRET` | No* | OAuth 2.0 Client Secret |
 | `GOOGLE_MCP_PROFILE` | No | Profile name for multi-account support (see above) |
 | `GOOGLE_MCP_OAUTH_PORT` | No | Fixed loopback port for the interactive OAuth callback. Defaults to an ephemeral port; set a fixed port when forwarding the callback over SSH. See [Remote OAuth with a persistent SSH tunnel](docs/remote-oauth-tunnel.md). |
-| `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients)) |
+| `GOOGLE_MCP_TRANSPORT` | No | `stdio` (default) or `http`. Use `http` to run one shared server (see [Shared HTTP mode](#shared-http-mode-one-server-for-many-clients) and [docs/http-mode.md](docs/http-mode.md)) |
 | `GOOGLE_MCP_PORT` | No | Port for HTTP transport (default `3939`) |
 | `GOOGLE_MCP_ENDPOINT` | No | URL path for HTTP transport (default `/mcp`) |
 | `GOOGLE_MCP_HTTP_TOKEN` | No | Bearer token required by HTTP clients. If unset in HTTP mode, a one-time token is generated and printed to stderr at startup. Set a fixed value to keep it stable across restarts |
@@ -485,23 +485,52 @@ Then point each client at the URL, sending the token as a bearer header:
 }
 ```
 
+### Breaking change in 3.0.0: HTTP is stateless
+
+The server speaks MCP **2026-07-28** on the official MCP TypeScript SDK v2. The
+whole HTTP session lifecycle is gone. **stdio is unaffected** — if you don't set
+`GOOGLE_MCP_TRANSPORT`, nothing in your config needs to change.
+
+Removed, all returning `404` after the auth check:
+
+- `GET /sse` and its `POST /messages` companion (the legacy SSE compatibility
+  transport the old runtime always stood up).
+- `GET /ping`, the old unauthenticated liveness route. Use authenticated
+  `GET /healthz`, which returns exactly `{"status":"ok"}`.
+- The `GET` that attached to a session's event stream and the `DELETE` that
+  terminated a session.
+- The `Mcp-Session-Id` header. It is never required and never returned.
+
+What's left is one `POST` endpoint (`GOOGLE_MCP_ENDPOINT`, default `/mcp`) plus
+authenticated `GET /healthz`.
+
+The consequence for tools: **read state is never carried between HTTP
+requests.** Google Docs edits over HTTP take an explicit `readHandle` returned
+by `readDocument` — opaque, server-minted, single-use for a mutation, bound to
+the credential, profile, file, tab, revision, and structure, and expiring in
+under 24 hours. `writeSpreadsheet`, `batchWrite`, `clearSpreadsheetRange`, and
+`deleteFile` have no handle wiring yet and fail closed over HTTP; use stdio for
+those.
+
+Full reference, including exact Claude Code and Codex reconfiguration steps (and
+the `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` env entry Codex needs):
+**[docs/http-mode.md](docs/http-mode.md)**.
+
 ### Security
 
 The HTTP endpoint exposes your **authenticated** Google Workspace tool surface
-(Gmail, Drive, Calendar, Docs, …). It is guarded so it can't be driven by other
+(Gmail, Drive, Calendar, Docs, ...). It is guarded so it can't be driven by other
 processes or by web pages on your machine:
 
 - **Bearer token required, on every route.** Every request must send
-  `Authorization: Bearer <token>`, including the `GET` that attaches to a session's
-  event stream, the `DELETE` that terminates one, and the legacy SSE compatibility
-  routes (`/sse` and its `/messages` POST endpoint) that FastMCP's HTTP transport
-  always stands up alongside the configured endpoint, whatever `GOOGLE_MCP_ENDPOINT`
-  is set to — there is no way to disable them, so they're guarded instead. A leaked
-  session id on its own gets nobody in. Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a
-  random one-time token is generated and printed to stderr at startup (printed
-  directly, so it still appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`).
-  Requests without a valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables
-  this — only on a fully trusted machine.) The `/ping` health endpoint stays open.
+  `Authorization: Bearer <token>`. One middleware runs ahead of routing, so the
+  MCP endpoint, `/healthz`, and the `404` for every other path are all gated
+  identically — an unauthenticated caller can't even probe which paths exist.
+  Set `GOOGLE_MCP_HTTP_TOKEN`; if you don't, a random one-time token is
+  generated and printed to stderr at startup (printed directly, so it still
+  appears under `LOG_LEVEL=error` or `LOG_LEVEL=silent`). Requests without a
+  valid token get `401`. (`GOOGLE_MCP_HTTP_NO_AUTH=1` disables this — only on a
+  fully trusted machine.)
 - **Loopback only.** Binds to `127.0.0.1` by default, so the port isn't reachable
   from the network. Override with `GOOGLE_MCP_HTTP_HOST` only if you know you need
   to. Startup refuses to run (and exits non-zero) if `GOOGLE_MCP_HTTP_NO_AUTH=1` is
@@ -515,9 +544,12 @@ processes or by web pages on your machine:
 Notes:
 - The shared server does **not** start or stop with your clients — you manage
   its lifecycle (start it at login / run it as a service).
-- Each connecting client gets its own MCP session, and per-session state (such as
-  the read-before-edit guard) is isolated between clients. They still share one
+- Read-before-edit state is scoped to a single HTTP request and dies with it, so
+  clients can't satisfy or clobber each other's guard state. They still share one
   process and one OAuth/token state, so a crash or token expiry affects everyone.
+- One process serves one configured Google profile and one effective service
+  principal. Multiple profiles or horizontal scale are out of scope for this
+  release.
 - Auth (`google-tools-mcp auth` / `setup`) is unchanged and still uses stdio.
 
 ## Migrating from gdrive-tools-mcp / gmail-tools-mcp

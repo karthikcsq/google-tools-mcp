@@ -1,7 +1,7 @@
 // Combined clients for google-tools-mcp.
 // Lazy-loads all Google API clients (Docs, Drive, Sheets, Script, Gmail) on first use.
 import { google } from 'googleapis';
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from './errors.js';
 import { exec } from 'child_process';
 import { authorize } from './auth.js';
 import { logger } from './logger.js';
@@ -17,6 +17,58 @@ let formsClient = null;
 let slidesClient = null;
 let tasksClient = null;
 
+// Auth is the one failure mode where a generic "the operation failed" costs the
+// caller a fix they could otherwise apply themselves, so the caught error is
+// classified into a small closed set of known causes and only the matching
+// CONSTANT is emitted. Nothing derived from the caught text crosses the
+// boundary: an unclassified failure carries no detail at all, and the full
+// error is always logged server-side by the caller of this table.
+const AUTH_FAILURE_GUIDANCE = {
+    invalid_grant:
+        'Cause: the saved Google refresh token has expired or been revoked. '
+        + 'Re-running auth issues a new one.',
+    access_denied:
+        'Cause: the Google consent screen was closed or access was declined. '
+        + 'Re-run auth and approve the requested scopes.',
+    invalid_client:
+        'Cause: the configured Google OAuth client is not accepted by Google. '
+        + 'Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then re-run auth.',
+    missing_credentials:
+        'Cause: no OAuth client credentials were found. Set GOOGLE_CLIENT_ID and '
+        + 'GOOGLE_CLIENT_SECRET (or place a credentials.json from the Google Cloud '
+        + 'Console in the config directory), then re-run auth. Running the auth '
+        + 'command prints the exact locations it searched.',
+    port_in_use:
+        'Cause: the OAuth callback port is already in use. Free it (or set '
+        + 'GOOGLE_MCP_OAUTH_PORT to a free port), then re-run auth.',
+    timed_out:
+        'Cause: the browser authorization flow was not completed in time. Re-run auth '
+        + 'and finish the Google sign-in in the browser tab it opens.',
+    unreachable:
+        'Cause: Google could not be reached to complete authentication. Check network '
+        + 'connectivity, then re-run auth.',
+};
+
+// Match only on shapes we control or that OAuth defines: our own thrown
+// messages from dist/auth.js, Node's `code` for socket-level failures, and the
+// RFC 6749 error identifiers Google returns. Anything else returns undefined.
+function classifyAuthFailure(error) {
+    const message = typeof error?.message === 'string' ? error.message : '';
+    const oauthCode = error?.response?.data?.error;
+    const nodeCode = error?.code;
+
+    if (oauthCode === 'invalid_grant' || message.includes('invalid_grant')) return 'invalid_grant';
+    if (oauthCode === 'access_denied' || /Authorization error: access_denied/.test(message)) return 'access_denied';
+    if (oauthCode === 'invalid_client' || message.includes('invalid_client')) return 'invalid_client';
+    if (message.startsWith('No OAuth credentials found')
+        || message.startsWith('Service account key file not found')) return 'missing_credentials';
+    if (nodeCode === 'EADDRINUSE') return 'port_in_use';
+    if (message.startsWith('OAuth flow timed out')) return 'timed_out';
+    if (nodeCode === 'ENOTFOUND' || nodeCode === 'ECONNREFUSED' || nodeCode === 'EAI_AGAIN'
+        || nodeCode === 'ETIMEDOUT') return 'unreachable';
+    return undefined;
+}
+
 async function ensureAuth() {
     if (authClient) return;
     try {
@@ -24,12 +76,14 @@ async function ensureAuth() {
         authClient = await authorize();
         logger.info('Google API client authorized successfully.');
     } catch (error) {
+        if (isPublicError(error)) throw error;
         logger.error('Failed to initialize Google API client:', error);
         authClient = null;
-        throw new UserError(
-            'Google authentication required. A browser window should have opened automatically. ' +
-            'If not, run: npx google-tools-mcp auth\n\n' +
-            'Details: ' + (error.message || error)
+        const guidance = AUTH_FAILURE_GUIDANCE[classifyAuthFailure(error)];
+        throw publicError(
+            'Google authentication required. A browser window should have opened automatically. '
+            + 'If not, run: npx google-tools-mcp auth'
+            + (guidance ? `\n\n${guidance}` : '')
         );
     }
 }
@@ -198,6 +252,7 @@ export async function withAuthRetry(fn) {
     try {
         return await fn();
     } catch (error) {
+        if (isPublicError(error)) throw error;
         if (isInvalidGrantError(error)) {
             logger.warn('Got invalid_grant during API call. Re-authenticating...');
             await reauthorize();
@@ -212,7 +267,7 @@ export async function withAuthRetry(fn) {
                     logger.warn(`Auto-opening enable URL for ${apiLabel}: ${info.enableUrl}`);
                     openBrowser(info.enableUrl);
                 }
-                throw new UserError(
+                throw publicError(
                     `${apiLabel} is not enabled${info.projectId ? ` for project ${info.projectId}` : ''}. ` +
                     `A browser window was opened to the enable page — click "Enable", wait ~30 seconds for it to propagate, then retry your request.\n\n` +
                     `Enable URL: ${info.enableUrl}`
@@ -226,55 +281,55 @@ export async function withAuthRetry(fn) {
 // --- Individual client getters ---
 export async function getDocsClient() {
     const { googleDocs: docs } = await initializeGoogleClient();
-    if (!docs) throw new UserError('Google Docs client is not initialized.');
+    if (!docs) throw publicError('Google Docs client is not initialized.');
     return docs;
 }
 
 export async function getDriveClient() {
     const { googleDrive: drive } = await initializeGoogleClient();
-    if (!drive) throw new UserError('Google Drive client is not initialized.');
+    if (!drive) throw publicError('Google Drive client is not initialized.');
     return drive;
 }
 
 export async function getSheetsClient() {
     const { googleSheets: sheets } = await initializeGoogleClient();
-    if (!sheets) throw new UserError('Google Sheets client is not initialized.');
+    if (!sheets) throw publicError('Google Sheets client is not initialized.');
     return sheets;
 }
 
 export async function getAuthClient() {
     const { authClient: client } = await initializeGoogleClient();
-    if (!client) throw new UserError('Auth client is not initialized.');
+    if (!client) throw publicError('Auth client is not initialized.');
     return client;
 }
 
 export async function getScriptClient() {
     const { googleScript: script } = await initializeGoogleClient();
-    if (!script) throw new UserError('Google Script client is not initialized.');
+    if (!script) throw publicError('Google Script client is not initialized.');
     return script;
 }
 
 export async function getGmailClient() {
     const { gmailClient: gmail } = await initializeGmailClient();
-    if (!gmail) throw new UserError('Gmail client is not initialized.');
+    if (!gmail) throw publicError('Gmail client is not initialized.');
     return gmail;
 }
 
 export async function getCalendarClient() {
     const { calendarClient: calendar } = await initializeCalendarClient();
-    if (!calendar) throw new UserError('Google Calendar client is not initialized.');
+    if (!calendar) throw publicError('Google Calendar client is not initialized.');
     return calendar;
 }
 
 export async function getFormsClient() {
     const { formsClient: forms } = await initializeFormsClient();
-    if (!forms) throw new UserError('Google Forms client is not initialized.');
+    if (!forms) throw publicError('Google Forms client is not initialized.');
     return forms;
 }
 
 export async function getSlidesClient() {
     const { slidesClient: slides } = await initializeSlidesClient();
-    if (!slides) throw new UserError('Google Slides client is not initialized.');
+    if (!slides) throw publicError('Google Slides client is not initialized.');
     return slides;
 }
 
@@ -288,6 +343,6 @@ export async function initializeTasksClient() {
 
 export async function getTasksClient() {
     const { tasksClient: tasks } = await initializeTasksClient();
-    if (!tasks) throw new UserError('Google Tasks client is not initialized.');
+    if (!tasks) throw publicError('Google Tasks client is not initialized.');
     return tasks;
 }

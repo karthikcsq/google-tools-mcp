@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient, getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
@@ -64,7 +64,7 @@ export function register(server) {
                     throw new UserError('Parent folder not found. Check the folder ID.');
                 if (error.code === 403)
                     throw new UserError('Permission denied. Make sure you have write access to the destination folder.');
-                throw new UserError(`Failed to create spreadsheet: ${error.message || 'Unknown error'}`);
+                throw wrapOperationError('create spreadsheet', error, { status: error?.code });
             }
         },
     });

@@ -9,13 +9,11 @@
 //   google-tools-mcp auth     Run the interactive OAuth flow
 //   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
 import { createRequire } from 'module';
-import { FastMCP } from 'fastmcp';
-import { registerAllTools } from './tools/index.js';
 import { logger } from './logger.js';
 import { getConfigDir } from './auth.js';
 import { checkForUpdate } from './updateCheck.js';
-import { resolveHttpAuthConfig, assertSafeHttpBinding, generateToken, createHttpAuthenticate, createHttpRequestGuard, startWithRequestGuard } from './httpAuth.js';
-import { clearSession } from './readTracker.js';
+import { resolveHttpAuthConfig, assertSafeHttpBinding, generateToken } from './httpAuth.js';
+import { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntimeLifecycle } from './mcpServer.js';
 
 // Read our own published version straight from package.json rather than
 // hardcoding it. `files: ["dist"]` in package.json only restricts what npm
@@ -54,7 +52,9 @@ if (process.argv[2] === 'auth') {
 // Default is stdio (one server spawned per MCP client, the classic model).
 // Set GOOGLE_MCP_TRANSPORT=http to run a single long-lived HTTP server that
 // many clients share over a localhost URL — one process instead of one per
-// session. Accepts "http" or "httpStream" (both map to FastMCP httpStream).
+// client. Accepts "http" or "httpStream"; both now map to the same stateless
+// 2026-07-28 HTTP runtime ("httpStream" is kept only so an existing config
+// keeps starting, since there is no separate streamed transport any more).
 const transportEnv = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase();
 const useHttp = transportEnv === 'http' || transportEnv === 'httpstream';
 const httpPort = Number(process.env.GOOGLE_MCP_PORT) || 3939;
@@ -105,65 +105,18 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, _promise) => {
     logger.error('Unhandled Promise Rejection:', reason);
 });
-process.on('SIGINT', () => {
-    logger.info('Received SIGINT — shutting down.');
-    process.exit(0);
-});
-process.on('SIGTERM', () => {
-    logger.info('Received SIGTERM — shutting down.');
-    process.exit(0);
-});
-// Exit when the MCP client closes the stdio pipe.
-// This is the primary shutdown path for stdio MCP servers — SIGTERM is not
-// reliably delivered on Windows when a parent process exits.
-//
-// IMPORTANT: only wire these in stdio mode. In HTTP mode the server is a
-// detached daemon whose stdin ends/closes immediately at launch — attaching
-// these there would make the daemon exit the instant it starts.
-if (!useHttp) {
-    process.stdin.on('close', () => {
-        logger.info('stdin closed — MCP client disconnected. Shutting down.');
-        process.exit(0);
-    });
-    process.stdin.on('end', () => {
-        logger.info('stdin ended — MCP client disconnected. Shutting down.');
-        process.exit(0);
-    });
-}
 process.on('exit', (code) => {
     logger.info(`Process exiting with code ${code}.`);
 });
 
 // --- Server startup ---
-const serverOptions = {
-    name: 'google-tools-mcp',
-    version: '1.0.0',
-};
-if (useHttp) {
-    // authenticate() runs before any tool; a throw becomes an HTTP 401. It is
-    // only attached in HTTP mode, so stdio behavior is unchanged.
-    serverOptions.authenticate = createHttpAuthenticate(
-        { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
-        logger,
-    );
-}
-const server = new FastMCP(serverOptions);
-
-// Free per-session tracker state when an HTTP client disconnects, so a long-
-// lived shared server doesn't accumulate it indefinitely.
-server.on('disconnect', ({ session }) => {
-    try {
-        const key = session?.sessionId;
-        if (key) clearSession(key);
-    } catch (cleanupError) {
-        logger.warn(`Session cleanup failed: ${cleanupError.message || cleanupError}`);
-    }
-});
-
-await registerAllTools(server);
-
+// One runtime: the official MCP SDK v2 facade in dist/mcpServer.js. Tools are
+// preloaded once into a definition list, then each stdio connection / HTTP
+// request gets a side-effect-free SDK server built from it.
+const profile = (process.env.GOOGLE_MCP_PROFILE || 'default').trim() || 'default';
 try {
     logger.info('Starting google-tools-mcp server...');
+    const factory = await prepareMcpServerFactory({ logger });
     // process.uptime() covers the whole life of this node process, including
     // module load time, so a slow number here means the server itself is
     // slow to boot. If this is fast (~1s) but the MCP client still reports a
@@ -174,29 +127,35 @@ try {
     // Measured inside each branch rather than once before them, so the number
     // covers the transport actually being brought up: binding a port is not
     // the same work as attaching to a stdio pipe.
+    let runtime;
     let readyMs;
     if (useHttp) {
-        // authenticate() above only runs on session creation (POST). The guard
-        // covers every method and every route mcp-proxy can dispatch to
-        // (including the legacy /sse and /messages compatibility endpoints
-        // FastMCP always stands up alongside the configured streamable
-        // endpoint), so GET stream attachment and DELETE session termination
-        // have to present the same token instead of riding on a session id
-        // alone.
-        const guard = createHttpRequestGuard(
-            { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
+        // Bearer token + Origin are checked by the facade's middleware ahead of
+        // the SDK handler, on every method and every path — there is no session
+        // lifecycle left to dispatch on, and no legacy /sse or /messages route
+        // to leave open.
+        runtime = await startV2HttpServer(factory, {
+            auth: { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
+            endpoint: httpEndpoint,
+            host: httpAuth.host,
+            port: httpPort,
+            profile,
             logger,
-        );
-        await startWithRequestGuard(() => server.start({
-            transportType: 'httpStream',
-            httpStream: { port: httpPort, endpoint: httpEndpoint, host: httpAuth.host },
-        }), guard);
+        });
         readyMs = Math.round(process.uptime() * 1000);
         logger.info(`MCP Server running over HTTP at http://${httpAuth.host}:${httpPort}${httpEndpoint} in ${readyMs}ms.`);
-        logger.info(`Auth: ${httpAuth.noAuth ? 'DISABLED (GOOGLE_MCP_HTTP_NO_AUTH) — do not use on a shared machine' : 'bearer token required'}; bound to ${httpAuth.host}.`);
-        logger.info('Shared mode: point every client at this URL instead of spawning per-session stdio servers.');
+        // "bearer-token", hyphenated: the log redactor treats `Bearer <word>`
+        // as a credential and would rewrite the unhyphenated phrase to
+        // "Bearer [REDACTED] required".
+        logger.info(`Auth: ${httpAuth.noAuth ? 'DISABLED (GOOGLE_MCP_HTTP_NO_AUTH) — do not use on a shared machine' : 'bearer-token required'}; bound to ${httpAuth.host}.`);
+        logger.info('Shared mode: point every client at this URL instead of spawning one stdio server per client.');
+        logger.info('HTTP is stateless (MCP 2026-07-28): no Mcp-Session-Id, no /sse, and read state is never carried ' +
+            'between requests. Docs edits over HTTP need the readHandle returned by readDocument; guarded Sheets and ' +
+            'Drive edits are stdio-only in this release.');
+        logger.info('One process serves one configured Google profile and one effective service principal. ' +
+            'Multiple profiles or horizontal scale are out of scope for this release.');
     } else {
-        await server.start({ transportType: 'stdio' });
+        runtime = startV2Stdio(factory, { profile, logger });
         readyMs = Math.round(process.uptime() * 1000);
         logger.info(`MCP Server running using stdio in ${readyMs}ms. Awaiting client connection...`);
     }
@@ -208,6 +167,9 @@ try {
             'see the README troubleshooting section for a fix.');
     }
     logger.info('Google auth will run automatically on first tool call.');
+    // One lifecycle owner for SIGINT/SIGTERM and, on stdio, the stdin-EOF
+    // shutdown path the SDK's own transport does not provide.
+    installRuntimeLifecycle(runtime, { useStdio: !useHttp, logger });
 
     // Best-effort update nudge. This runs AFTER the transport above is
     // already established, and is deliberately not awaited: a slow or

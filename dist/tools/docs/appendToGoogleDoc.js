@@ -1,11 +1,12 @@
 import * as fs from 'fs/promises';
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
-import { guardMutation, getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { guardMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'appendText',
@@ -23,18 +24,23 @@ export function register(server) {
                 .string()
                 .optional()
                 .describe('The ID of the specific tab to append to. If not specified, appends to the first tab (or legacy document.body for documents without tabs).'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
-            await guardMutation(args.documentId, {
-                contentFetcher: async () => {
-                    const current = await docs.documents.get({ documentId: args.documentId });
-                    // Return the revision this content came from alongside the
-                    // content itself so guardMutation can refresh both together
-                    // instead of leaving revisionId stale after a diff (see
-                    // readTracker.js guardMutation for why that matters).
-                    return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
-                },
+            const lease = await beginDocsMutation(args.documentId, {
+                tabId: args.tabId ?? null,
+                readHandle: args.readHandle,
+                legacyGuard: () => guardMutation(args.documentId, {
+                    contentFetcher: async () => {
+                        const current = await docs.documents.get({ documentId: args.documentId });
+                        // Return the revision this content came from alongside the
+                        // content itself so guardMutation can refresh both together
+                        // instead of leaving revisionId stale after a diff (see
+                        // readTracker.js guardMutation for why that matters).
+                        return { content: docsJsonToMarkdown(current.data), revisionId: current.data.revisionId };
+                    },
+                }),
             });
             // Resolve text content from filePath or inline parameter
             let text = args.text;
@@ -43,11 +49,11 @@ export function register(server) {
                     text = await fs.readFile(args.filePath, 'utf-8');
                     log.info(`Read ${text.length} chars from file: ${args.filePath}`);
                 } catch (err) {
-                    throw new UserError(`Failed to read file at "${args.filePath}": ${err.message}`);
+throw wrapOperationError('read local text file', err, { code: err?.code });
                 }
             }
             if (!text || text.length === 0) {
-                throw new UserError('Either text or filePath must be provided with non-empty content.');
+                throw publicError('Either text or filePath must be provided with non-empty content.');
             }
             log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
             try {
@@ -65,10 +71,10 @@ export function register(server) {
                 if (args.tabId) {
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                     bodyContent = targetTab.documentTab.body?.content;
                 }
@@ -92,20 +98,21 @@ export function register(server) {
                 const request = {
                     insertText: { location, text: textToInsert },
                 };
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
+                await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], writeControl),
+                    (response) => response?.writeControl?.requiredRevisionId,
+                );
                 log.info(`Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully appended text to ${args.tabId ? `tab ${args.tabId} in ` : ''}document ${args.documentId}.`;
             }
             catch (error) {
                 log.error(`Error appending to doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
                 if (error instanceof NotImplementedError)
                     throw error;
-                throw new UserError(`Failed to append to doc: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('append to Google document', error, { status: error?.code });
             }
         },
     });

@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -19,7 +19,7 @@ export function register(server) {
                 });
                 const file = response.data;
                 if (!file) {
-                    throw new UserError(`File with ID ${args.fileId} not found.`);
+                    throw publicError(`File with ID ${args.fileId} not found.`);
                 }
                 const info = {
                     id: file.id,
@@ -36,12 +36,13 @@ export function register(server) {
                 return JSON.stringify(info, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error getting file info: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`File not found (ID: ${args.fileId}).`);
+                    throw publicError(`File not found (ID: ${args.fileId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have access to this file.');
-                throw new UserError(`Failed to get file info: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have access to this file.');
+throw wrapOperationError('get file info', error, { status: error?.code });
             }
         },
     });

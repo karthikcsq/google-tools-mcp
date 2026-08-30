@@ -1,0 +1,1820 @@
+{
+  "schemaVersion": 1,
+  "inventoryScope": {
+    "runtime": "Git-tracked dist/**/*.js and dist/**/*.mjs files",
+    "tests": "Git-tracked tests/**/*.js and tests/**/*.mjs files"
+  },
+  "files": {
+    "runtime": [
+      {
+        "file": "dist/auth.js"
+      },
+      {
+        "file": "dist/clients.js"
+      },
+      {
+        "file": "dist/docsHandles.js"
+      },
+      {
+        "file": "dist/docsStructure.js"
+      },
+      {
+        "file": "dist/errors.js"
+      },
+      {
+        "file": "dist/googleDocsApiHelpers.js"
+      },
+      {
+        "file": "dist/googleSheetsApiHelpers.js"
+      },
+      {
+        "file": "dist/handleRuntime.js"
+      },
+      {
+        "file": "dist/helpers.js"
+      },
+      {
+        "file": "dist/httpAuth.js"
+      },
+      {
+        "file": "dist/index.js"
+      },
+      {
+        "file": "dist/logger.js"
+      },
+      {
+        "file": "dist/markdown-transformer/docsToMarkdown.js"
+      },
+      {
+        "file": "dist/markdown-transformer/index.js"
+      },
+      {
+        "file": "dist/markdown-transformer/markdownToDocs.js"
+      },
+      {
+        "file": "dist/mcpServer.js"
+      },
+      {
+        "file": "dist/readHandles.js"
+      },
+      {
+        "file": "dist/readTracker.js"
+      },
+      {
+        "file": "dist/requestContext.js"
+      },
+      {
+        "file": "dist/setup.js"
+      },
+      {
+        "file": "dist/tools/calendar/getBusy.js"
+      },
+      {
+        "file": "dist/tools/calendar/getEvents.js"
+      },
+      {
+        "file": "dist/tools/calendar/getFree.js"
+      },
+      {
+        "file": "dist/tools/calendar/index.js"
+      },
+      {
+        "file": "dist/tools/calendar/listCalendars.js"
+      },
+      {
+        "file": "dist/tools/calendar/listRecurringInstances.js"
+      },
+      {
+        "file": "dist/tools/calendar/manageCalendar.js"
+      },
+      {
+        "file": "dist/tools/calendar/manageEvent.js"
+      },
+      {
+        "file": "dist/tools/calendar/moveEvent.js"
+      },
+      {
+        "file": "dist/tools/docs/addTab.js"
+      },
+      {
+        "file": "dist/tools/docs/appendToGoogleDoc.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/addComment.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/deleteComment.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/getComment.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/index.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/listComments.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/replyToComment.js"
+      },
+      {
+        "file": "dist/tools/docs/comments/resolveComment.js"
+      },
+      {
+        "file": "dist/tools/docs/deleteRange.js"
+      },
+      {
+        "file": "dist/tools/docs/findAndReplace.js"
+      },
+      {
+        "file": "dist/tools/docs/formatting/applyParagraphStyle.js"
+      },
+      {
+        "file": "dist/tools/docs/formatting/getFormatting.js"
+      },
+      {
+        "file": "dist/tools/docs/formatting/index.js"
+      },
+      {
+        "file": "dist/tools/docs/index.js"
+      },
+      {
+        "file": "dist/tools/docs/insertImage.js"
+      },
+      {
+        "file": "dist/tools/docs/insertPageBreak.js"
+      },
+      {
+        "file": "dist/tools/docs/insertTable.js"
+      },
+      {
+        "file": "dist/tools/docs/insertTableWithData.js"
+      },
+      {
+        "file": "dist/tools/docs/listDocumentTabs.js"
+      },
+      {
+        "file": "dist/tools/docs/modifyText.js"
+      },
+      {
+        "file": "dist/tools/docs/modifyText.test.js"
+      },
+      {
+        "file": "dist/tools/docs/readGoogleDoc.js"
+      },
+      {
+        "file": "dist/tools/docs/renameTab.js"
+      },
+      {
+        "file": "dist/tools/drafts.js"
+      },
+      {
+        "file": "dist/tools/drive/addPermission.js"
+      },
+      {
+        "file": "dist/tools/drive/copyFile.js"
+      },
+      {
+        "file": "dist/tools/drive/createDocument.js"
+      },
+      {
+        "file": "dist/tools/drive/createFolder.js"
+      },
+      {
+        "file": "dist/tools/drive/createFromTemplate.js"
+      },
+      {
+        "file": "dist/tools/drive/deleteFile.js"
+      },
+      {
+        "file": "dist/tools/drive/downloadFile.js"
+      },
+      {
+        "file": "dist/tools/drive/getFileInfo.js"
+      },
+      {
+        "file": "dist/tools/drive/getFilePath.js"
+      },
+      {
+        "file": "dist/tools/drive/getFolderInfo.js"
+      },
+      {
+        "file": "dist/tools/drive/getRevision.js"
+      },
+      {
+        "file": "dist/tools/drive/index.js"
+      },
+      {
+        "file": "dist/tools/drive/listDriveFiles.js"
+      },
+      {
+        "file": "dist/tools/drive/listFolderContents.js"
+      },
+      {
+        "file": "dist/tools/drive/listPermissions.js"
+      },
+      {
+        "file": "dist/tools/drive/listRevisions.js"
+      },
+      {
+        "file": "dist/tools/drive/listSharedDrives.js"
+      },
+      {
+        "file": "dist/tools/drive/listSharedWithMe.js"
+      },
+      {
+        "file": "dist/tools/drive/moveFile.js"
+      },
+      {
+        "file": "dist/tools/drive/removePermission.js"
+      },
+      {
+        "file": "dist/tools/drive/renameFile.js"
+      },
+      {
+        "file": "dist/tools/drive/searchGoogleDocs.js"
+      },
+      {
+        "file": "dist/tools/drive/updatePermission.js"
+      },
+      {
+        "file": "dist/tools/drive/updateRevision.js"
+      },
+      {
+        "file": "dist/tools/drive/uploadFile.js"
+      },
+      {
+        "file": "dist/tools/extras/index.js"
+      },
+      {
+        "file": "dist/tools/extras/readDriveFile.js"
+      },
+      {
+        "file": "dist/tools/extras/readFile.js"
+      },
+      {
+        "file": "dist/tools/extras/searchFileContents.js"
+      },
+      {
+        "file": "dist/tools/forms/batchUpdateForm.js"
+      },
+      {
+        "file": "dist/tools/forms/createForm.js"
+      },
+      {
+        "file": "dist/tools/forms/getForm.js"
+      },
+      {
+        "file": "dist/tools/forms/getFormResponse.js"
+      },
+      {
+        "file": "dist/tools/forms/index.js"
+      },
+      {
+        "file": "dist/tools/forms/listFormResponses.js"
+      },
+      {
+        "file": "dist/tools/forms/setPublishSettings.js"
+      },
+      {
+        "file": "dist/tools/gmail/drafts.js"
+      },
+      {
+        "file": "dist/tools/gmail/labels.js"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js"
+      },
+      {
+        "file": "dist/tools/gmail/settings.js"
+      },
+      {
+        "file": "dist/tools/gmail/threads.js"
+      },
+      {
+        "file": "dist/tools/index.js"
+      },
+      {
+        "file": "dist/tools/labels.js"
+      },
+      {
+        "file": "dist/tools/legacyAliases.js"
+      },
+      {
+        "file": "dist/tools/maps/directions.js"
+      },
+      {
+        "file": "dist/tools/maps/geocode.js"
+      },
+      {
+        "file": "dist/tools/maps/index.js"
+      },
+      {
+        "file": "dist/tools/maps/mapsClient.js"
+      },
+      {
+        "file": "dist/tools/maps/placeDetails.js"
+      },
+      {
+        "file": "dist/tools/maps/reverseGeocode.js"
+      },
+      {
+        "file": "dist/tools/maps/searchNearby.js"
+      },
+      {
+        "file": "dist/tools/maps/searchPlaces.js"
+      },
+      {
+        "file": "dist/tools/messages.js"
+      },
+      {
+        "file": "dist/tools/settings.js"
+      },
+      {
+        "file": "dist/tools/sheets/addConditionalFormatting.js"
+      },
+      {
+        "file": "dist/tools/sheets/addSpreadsheetSheet.js"
+      },
+      {
+        "file": "dist/tools/sheets/appendSpreadsheetRows.js"
+      },
+      {
+        "file": "dist/tools/sheets/appendTableRows.js"
+      },
+      {
+        "file": "dist/tools/sheets/autoResizeColumns.js"
+      },
+      {
+        "file": "dist/tools/sheets/batchWrite.js"
+      },
+      {
+        "file": "dist/tools/sheets/clearSpreadsheetRange.js"
+      },
+      {
+        "file": "dist/tools/sheets/copyFormatting.js"
+      },
+      {
+        "file": "dist/tools/sheets/createSpreadsheet.js"
+      },
+      {
+        "file": "dist/tools/sheets/createTable.js"
+      },
+      {
+        "file": "dist/tools/sheets/deleteChart.js"
+      },
+      {
+        "file": "dist/tools/sheets/deleteColumns.js"
+      },
+      {
+        "file": "dist/tools/sheets/deleteSheet.js"
+      },
+      {
+        "file": "dist/tools/sheets/deleteTable.js"
+      },
+      {
+        "file": "dist/tools/sheets/duplicateSheet.js"
+      },
+      {
+        "file": "dist/tools/sheets/formatCells.js"
+      },
+      {
+        "file": "dist/tools/sheets/freezeRowsAndColumns.js"
+      },
+      {
+        "file": "dist/tools/sheets/getSpreadsheetInfo.js"
+      },
+      {
+        "file": "dist/tools/sheets/getTable.js"
+      },
+      {
+        "file": "dist/tools/sheets/groupRows.js"
+      },
+      {
+        "file": "dist/tools/sheets/index.js"
+      },
+      {
+        "file": "dist/tools/sheets/insertChart.js"
+      },
+      {
+        "file": "dist/tools/sheets/listTables.js"
+      },
+      {
+        "file": "dist/tools/sheets/readCellFormat.js"
+      },
+      {
+        "file": "dist/tools/sheets/readSpreadsheet.js"
+      },
+      {
+        "file": "dist/tools/sheets/renameSheet.js"
+      },
+      {
+        "file": "dist/tools/sheets/setColumnWidths.js"
+      },
+      {
+        "file": "dist/tools/sheets/setDropdownValidation.js"
+      },
+      {
+        "file": "dist/tools/sheets/ungroupAllRows.js"
+      },
+      {
+        "file": "dist/tools/sheets/updateTableRange.js"
+      },
+      {
+        "file": "dist/tools/sheets/writeSpreadsheet.js"
+      },
+      {
+        "file": "dist/tools/slides/createPresentation.js"
+      },
+      {
+        "file": "dist/tools/slides/createShape.js"
+      },
+      {
+        "file": "dist/tools/slides/createTextBox.js"
+      },
+      {
+        "file": "dist/tools/slides/deleteSlide.js"
+      },
+      {
+        "file": "dist/tools/slides/duplicateSlide.js"
+      },
+      {
+        "file": "dist/tools/slides/exportThumbnail.js"
+      },
+      {
+        "file": "dist/tools/slides/formatParagraph.js"
+      },
+      {
+        "file": "dist/tools/slides/formatText.js"
+      },
+      {
+        "file": "dist/tools/slides/getPresentation.js"
+      },
+      {
+        "file": "dist/tools/slides/index.js"
+      },
+      {
+        "file": "dist/tools/slides/reorderSlides.js"
+      },
+      {
+        "file": "dist/tools/slides/replaceAllText.js"
+      },
+      {
+        "file": "dist/tools/slides/setBackground.js"
+      },
+      {
+        "file": "dist/tools/slides/speakerNotes.js"
+      },
+      {
+        "file": "dist/tools/slides/styleShape.js"
+      },
+      {
+        "file": "dist/tools/slides/updatePresentation.js"
+      },
+      {
+        "file": "dist/tools/tasks/completeTask.js"
+      },
+      {
+        "file": "dist/tools/tasks/createTask.js"
+      },
+      {
+        "file": "dist/tools/tasks/createTaskList.js"
+      },
+      {
+        "file": "dist/tools/tasks/deleteTask.js"
+      },
+      {
+        "file": "dist/tools/tasks/deleteTaskList.js"
+      },
+      {
+        "file": "dist/tools/tasks/index.js"
+      },
+      {
+        "file": "dist/tools/tasks/listTaskLists.js"
+      },
+      {
+        "file": "dist/tools/tasks/listTasks.js"
+      },
+      {
+        "file": "dist/tools/tasks/updateTask.js"
+      },
+      {
+        "file": "dist/tools/threads.js"
+      },
+      {
+        "file": "dist/tools/utils/appendMarkdownToGoogleDoc.js"
+      },
+      {
+        "file": "dist/tools/utils/index.js"
+      },
+      {
+        "file": "dist/tools/utils/replaceDocumentWithMarkdown.js"
+      },
+      {
+        "file": "dist/types.js"
+      },
+      {
+        "file": "dist/updateCheck.js"
+      },
+      {
+        "file": "dist/workspace.js"
+      }
+    ],
+    "tests": [
+      {
+        "file": "tests/appendMarkdownRevisionRefresh.test.js"
+      },
+      {
+        "file": "tests/docsHandleLeaseFailure.test.js"
+      },
+      {
+        "file": "tests/docsStructure.test.js"
+      },
+      {
+        "file": "tests/docsWriteControl.test.js"
+      },
+      {
+        "file": "tests/documentationConsistency.test.js"
+      },
+      {
+        "file": "tests/entrypointSmoke.test.js"
+      },
+      {
+        "file": "tests/errorsAndLogger.test.js"
+      },
+      {
+        "file": "tests/extraDocsToolsWriteControl.test.js"
+      },
+      {
+        "file": "tests/fixtures/mcpSdkV2Fixture.js"
+      },
+      {
+        "file": "tests/fixtures/runtimeLifecycleChild.js"
+      },
+      {
+        "file": "tests/gmailConsolidation.test.js"
+      },
+      {
+        "file": "tests/gmailThreads.test.js"
+      },
+      {
+        "file": "tests/googleDocsApiHelpers.test.js"
+      },
+      {
+        "file": "tests/guardMutationRevisionRefresh.test.js"
+      },
+      {
+        "file": "tests/handleRuntimeStructuralFingerprint.test.js"
+      },
+      {
+        "file": "tests/helpers.test.js"
+      },
+      {
+        "file": "tests/httpAuth.test.js"
+      },
+      {
+        "file": "tests/legacyAliasAuthRetry.test.js"
+      },
+      {
+        "file": "tests/maps.test.js"
+      },
+      {
+        "file": "tests/markdownFidelity.test.js"
+      },
+      {
+        "file": "tests/markdownToolSuccessMessages.test.js"
+      },
+      {
+        "file": "tests/markdownTransformer.test.js"
+      },
+      {
+        "file": "tests/mcpMigrationInventory.test.js"
+      },
+      {
+        "file": "tests/mcpSdkV2Compatibility.test.js"
+      },
+      {
+        "file": "tests/mcpServerFacade.test.js"
+      },
+      {
+        "file": "tests/modifyText.test.js"
+      },
+      {
+        "file": "tests/mutatingDocsToolsWriteControl.test.js"
+      },
+      {
+        "file": "tests/oauthCallbackPort.test.js"
+      },
+      {
+        "file": "tests/packageScripts.test.js"
+      },
+      {
+        "file": "tests/publicErrorBoundary.test.js"
+      },
+      {
+        "file": "tests/readGoogleDocTabs.test.js"
+      },
+      {
+        "file": "tests/readGoogleDocWorkspace.test.js"
+      },
+      {
+        "file": "tests/readHandleIntegration.test.js"
+      },
+      {
+        "file": "tests/readTracker.test.js"
+      },
+      {
+        "file": "tests/replaceDocumentWithMarkdown.test.js"
+      },
+      {
+        "file": "tests/replaceMarkdownWriteControl.test.js"
+      },
+      {
+        "file": "tests/requestContextAndReadHandles.test.js"
+      },
+      {
+        "file": "tests/requestScopedTrackerIsolation.test.js"
+      },
+      {
+        "file": "tests/setup.js"
+      },
+      {
+        "file": "tests/setupApiCoverage.test.js"
+      },
+      {
+        "file": "tests/setupFastLaunch.test.js"
+      },
+      {
+        "file": "tests/setupUpdateCommand.test.js"
+      },
+      {
+        "file": "tests/textNormalization.test.js"
+      },
+      {
+        "file": "tests/toolDescriptions.test.js"
+      },
+      {
+        "file": "tests/toolRegistration.test.js"
+      },
+      {
+        "file": "tests/types.test.js"
+      },
+      {
+        "file": "tests/updateCheck.test.js"
+      },
+      {
+        "file": "tests/uploadFile.test.js"
+      },
+      {
+        "file": "tests/workspace.test.js"
+      },
+      {
+        "file": "tests/writeControlRevisionAdvance.test.js"
+      }
+    ]
+  },
+  "findings": {
+    "fastMcpImports": [],
+    "rawMcpSdkImports": [],
+    "addToolRegistrations": [
+      {
+        "file": "dist/tools/calendar/getBusy.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/calendar/getEvents.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/calendar/getFree.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/calendar/listCalendars.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/calendar/listRecurringInstances.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/calendar/manageCalendar.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/calendar/manageEvent.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/calendar/moveEvent.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/addTab.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/appendToGoogleDoc.js",
+        "line": 11,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/addComment.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/deleteComment.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/getComment.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/listComments.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/replyToComment.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/comments/resolveComment.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/deleteRange.js",
+        "line": 10,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/findAndReplace.js",
+        "line": 25,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/formatting/applyParagraphStyle.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/formatting/getFormatting.js",
+        "line": 102,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/insertImage.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/insertPageBreak.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/insertTable.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/insertTableWithData.js",
+        "line": 71,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/listDocumentTabs.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/modifyText.js",
+        "line": 98,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/readGoogleDoc.js",
+        "line": 27,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/docs/renameTab.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drafts.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drafts.js",
+        "line": 48,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drafts.js",
+        "line": 89,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drafts.js",
+        "line": 102,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drafts.js",
+        "line": 119,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drafts.js",
+        "line": 149,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/addPermission.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/copyFile.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/createDocument.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/createFolder.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/createFromTemplate.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/deleteFile.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/downloadFile.js",
+        "line": 96,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/getFileInfo.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/getFilePath.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/getFolderInfo.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/getRevision.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/listDriveFiles.js",
+        "line": 14,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/listFolderContents.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/listPermissions.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/listRevisions.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/listSharedDrives.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/listSharedWithMe.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/moveFile.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/removePermission.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/renameFile.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/searchGoogleDocs.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/updatePermission.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/updateRevision.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/drive/uploadFile.js",
+        "line": 37,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/extras/readDriveFile.js",
+        "line": 42,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/extras/readFile.js",
+        "line": 42,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/extras/searchFileContents.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/forms/batchUpdateForm.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/forms/createForm.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/forms/getForm.js",
+        "line": 78,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/forms/getFormResponse.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/forms/listFormResponses.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/forms/setPublishSettings.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/drafts.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/drafts.js",
+        "line": 48,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/drafts.js",
+        "line": 89,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/drafts.js",
+        "line": 102,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/drafts.js",
+        "line": 119,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/drafts.js",
+        "line": 149,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/labels.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 47,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 164,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 280,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 300,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 343,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 362,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 376,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 402,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/messages.js",
+        "line": 431,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/settings.js",
+        "line": 180,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/settings.js",
+        "line": 219,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/settings.js",
+        "line": 268,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/settings.js",
+        "line": 322,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/settings.js",
+        "line": 333,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/settings.js",
+        "line": 348,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/threads.js",
+        "line": 77,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/threads.js",
+        "line": 108,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/threads.js",
+        "line": 177,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/threads.js",
+        "line": 233,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/threads.js",
+        "line": 249,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/gmail/threads.js",
+        "line": 262,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/index.js",
+        "line": 242,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/index.js",
+        "line": 266,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/index.js",
+        "line": 287,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/index.js",
+        "line": 415,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/labels.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/labels.js",
+        "line": 25,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/labels.js",
+        "line": 38,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/labels.js",
+        "line": 51,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/labels.js",
+        "line": 62,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/labels.js",
+        "line": 83,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/legacyAliases.js",
+        "line": 400,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/legacyAliases.js",
+        "line": 415,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/maps/directions.js",
+        "line": 40,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/maps/geocode.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/maps/placeDetails.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/maps/reverseGeocode.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/maps/searchNearby.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/maps/searchPlaces.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 47,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 163,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 278,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 295,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 321,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 339,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 352,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 365,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 378,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 391,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 409,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/messages.js",
+        "line": 435,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 8,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 19,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 34,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 45,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 60,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 71,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 84,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 95,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 109,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 120,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 141,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 154,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 167,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 180,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 193,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 221,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 234,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 247,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 260,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 273,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 286,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 299,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 312,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 330,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 343,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 356,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 367,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 386,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 405,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 420,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 434,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 448,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 463,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 476,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 492,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 503,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/settings.js",
+        "line": 518,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/addConditionalFormatting.js",
+        "line": 22,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/addSpreadsheetSheet.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/appendSpreadsheetRows.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/appendTableRows.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/autoResizeColumns.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/batchWrite.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/clearSpreadsheetRange.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/copyFormatting.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/createSpreadsheet.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/createTable.js",
+        "line": 16,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/deleteChart.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/deleteColumns.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/deleteSheet.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/deleteTable.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/duplicateSheet.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/formatCells.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/freezeRowsAndColumns.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/getSpreadsheetInfo.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/getTable.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/groupRows.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/insertChart.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/listTables.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/readCellFormat.js",
+        "line": 92,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/readSpreadsheet.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/renameSheet.js",
+        "line": 5,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/setColumnWidths.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/setDropdownValidation.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/ungroupAllRows.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/updateTableRange.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/sheets/writeSpreadsheet.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/createPresentation.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/createShape.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/createTextBox.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/deleteSlide.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/duplicateSlide.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/exportThumbnail.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/formatParagraph.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/formatText.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/getPresentation.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/reorderSlides.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/replaceAllText.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/setBackground.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/speakerNotes.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/speakerNotes.js",
+        "line": 52,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/styleShape.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/slides/updatePresentation.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/completeTask.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/createTask.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/createTaskList.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/deleteTask.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/deleteTaskList.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/listTaskLists.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/listTasks.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/tasks/updateTask.js",
+        "line": 6,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/threads.js",
+        "line": 7,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/threads.js",
+        "line": 29,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/threads.js",
+        "line": 60,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/threads.js",
+        "line": 91,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/threads.js",
+        "line": 107,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/threads.js",
+        "line": 120,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/threads.js",
+        "line": 133,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/utils/appendMarkdownToGoogleDoc.js",
+        "line": 11,
+        "match": ".addTool({"
+      },
+      {
+        "file": "dist/tools/utils/replaceDocumentWithMarkdown.js",
+        "line": 12,
+        "match": ".addTool({"
+      }
+    ],
+    "userErrorImports": [],
+    "contextLogCallSites": [],
+    "loadedDefaultToolCount": 156
+  }
+}

@@ -1,48 +1,62 @@
 // In-memory tracker for read-before-edit guards (issue #18) and diff-aware
 // reading/editing (issue #21).
-// Tracks which files have been read in this session, when, and optionally the
+// Tracks which files have been read in the current scope, when, and optionally the
 // content snapshot at the time of the last read so blocked mutations can return
 // a unified diff instead of a bare "modified externally" error.
-import { UserError } from 'fastmcp';
+import { UserError } from './errors.js';
 import { createPatch } from 'diff';
 import { getDriveClient } from './clients.js';
 import { logger } from './logger.js';
-import { currentSessionKey } from './sessionContext.js';
+import { getRequestContext } from './requestContext.js';
 
-// Per-session read logs.
+// Read logs keyed by the request context object itself.
 //
-// Each session has its own Map of fileId → { readAt, modifiedTime, content }.
+// The runtime has no MCP sessions. Putting every stateless HTTP request into
+// ONE shared namespace would mean request A's read of document X sits in the
+// same map guardMutation consults for request B, and B could mutate X off A's
+// snapshot and revision without ever having read it - exactly the cross-client
+// isolation failure this scoping exists to stop.
+//
+// Minting a synthetic per-request key is not a fix either: 2026-07-28 HTTP is
+// stateless, so a later mutation request could never find its own earlier read
+// anyway. The correct model is that an HTTP request's tracker state is scoped
+// to that one request and dies with it, and cross-request authorization comes
+// exclusively from an explicit, validated readHandle (dist/docsHandles.js).
+// Guarded surfaces with no handle wiring therefore fail closed on HTTP rather
+// than silently borrowing another request's read.
+//
+// A stdio context is per-connection rather than per-request, so a read and a
+// later mutation on the same pinned connection still see each other, matching
+// the connection-pinned implicit handle state.
+//
+// WeakMap: an HTTP context is unreachable once its request finishes, so its log
+// is collected with it and nothing accumulates.
+const requestContextLogs = new WeakMap();
+
+// The no-context namespace. Only callers running outside any transport land
+// here: direct unit tests and internal startup code.
+//
+// The session era kept a Map of these namespaces keyed by MCP session id,
+// because one FastMCP process multiplexed many HTTP sessions through this one
+// module-global tracker and cleared a namespace on disconnect. Nothing does
+// that any more - HTTP requests are context-scoped above and stdio is one
+// pinned connection per process - so the map of namespaces collapses to this
+// single Map and there is no session state left to clear.
+//
+// Each entry is fileId -> { readAt, modifiedTime, content, revisionId }.
 // content is only populated for file types that opt in (currently Google Docs);
 // Sheets and raw Drive files track read/modifiedTime only.
-//
-// Namespacing by session is what makes shared HTTP mode safe: two clients
-// reading or mutating the same file no longer clobber each other's tracked
-// content, modifiedTime, and revision guard (PR #36 review). In stdio mode the
-// ambient session key is null, so there is a single namespace and behavior is
-// identical to the original single-Map implementation.
-const sessions = new Map(); // sessionKey (string|null) → Map<fileId, entry>
-
-// Sentinel for the stdio / no-request namespace (Map keys can't be null-safe
-// across distinct absent values, so normalize null → this string).
-const DEFAULT_SESSION = '\0default';
+const defaultLog = new Map();
 
 function logForCurrentSession() {
-    const key = currentSessionKey() ?? DEFAULT_SESSION;
-    let log = sessions.get(key);
-    if (!log) {
-        log = new Map();
-        sessions.set(key, log);
+    const context = getRequestContext();
+    if (!context) return defaultLog;
+    let contextLog = requestContextLogs.get(context);
+    if (!contextLog) {
+        contextLog = new Map();
+        requestContextLogs.set(context, contextLog);
     }
-    return log;
-}
-
-/**
- * Drop all tracked state for a session. Called when an HTTP session disconnects
- * so a long-lived shared server doesn't accumulate tracker entries forever.
- * @param {string|null|undefined} sessionKey
- */
-export function clearSession(sessionKey) {
-    sessions.delete(sessionKey ?? DEFAULT_SESSION);
+    return contextLog;
 }
 
 /**
@@ -82,6 +96,19 @@ export async function guardMutation(fileId, opts) {
     const readLog = logForCurrentSession();
     const entry = readLog.get(fileId);
     if (!entry) {
+        if (getRequestContext()?.transport === 'http') {
+            // Fail closed. There is deliberately no fallback to a shared
+            // namespace here: on the stateless 2026-07-28 HTTP runtime read
+            // state is never carried between requests, so authorization must
+            // come from an explicit readHandle instead.
+            throw new UserError(
+                `This file (${fileId}) has not been read in this request. On the 2026-07-28 HTTP ` +
+                "runtime read state is never shared between requests, so an earlier request's read " +
+                'cannot authorize this write. Google Docs edits take an explicit readHandle returned ' +
+                'by readDocument; guarded Sheets and Drive edits have no handle wiring yet and are ' +
+                'unavailable over HTTP on this runtime - use the stdio transport for them.'
+            );
+        }
         throw new UserError(
             `This file (${fileId}) has not been read in this session. ` +
             'Read it first before making changes to ensure you have current content. ' +

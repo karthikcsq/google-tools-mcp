@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient, getDocsClient } from '../../clients.js';
 export function register(server) {
@@ -70,12 +70,13 @@ export function register(server) {
                 return result;
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error creating document from template: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Template document or parent folder not found. Check the IDs.');
+                    throw publicError('Template document or parent folder not found. Check the IDs.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have read access to the template and write access to the destination folder.');
-                throw new UserError(`Failed to create document from template: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have read access to the template and write access to the destination folder.');
+throw wrapOperationError('create document from template', error, { status: error?.code });
             }
         },
     });

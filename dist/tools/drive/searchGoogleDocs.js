@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -88,10 +88,11 @@ export function register(server) {
                 return JSON.stringify({ documents }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error searching Google Docs: ${error.message || error}`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have granted Google Drive access to the application.');
-                throw new UserError(`Failed to search documents: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have granted Google Drive access to the application.');
+throw wrapOperationError('search Google documents', error, { status: error?.code });
             }
         },
     });

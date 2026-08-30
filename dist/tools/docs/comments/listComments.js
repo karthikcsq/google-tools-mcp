@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../../errors.js';
 import { google } from 'googleapis';
 import { getDocsClient, getDriveClient, getAuthClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
@@ -35,8 +35,9 @@ export function register(server) {
                 return JSON.stringify({ comments }, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error listing comments: ${error.message || error}`);
-                throw new UserError(`Failed to list comments: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('list document comments', error, { status: error?.code });
             }
         },
     });

@@ -1,9 +1,9 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 // --- Table Index Math ---
 // Google Docs API table index layout for an R×C table inserted at T:
 //   cellContentIndex(T, r, c, C) = T + 4 + r * (1 + 2*C) + 2*c
@@ -16,7 +16,7 @@ export function buildInsertTableWithDataRequests(data, index, hasHeaderRow, tabI
     const numRows = data.length;
     const numCols = data.reduce((max, row) => Math.max(max, row.length), 0);
     if (numRows === 0 || numCols === 0) {
-        throw new UserError('Table data must contain at least one non-empty row with at least one cell.');
+        throw publicError('Table data must contain at least one non-empty row with at least one cell.');
     }
     // Pad ragged rows to uniform column count
     const normalizedData = data.map((row) => {
@@ -96,6 +96,7 @@ export function register(server) {
                 .optional()
                 .describe('The ID of the specific tab to insert into. Use listDocumentTabs to get tab IDs. ' +
                 'If not specified, inserts into the first tab.'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -112,16 +113,21 @@ export function register(server) {
                     });
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
                 const requests = buildInsertTableWithDataRequests(args.data, args.index, args.hasHeaderRow ?? false, args.tabId);
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const metadata = await GDocsHelpers.executeBatchUpdateWithSplitting(docs, args.documentId, requests, log, revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, metadata?.finalWriteControl?.requiredRevisionId);
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: args.tabId ?? null,
+                    readHandle: args.readHandle,
+                });
+                const metadata = await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdateWithSplitting(docs, args.documentId, requests, log, writeControl),
+                    (metadata) => metadata?.finalWriteControl?.requiredRevisionId,
+                );
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return (`${docUrl}\nSuccessfully inserted a ${numRows}x${numCols} table with data at index ${args.index}` +
                     `${args.tabId ? ` in tab ${args.tabId}` : ''}. ` +
@@ -130,9 +136,9 @@ export function register(server) {
             }
             catch (error) {
                 log.error(`Error inserting table with data in doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
-                throw new UserError(`Failed to insert table with data: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('insert document table with data', error, { status: error?.code });
             }
         },
     });

@@ -1,5 +1,100 @@
 # Changelog
 
+## Unreleased (next: 3.0.0)
+
+Migration to MCP specification **2026-07-28** on the official MCP TypeScript
+SDK v2. FastMCP, mcp-proxy, and the v1 SDK are gone. **stdio users: nothing in
+your config changes.** The breaking changes are all in shared HTTP mode.
+
+### Breaking
+
+- **Sessionful HTTP is removed.** HTTP is stateless: every request is
+  authenticated, served, and forgotten. Removed, all now returning `404` after
+  the same bearer-token and `Origin` checks as any other request:
+  - `GET /sse` and its `POST /messages` companion — the legacy SSE
+    compatibility transport mcp-proxy always stood up alongside the configured
+    endpoint, with no supported way to turn it off.
+  - `GET /ping` — mcp-proxy's unauthenticated liveness route. Replaced by
+    authenticated `GET /healthz`, which returns exactly `{"status":"ok"}` and no
+    server, version, profile, tool, handle, or environment identity.
+  - The `GET` that attached to a session's event stream and the `DELETE` that
+    terminated a session.
+
+  The `Mcp-Session-Id` header is never required, never returned, and ignored if
+  sent. What remains is one `POST` endpoint (`GOOGLE_MCP_ENDPOINT`, default
+  `/mcp`) plus `GET /healthz`.
+
+  Reconfiguration steps for Claude Code and Codex — including the
+  `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` env entry a Codex stdio registration
+  needs, without which Codex pins the server to the legacy lifecycle — are in
+  [docs/http-mode.md](docs/http-mode.md).
+
+- **Google Docs edits over HTTP now require an explicit `readHandle`.** Read
+  state is never carried between HTTP requests, so an earlier request's read
+  cannot authorize a later write. `readDocument` returns an opaque, server-minted
+  handle bound to the credential fingerprint, configured profile, runtime epoch,
+  file, tab, revision, and a structural fingerprint of the document; it expires
+  in under 24 hours, and a mutation consumes it and returns a successor bound to
+  the new revision. A revision string alone cannot authorize a write. The field
+  is schema-optional and runtime-required on HTTP, so stdio and its
+  connection-pinned implicit read state are unaffected.
+
+- **`writeSpreadsheet`, `batchWrite`, `clearSpreadsheetRange`, and `deleteFile`
+  fail closed over HTTP.** They have no handle wiring yet. Use stdio for them in
+  this release.
+
+- **`GOOGLE_MCP_USE_SDK_V2` is removed.** The SDK v2 path was the flagged
+  runtime during the migration and is now the only runtime, so there is nothing
+  left to select.
+
+- **Node `>=20` and Zod `^4.2`** are now the floor.
+
+- One process serves **one** configured Google profile and one effective
+  service principal. Handles, trackers, and workspace ownership are valid only
+  for that deployment; multiple profiles or horizontal scale are out of scope.
+
+### Added
+
+- `GET /healthz`, authenticated, liveness only.
+- `server/discover` carrying supported versions, capabilities, `serverInfo`, and
+  server `instructions`, with `cacheHints` (60s TTL, private scope) on both
+  `server/discover` and `tools/list` so clients can cache the catalog.
+- Per-handle editable workspaces over content-addressed immutable baselines,
+  with ownership manifests, dirty-file retention, and cleanup on mint and
+  shutdown.
+- A secret redactor and error classifier at the transport boundary
+  (`dist/errors.js`): every caller-visible error string and every server-side
+  log field is redacted, and an unclassified internal failure returns a generic
+  message instead of a raw stack.
+- `docs/http-mode.md`, the reference for HTTP mode and this breaking change.
+
+### Fixed
+
+- Read-tracker state can no longer be shared across HTTP requests. One request's
+  read of a document could previously satisfy another request's mutation guard.
+- `subscriptions/listen` returns its empty result and closes gracefully instead
+  of holding the connection open ([typescript-sdk#2650](https://github.com/modelcontextprotocol/typescript-sdk/issues/2650)).
+- A modern POST whose body claims a protocol revision but omits the
+  `MCP-Protocol-Version` header gets a JSON-RPC `-32020` HeaderMismatch error
+  addressed to the pending request id, rather than a generic HTTP body the
+  client would take down the wrong error path.
+- `Access-Control-Allow-Origin` and `Vary: Origin` are attached to real
+  responses, not just the CORS preflight.
+
+### Removed (internal)
+
+- `fastmcp` and, with it, `mcp-proxy` and the transitive
+  `@modelcontextprotocol/sdk` v1.
+- `dist/cachedToolsList.js` (unused; the only raw v1 SDK import).
+- `dist/sessionContext.js` and every `runWithSession` / `currentSessionKey` /
+  `clearSession` call site.
+- The `http.createServer` request-guard monkey-patch in `dist/httpAuth.js`
+  (`startWithRequestGuard`, `createHttpRequestGuard`) and the FastMCP
+  `createHttpAuthenticate` hook. One `checkHttpAuth` middleware now runs ahead
+  of routing and covers every method and path.
+- The `server.on('disconnect')` session-cleanup handlers.
+
+
 ## 2.0.0
 
 First release since 1.2.12 (2026-06-01). Thirteen pull requests, one breaking change.

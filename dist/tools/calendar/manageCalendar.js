@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getCalendarClient } from '../../clients.js';
 
@@ -32,7 +32,7 @@ export function register(server) {
 
             try {
                 if (args.action === 'create') {
-                    if (!args.summary) throw new UserError('summary is required for create.');
+                    if (!args.summary) throw publicError('summary is required for create.');
                     log.info(`Creating calendar "${args.summary}"`);
 
                     const body = { summary: args.summary };
@@ -54,7 +54,7 @@ export function register(server) {
                 }
 
                 if (args.action === 'update') {
-                    if (!args.calendar_id) throw new UserError('calendar_id is required for update.');
+                    if (!args.calendar_id) throw publicError('calendar_id is required for update.');
                     log.info(`Updating calendar ${args.calendar_id}`);
 
                     // Fetch existing to preserve fields
@@ -90,9 +90,9 @@ export function register(server) {
                 }
 
                 if (args.action === 'delete') {
-                    if (!args.calendar_id) throw new UserError('calendar_id is required for delete.');
+                    if (!args.calendar_id) throw publicError('calendar_id is required for delete.');
                     if (args.calendar_id === 'primary')
-                        throw new UserError('Cannot delete the primary calendar.');
+                        throw publicError('Cannot delete the primary calendar.');
                     log.info(`Deleting calendar ${args.calendar_id}`);
 
                     await calendar.calendars.delete({ calendarId: args.calendar_id });
@@ -104,17 +104,15 @@ export function register(server) {
                     });
                 }
 
-                throw new UserError(`Unknown action: ${args.action}`);
+                throw publicError(`Unknown action: ${args.action}`);
             } catch (error) {
-                if (error instanceof UserError) throw error;
+                if (isPublicError(error)) throw error;
                 log.error(`Error in manageCalendar (${args.action}): ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('Calendar not found. Check the calendar_id.');
+                    throw publicError('Calendar not found. Check the calendar_id.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. You can only modify calendars you own.');
-                throw new UserError(
-                    `Failed to ${args.action} calendar: ${error.message || 'Unknown error'}`
-                );
+                    throw publicError('Permission denied. You can only modify calendars you own.');
+                throw wrapOperationError('manage calendar', error, { status: error?.code });
             }
         },
     });

@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -41,13 +41,13 @@ export function register(server) {
         }),
         execute: async (args, { log }) => {
             if ((args.type === 'user' || args.type === 'group') && !args.emailAddress) {
-                throw new UserError(`emailAddress is required when type is '${args.type}'.`);
+                throw publicError(`emailAddress is required when type is '${args.type}'.`);
             }
             if (args.type === 'domain' && !args.domain) {
-                throw new UserError("domain is required when type is 'domain'.");
+                throw publicError("domain is required when type is 'domain'.");
             }
             if (args.role === 'owner' && !args.transferOwnership) {
-                throw new UserError("Role 'owner' requires transferOwnership=true.");
+                throw publicError("Role 'owner' requires transferOwnership=true.");
             }
             const drive = await getDriveClient();
             log.info(`Adding permission to ${args.fileId}: type=${args.type}, role=${args.role}`);
@@ -75,13 +75,19 @@ export function register(server) {
                 return JSON.stringify(response.data, null, 2);
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error adding permission: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError(`File not found (ID: ${args.fileId}).`);
+                    throw publicError(`File not found (ID: ${args.fileId}).`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. You need writer+ access (or be the owner) to share this file.');
-                const apiMsg = error.response?.data?.error?.message || error.message || 'Unknown error';
-                throw new UserError(`Failed to add permission: ${apiMsg}`);
+                    throw publicError('Permission denied. You need writer+ access (or be the owner) to share this file.');
+                // Drive's structured message explains sharing rejections the
+                // status code alone cannot (domain policy, ownership transfer
+                // rules, invalid target). It is validated upstream detail and
+                // stays caller-visible; without it there is nothing safe to say.
+                const detail = getApiErrorDetail(error);
+                if (!detail) throw wrapOperationError('add Drive permission', error, { status: error?.code });
+                throw publicError(`Failed to add permission: ${detail.description}`);
             }
         },
     });

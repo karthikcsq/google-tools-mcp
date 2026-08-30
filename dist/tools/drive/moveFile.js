@@ -1,4 +1,4 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 export function register(server) {
@@ -43,12 +43,13 @@ export function register(server) {
                 return `${fileUrl}\nSuccessfully ${action} "${fileName}" to new location.\nFile ID: ${response.data.id}`;
             }
             catch (error) {
+                if (isPublicError(error)) throw error;
                 log.error(`Error moving file: ${error.message || error}`);
                 if (error.code === 404)
-                    throw new UserError('File or destination folder not found. Check the IDs.');
+                    throw publicError('File or destination folder not found. Check the IDs.');
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Make sure you have write access to both source and destination.');
-                throw new UserError(`Failed to move file: ${error.message || 'Unknown error'}`);
+                    throw publicError('Permission denied. Make sure you have write access to both source and destination.');
+throw wrapOperationError('move file', error, { status: error?.code });
             }
         },
     });

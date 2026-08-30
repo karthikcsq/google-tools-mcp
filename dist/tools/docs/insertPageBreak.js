@@ -1,9 +1,9 @@
-import { UserError } from 'fastmcp';
+import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
-import { getLastReadRevisionId, trackMutation } from '../../readTracker.js';
+import { ReadHandleParameter, beginDocsMutation } from '../../docsHandles.js';
 export function register(server) {
     server.addTool({
         name: 'insertPageBreak',
@@ -18,6 +18,7 @@ export function register(server) {
                 .string()
                 .optional()
                 .describe('The ID of the specific tab to insert into. Use listDocumentTabs to get tab IDs. If not specified, inserts into the first tab.'),
+            readHandle: ReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const docs = await getDocsClient();
@@ -32,10 +33,10 @@ export function register(server) {
                     });
                     const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
                     if (!targetTab) {
-                        throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+                        throw publicError(`Tab with ID "${args.tabId}" not found in document.`);
                     }
                     if (!targetTab.documentTab) {
-                        throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+                        throw publicError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
                     }
                 }
                 const location = { index: args.index };
@@ -45,17 +46,22 @@ export function register(server) {
                 const request = {
                     insertPageBreak: { location },
                 };
-                const revisionId = getLastReadRevisionId(args.documentId);
-                const writeResponse = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], revisionId ? { requiredRevisionId: revisionId } : undefined);
-                trackMutation(args.documentId, writeResponse?.writeControl?.requiredRevisionId);
+                const lease = await beginDocsMutation(args.documentId, {
+                    tabId: args.tabId ?? null,
+                    readHandle: args.readHandle,
+                });
+                await lease.write(
+                    (writeControl) => GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], writeControl),
+                    (response) => response?.writeControl?.requiredRevisionId,
+                );
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nSuccessfully inserted page break at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
             }
             catch (error) {
                 log.error(`Error inserting page break in doc ${args.documentId}: ${error.message || error}`);
-                if (error instanceof UserError)
+                if (isPublicError(error))
                     throw error;
-                throw new UserError(`Failed to insert page break: ${error.message || 'Unknown error'}`);
+throw wrapOperationError('insert document page break', error, { status: error?.code });
             }
         },
     });
