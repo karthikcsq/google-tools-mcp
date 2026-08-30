@@ -48,6 +48,21 @@ const requestContextLogs = new WeakMap();
 // Sheets and raw Drive files track read/modifiedTime only.
 const defaultLog = new Map();
 
+/**
+ * True when Drive now reports an modifiedTime strictly EARLIER than the one
+ * already recorded for this file. Both values come from the same source
+ * (drive.files.get), so they are comparable to each other — unlike `readAt`,
+ * which is this process's local clock and must never be compared against a
+ * Google timestamp. Unparseable values answer false, which keeps the existing
+ * "different string means changed" behavior for anything non-RFC3339.
+ */
+function modifiedTimeWentBackwards(recorded, current) {
+    const before = Date.parse(recorded);
+    const after = Date.parse(current);
+    if (Number.isNaN(before) || Number.isNaN(after)) return false;
+    return after < before;
+}
+
 function logForCurrentSession() {
     const context = getRequestContext();
     if (!context) return defaultLog;
@@ -139,6 +154,21 @@ export async function guardMutation(fileId, opts) {
                 supportsAllDrives: true,
             });
             const currentModifiedTime = res.data.modifiedTime;
+            if (entry.modifiedTime && currentModifiedTime !== entry.modifiedTime
+                && modifiedTimeWentBackwards(entry.modifiedTime, currentModifiedTime)) {
+                // Drive's modifiedTime is eventually consistent: a request served
+                // by a lagging replica reports a timestamp OLDER than the one
+                // this file's own last read recorded. That is not somebody
+                // editing the document, it is the same document seen from
+                // further back in time — the shape issue #119 reported, where
+                // the "last modified" in the error was earlier than the "last
+                // read" it was compared against. Keep the newer baseline so a
+                // genuine later bump still trips, and let the write proceed: it
+                // is still guarded by the WriteControl revision downstream.
+                logger.warn(`Drive reported an older modifiedTime for ${fileId} ` +
+                    `(${currentModifiedTime} is before the recorded ${entry.modifiedTime}); not treating it as an external edit.`);
+                return;
+            }
             if (entry.modifiedTime && currentModifiedTime !== entry.modifiedTime) {
                 const readAt = entry.readAt.toISOString();
                 // If we have a stored snapshot and the caller can fetch the
@@ -164,6 +194,32 @@ export async function guardMutation(fileId, opts) {
                         }
                     } catch (fetchError) {
                         logger.warn(`contentFetcher failed for ${fileId}: ${fetchError.message}`);
+                    }
+                    if (typeof currentContent === 'string' && currentContent === entry.content) {
+                        // The timestamp moved but the content did not: an
+                        // autosave tick, a formatting-only touch, or Drive
+                        // re-stamping the file after our own preceding write.
+                        // Raising here produced issue #119's phantom conflict —
+                        // an error carrying an EMPTY diff, whose prescribed
+                        // recovery (re-read, inspect, rebase, retry) is a wasted
+                        // round trip on a large document, and whose byte-
+                        // identical retry always succeeded. There is nothing to
+                        // rebase onto when the content is unchanged, and letting
+                        // it through costs no safety: the write still carries
+                        // the refreshed WriteControl revision below, so a real
+                        // concurrent edit is still refused by Google itself.
+                        // Same atomic refresh as the diff path below, and for
+                        // the same reason: the stored revision is definitively
+                        // stale once the timestamp moved, so it is replaced with
+                        // the one this content came from (or cleared when the
+                        // fetcher could not name one, which sends the next write
+                        // out unguarded rather than pinned to a revision that is
+                        // guaranteed to conflict).
+                        entry.modifiedTime = currentModifiedTime;
+                        entry.revisionId = currentRevisionId;
+                        logger.warn(`modifiedTime for ${fileId} changed but the content is byte-identical; ` +
+                            'refreshing the baseline instead of reporting an external modification.');
+                        return;
                     }
                     if (typeof currentContent === 'string') {
                         const patch = createPatch(

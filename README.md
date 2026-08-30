@@ -2,7 +2,7 @@
 
 The **easiest way** to connect your AI agent to Google Workspace.
 
-**156 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, Tasks, and Maps — all in one package. One install, one auth, and you're done.
+**160 tools** for Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, Tasks, and Maps — all in one package. One install, one auth, and you're done.
 
 ```bash
 npx -y google-tools-mcp setup
@@ -25,7 +25,7 @@ npx -y google-tools-mcp setup
 - **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, and Tasks. No juggling multiple tokens or servers.
 - **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
 - **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
-- **156 tools, zero config.** Every tool is available the moment the server starts. Send emails, create Docs and Slides, manage Tasks and calendar events, build forms, search places — it's all there.
+- **160 tools, zero config.** Every tool is available the moment the server starts. Send emails, create Docs and Slides, manage Tasks and calendar events, build forms, search places — it's all there.
 - **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
 - **No telemetry. No tracking. Fully open source.**
 
@@ -358,10 +358,10 @@ Google Drive file management and content reading.
 
 `listDriveFiles`, `searchDocuments`, `getFileInfo`, `getFilePath`, `createFolder`, `listFolderContents`, `getFolderInfo`, `moveFile`, `copyFile`, `renameFile`, `deleteFile`, `createDocument`, `createDocumentFromTemplate`, `listSharedDrives`, `listSharedWithMe`, `downloadFile`, `uploadFile`, `listPermissions`, `addPermission`, `removePermission`, `updatePermission`, `listRevisions`, `getRevision`, `updateRevision`, `readFile`, `searchFileContents`, `readDriveFile`
 
-### `documents` (22 tools)
+### `documents` (26 tools)
 Google Docs read/write/format with markdown support.
 
-`readDocument`, `appendText`, `deleteRange`, `modifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`
+`readDocument`, `appendText`, `deleteRange`, `modifyText`, `batchModifyText`, `findAndReplace`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `listTabs`, `addTab`, `renameTab`, `listHeadings`, `applyParagraphStyle`, `getFormatting`, `addComment`, `deleteComment`, `getComment`, `listComments`, `replyToComment`, `resolveComment`, `updateComment`, `appendMarkdown`, `replaceDocumentWithMarkdown`, `replaceRangeWithMarkdown`
 
 ### `spreadsheets` (30 tools)
 Google Sheets operations.
@@ -417,13 +417,34 @@ Google Maps and Places tools for geocoding, reverse geocoding, nearby and text s
 
 These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separate from the Google OAuth credentials used everywhere else and not covered by the setup wizard or by [Step 1](#step-1-create-google-oauth-credentials) above. To get one: enable the **Geocoding API**, **Places API (New)**, and **Routes API** for your Google Cloud project, then go to **Credentials** → **Create Credentials** → **API key**, and set it as `GOOGLE_MAPS_API_KEY`. Without it, the `maps` tools are still listed, but calling any of them fails with a clear error telling you to set the key.
 
-The categories above contain 152 service-specific tools. Four general utilities — `help`, `logout`, `troubleshoot`, and `feedback` — bring the default server surface to 156 tools. See [Common Workflows](docs/workflows.md) for practical examples.
+The categories above contain 156 service-specific tools. Four general utilities — `help`, `logout`, `troubleshoot`, and `feedback` — bring the default server surface to 160 tools. See [Common Workflows](docs/workflows.md) for practical examples.
+
+## Finding Character Indices in a Doc
+
+Every index-addressed Docs tool (`modifyText`, `batchModifyText`, `replaceRangeWithMarkdown`, `deleteRange`, `insertTable`, `insertTableWithData`, `insertPageBreak`) needs `startIndex`/`endIndex` values. Get them with `readDocument` and `format='index'`:
+
+```json
+{"format":"index","documentId":"…","revisionId":"…","tabId":null,"documentEnd":151,
+ "fromIndex":0,"totalElementCount":4,"elementCount":4,"truncated":false,
+ "elements":[
+   {"start":1,"end":12,"tabId":null,"type":"heading","level":1,"nesting":null,"preview":"To Do List"},
+   {"start":12,"end":25,"tabId":null,"type":"listItem","ordered":true,"nesting":0,"preview":"Follow up now"},
+   {"start":25,"end":80,"tabId":null,"type":"table","rows":2,"columns":2,
+    "cells":[{"start":42,"end":50,"row":0,"col":0,"preview":"Name"}]},
+   {"start":80,"end":81,"tabId":null,"type":"horizontalRule","nesting":null,"preview":""}]}
+```
+
+`type` is one of `heading`, `listItem`, `paragraph`, `table`, `sectionBreak`, `tableOfContents`, `horizontalRule`, `pageBreak`, or `inlineObject` — a paragraph is exactly one of them, never two. An `inlineObject` is further promoted to a more specific type when the underlying element is one of `footnoteReference`, `columnBreak`, `equation`, `richLink`, `person`, or `autoText`. Ranges are the raw Docs indices, 1-based and end-exclusive, so they can be handed straight to a mutating tool. Top-level ranges never overlap; the one nesting is table cells, which carry their own indices inside their table's `cells` array.
+
+The fetch is a narrow field mask, not the whole document, including for tabbed documents (`tabId=…`). That is the difference from `format='json'`, which returns the raw unpruned API response and is only for callers that genuinely need suggestions or style provenance — an oversized `json` read without `maxLength` now fails with a message pointing here instead of emitting a megabyte.
+
+Large documents paginate at element boundaries: set `maxResponseChars` (default 100000, `0` disables), and when the response comes back `truncated`, call again with `fromIndex` set to the returned `nextFromIndex`. The Docs API has no start-index cursor, so each page costs one more (narrow) fetch.
 
 ## Local Working Copies
 
 `readDocument` (markdown format) saves what it reads to a local working-copy file, keyed by document ID and tab, so you can edit that file directly and push it back with `replaceDocumentWithMarkdown` using `filePath` instead of pasting content inline. `replaceDocumentWithMarkdown` also mirrors any inline `markdown=` push into that same file, so it always reflects what's actually on the document.
 
-If the document contains content markdown can't represent (images, footnotes, a generated table of contents, or other Docs elements with no markdown equivalent), `readDocument` appends a warning after the markdown listing exactly what a full `replaceDocumentWithMarkdown` push would permanently remove. Use `modifyText` or `appendMarkdown` instead for those documents.
+If the document contains content markdown can't represent (images, footnotes, a generated table of contents, or other Docs elements with no markdown equivalent), `readDocument` appends a warning after the markdown listing exactly what a full `replaceDocumentWithMarkdown` push would permanently remove. That warning is about a whole-body push: to rewrite one section of such a document, use `replaceRangeWithMarkdown`, which builds the same markdown structure inside a chosen range and checks fidelity only inside it, leaving the images and rules elsewhere alone.
 
 These files live in a per-user directory under the OS temp dir (`google-tools-mcp-<user>`), created with restrictive permissions and checked on every write so a planted symlink is refused rather than followed. Set `GOOGLE_MCP_WORKSPACE_DIR` to use a different directory instead.
 

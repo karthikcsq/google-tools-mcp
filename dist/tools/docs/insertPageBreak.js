@@ -13,7 +13,7 @@ export function register(server) {
                 .number()
                 .int()
                 .min(1)
-                .describe("1-based character index within the document body. Use readDocument with format='json' to inspect indices."),
+                .describe("1-based character index within the document body. Use readDocument with format='index' to inspect indices."),
             tabId: z
                 .string()
                 .optional()
