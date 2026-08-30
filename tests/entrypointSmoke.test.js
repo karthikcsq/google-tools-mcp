@@ -147,7 +147,7 @@ describe('dist/index.js entrypoint', () => {
 
             server.child.stdin.write(`${modernBody(2, 'tools/list')}\n`);
             const list = await nextMessage(2);
-            expect(list.result.tools).toHaveLength(156);
+            expect(list.result.tools).toHaveLength(160);
             // Deterministic registration order, which is what makes the catalog
             // cacheable by a client.
             const names = list.result.tools.map(({ name }) => name);
@@ -194,7 +194,7 @@ describe('dist/index.js entrypoint', () => {
             });
             expect(response.status).toBe(200);
             expect(response.headers.get('mcp-session-id')).toBeNull();
-            expect((await response.json()).result.tools).toHaveLength(156);
+            expect((await response.json()).result.tools).toHaveLength(160);
 
             // The startup banner names the breaking change, and never prints the
             // configured token.

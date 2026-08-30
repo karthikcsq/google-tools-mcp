@@ -69,6 +69,21 @@ If you are adding a tool, you get both by registering through the normal path. D
 - `dist/readTracker.js` gives each request context its own namespace, so one HTTP request's read can never authorize another's write. Guarded Sheets and Drive tools have no handle wiring yet and therefore fail closed over HTTP. The only non-context namespace left is a single module-level map, reached exclusively by callers running outside any transport (direct unit tests, internal startup code) — the session era's keyed map of namespaces and its `clearSession`/disconnect cleanup are gone, because there is nothing multiplexed through the tracker any more.
 - Each handle owns a private editable working copy under `<workspace>/v2-handles/handles/<workspaceId>/`, initialized from a content-addressed immutable baseline under `<workspace>/v2-handles/baselines/` that identical reads share. Cleanup uses the exact paths in each ownership manifest and never deletes a working copy whose contents diverged from its baseline.
 
+### Range precision (issue #108)
+
+The guard above is document-scoped: any change anywhere blocks every pending edit. `dist/docsChangePrecision.js` adds the range-scoped layer, reached through `lease.guardTargets(...)` on the lease `beginDocsMutation` returns. Four tools use it — `modifyText`, `batchModifyText`, `deleteRange`, `replaceRangeWithMarkdown`. `findAndReplace`, the whole-body markdown tools, Sheets, and Drive stay document-scoped on purpose, because they have no single range to be precise about.
+
+- Every read stores the **projection** it saw: the flat text of each `textRun` with the real document index of every character, plus a census of tables, table geometry, inline objects, section breaks and tables of contents. It lives in memory alongside the handle's workspace and is reaped with it.
+- At write time, revision equality is the fast path — a Docs revision advances on every change, so an unchanged document needs no projection and no re-resolution at all. `deleteRange` (the one writer with no snapshot of its own) probes with a `fields: 'revisionId'` request rather than fetching the body.
+- When the revision **did** move, the change is classified against the two projections: `text` (clean edits, each mapped to a document index range), `structural` (tables/images/section breaks appeared, disappeared, resized, or a hunk landed inside one), or `unknown`. `unknown` includes the case where the revision moved but the text and structure look identical — a formatting-only edit is real and cannot be located, so it rejects.
+- A **semantic** target (`textToFind`, `afterHeading`/`headingId`) is re-resolved against the exact snapshot that was classified, and proceeds when no change touches its new range. An **explicit** index target gets no exemption: only a change landing strictly after the end of the range leaves its indices provably valid.
+- A permitted-despite-change write is **re-armed atomically**: `writeControlFor()` starts returning the classified snapshot's revision in the same step that hands back the re-resolved indices, so a batch can never go out pinned to the stale handle revision, and `complete()` still mints the successor handle from the revision the write itself returns.
+- Every rejection names what changed and where (with a bounded unified diff when both projections exist), where confidence ended, and which read workflow recovers (`format='index'`, `diffFromLastRead`).
+
+## Explicit text color on inserted content (issue #14)
+
+Text inserted by this server carries the document's `NORMAL_TEXT` foreground color explicitly, when that named style defines an RGB color; a theme-color-based or undefined `NORMAL_TEXT` default inserts inherit-only text (no error). The lookup lives in `getDefaultTextColor` (`dist/googleDocsApiHelpers.js`), shared by `insertMarkdown`, `modifyText`, `batchModifyText`, `appendText`, `createDocument`'s raw path, and `insertTableWithData`; `findAndReplace` and `createDocumentFromTemplate`'s `replaceAllText` are deliberately excluded because that Docs API request inherits the style of the text it replaces rather than producing style-less text.
+
 ## Adding a tool
 
 1. Create the module under the right `dist/tools/<category>/` directory, exporting a `register(server)` (or a named `registerXTools(server)` matching the directory's convention).

@@ -55,9 +55,7 @@ describe('replaceDocumentWithMarkdown — guard survives non-conflict cleanup fa
             const requests = requestBody.requests;
             batchCalls.push({ requests, writeControl: requestBody.writeControl });
             const isDelete = requests.some((r) => 'deleteContentRange' in r);
-            const isCleanup = requests.some(
-                (r) => 'deleteParagraphBullets' in r || 'updateTextStyle' in r
-            );
+            const isCleanup = requests.some((r) => 'deleteParagraphBullets' in r);
             if (isCleanup && !isDelete) {
                 // Cleanup batch fails for a NON-conflict reason (e.g. transient 500).
                 throw Object.assign(new Error('transient backend error'), { code: 500 });
@@ -118,9 +116,7 @@ describe('replaceDocumentWithMarkdown — guard survives non-conflict cleanup fa
         fakeDocs.documents.batchUpdate = jest.fn(async ({ requestBody }) => {
             const requests = requestBody.requests;
             const isDelete = requests.some((r) => 'deleteContentRange' in r);
-            const isCleanup = requests.some(
-                (r) => 'deleteParagraphBullets' in r || 'updateTextStyle' in r
-            );
+            const isCleanup = requests.some((r) => 'deleteParagraphBullets' in r);
             if (isDelete) {
                 return { data: { writeControl: { requiredRevisionId: 'rev-after-delete' } } };
             }

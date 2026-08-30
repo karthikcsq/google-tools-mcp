@@ -67,9 +67,74 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   log field is redacted, and an unclassified internal failure returns a generic
   message instead of a raw stack.
 - `docs/http-mode.md`, the reference for HTTP mode and this breaking change.
+- `readDocument` gains `format='index'` (#105): a compact structural map of the
+  document — headings with levels, list items with nesting and orderedness,
+  tables with per-cell indices, section breaks, horizontal rules, inline object
+  anchors — carrying the raw `startIndex`/`endIndex` every index-addressed tool
+  needs. It fetches a narrow field mask rather than `fields:'*'`, including for
+  tabbed documents, and it mints a `readHandle` like any other read. Paginates
+  at element boundaries via `maxResponseChars` / `fromIndex` / `nextFromIndex`.
+  Every tool description and error string that used to recommend `format='json'`
+  for index discovery now names `format='index'`.
+- `readDocument` gains `stripInheritedStyles` (opt-in, `format='json'` only),
+  which drops inherited `textStyle`/`documentStyle`/`namedStyles` and every
+  `suggested*` map while preserving every index.
+- `replaceRangeWithMarkdown`: replaces an index range in a Google Doc with
+  parsed Markdown in one call, instead of a `deleteRange` + `appendMarkdown`
+  pair.
+- `updateComment`: edits the body of an existing Google Docs comment.
+- `batchModifyText`: applies multiple `modifyText`-style edits to a document
+  in a single call, so multi-edit workflows no longer need one round trip per
+  edit.
+- `listHeadings`: returns the document's heading outline (text, level, and
+  `startIndex`/`endIndex`) without paginating through the full `format='index'`
+  structural map.
+- Text inserted by this server now carries the document's `NORMAL_TEXT`
+  foreground color explicitly across every insertion tool — `insertMarkdown`,
+  `modifyText`, `batchModifyText`, `appendText`, `createDocument`'s raw path,
+  and `insertTableWithData` — instead of leaving it to inherit (#14).
+- `readDocument` gains `plainMarkdown`: return a plain-text variant of the
+  response body while the rich markdown still mints the read handle, seeds the
+  local working-copy file, and feeds diffing/tracking, so a plain read can
+  never cause a later push to drop existing formatting (#96).
+- `applyParagraphStyle` gains `bulletNestingLevel` (0-8): set a paragraph's
+  list depth explicitly by resolving whole-paragraph ranges and emitting
+  `deleteParagraphBullets` / leading-tab adjustment / `createParagraphBullets`
+  in one batchUpdate, with `bulletPreset` to set the glyph style explicitly
+  (#107).
+- `batchModifyText` and `modifyText` refuse an explicit-index write when a
+  concurrent change since the read cannot be proven not to touch the target
+  range, and re-resolve a `textToFind` target against the current document
+  when it can; every rejection names what changed and where (#108).
 
 ### Fixed
 
+- `resolveComment` now posts a resolve-action reply and verifies it
+  persisted, **throwing** if the comment still reports unresolved, instead of
+  silently writing an ignored field and returning a soft note asking the user
+  to resolve it manually; `listComments` paginates (`maxResults`/`pageToken`)
+  (#86).
+- `insertImage` acquires its mutation lease before any Drive upload, on both
+  the standard and Apps Script local-file paths, so a rejected mutation
+  (unauthorized/expired/never-read document) can no longer leave an uploaded
+  file behind in the user's Drive; `createDocument` and `createFromTemplate`
+  now seed post-create read state on success, so an immediate follow-up
+  mutation no longer fails as "unread" (#87).
+- `docsJsonToMarkdown` ordered-list export uses real ordinals (previously
+  every item rendered as `1.`), nested-list indentation matches each
+  ancestor's actual rendered marker width instead of a flat two spaces, and a
+  blank line now separates a list from the following block so re-importing
+  the exported markdown preserves nesting depth (#106).
+
+- A failed `textToFind` now says *where* matching diverged — the longest
+  matching prefix, the divergence offset, and the surrounding document text —
+  instead of a bare "could not find it". Rendered by `modifyText`,
+  `getFormatting`, and `applyParagraphStyle`.
+- `readDocument format='json'` no longer emits an unbounded raw document when no
+  `maxLength` was given; over the response budget it fails with a directive
+  naming `format='index'`. `maxLength` is validated as a positive integer
+  instead of treating `0` as "unlimited", and its description now says it
+  applies to text, markdown, and json.
 - Read-tracker state can no longer be shared across HTTP requests. One request's
   read of a document could previously satisfy another request's mutation guard.
 - `subscriptions/listen` returns its empty result and closes gracefully instead

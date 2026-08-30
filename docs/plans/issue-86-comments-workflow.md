@@ -63,3 +63,67 @@ New `tests/comments.test.js`, mocking `dist/clients.js` (the established pattern
 ## Out of scope
 
 Full-body replace orphaning comment anchors is #88's problem (tracked there, not here).
+
+---
+
+## Implementation status (2026-08-19)
+
+All plan items implemented as specified. Files touched (all under
+`dist/tools/docs/comments/**` plus this plan doc, per the worker's file scope):
+
+- `dist/tools/docs/comments/resolveComment.js` — rewritten on the `replies.create({action:'resolve'})`
+  path, verified with `comments.get({fields:'resolved'})`, throws `publicError` (hard failure) if
+  verification still shows unresolved. Added optional `note` param (becomes the resolve reply's
+  content). Removed the "may not persist" caveat from the description. Dropped the dead
+  `comments.get({fields:'content'})` pre-read the old `comments.update` path needed. Switched off
+  `getAuthClient()` + private `google.drive(...)` onto `getDriveClient()`.
+  **Deferred: `reopenComment`.** Plan explicitly gates it on manually verifying `action:'reopen'`
+  against a live doc; no live Google account is available to this worker, so it is left out
+  rather than shipped as an unverified guess, per the plan's own instruction.
+- `dist/tools/docs/comments/listComments.js` — full rewrite. Field mask now includes
+  `replies(id,content,action,author(displayName,me),createdTime)`, `modifiedTime`, and
+  `author(displayName,me)`. New params: `maxResults` (1-100, default 50, replaces the hardcoded
+  `pageSize: 100`), `pageToken`, `updatedAfter` (ISO datetime -> `startModifiedTime`),
+  `includeDeleted`, `includeQuotedText`, `unansweredOnly`. Output adds `count` and
+  `nextPageToken`; kept the `{ comments }` shape. Content/quotedText/reply-content truncated at
+  2,000 chars with a `…[truncated]` marker. Deleted the dead `docs.documents.get()` call and the
+  unused `getAuthClient()`/private-client construction — now uses `getDriveClient()` only.
+  `unansweredOnly` heuristic implemented exactly as specified: unresolved AND (no replies OR
+  last reply's `author.me !== true`); documented in the tool description and as a code comment.
+- `dist/tools/docs/comments/updateComment.js` — **new tool**. `updateComment(documentId,
+  commentId, content)` -> `drive.comments.update({ requestBody: { content } }, fields:
+  'id,content,modifiedTime')`. Registered in `comments/index.js`. Description states `resolved`
+  cannot be changed here.
+- `dist/tools/docs/comments/index.js` — registers `updateComment`.
+- `dist/tools/docs/comments/addComment.js`, `getComment.js`, `replyToComment.js`,
+  `deleteComment.js` — switched from private `google.drive({version:'v3', auth: authClient})`
+  construction to the shared `getDriveClient()` (plan item 4, shared cleanup). `addComment.js`
+  gained a code comment at its quoted-text extraction loop noting it only walks top-level
+  paragraph runs (not tables/tabs) and points at #88, per the plan.
+
+New tests: `tests/comments.test.js` (24 tests, all passing), mocking `dist/clients.js`
+(`getDriveClient`, `getDocsClient`; `getAuthClient` deliberately mocked to throw, which doubles
+as proof no comment tool still constructs a private client). Covers: resolve-then-verify success/
+failure (asserts `replies.create` called, `comments.update` never called for resolve), reply
+metadata accuracy, field-mask contents, `updatedAfter` -> `startModifiedTime` forwarding,
+`includeDeleted`/`maxResults` request shape, real two-page pagination round trip,
+`updateComment`'s exact request body and `modifiedTime` surfacing, `unansweredOnly` filter
+semantics (all four cases: no-reply / other-last-reply / self-last-reply / resolved),
+2,000-char truncation on comment/reply/quoted text, `includeQuotedText:false` omission, the
+7-tool whole-directory registration check, and error-tier checks (structured Drive API detail
+surfaced, unstructured error message never leaked raw).
+
+**Tool count:** registry grew 156 -> 157 (one new tool, `updateComment`; no alias added — new
+camelCase tools are not in the fixed 72-alias set). Per the TOOL-COUNT RULE for this session,
+`tests/toolRegistration.test.js`, `tests/documentationConsistency.test.js`, and the README tool
+counts were deliberately **not** touched. Full-suite run at completion: 6 suites fail exactly on
+this count drift (`toolRegistration.test.js`, `documentationConsistency.test.js`,
+`mcpSdkV2Compatibility.test.js`, `mcpMigrationInventory.test.js`, `entrypointSmoke.test.js`,
+`mcpServerFacade.test.js` — all asserting 156/228 or an inventory snapshot line-numbered against
+the old file lengths), 46 suites pass, 784 tests pass (2 skipped), 10 fail (all count/inventory
+assertions inside those 6 suites). No failure outside the tool-count/inventory blast radius.
+A later reconciliation wave must: bump 156->157 and 228->229 in `toolRegistration.test.js`,
+update `documentationConsistency.test.js`'s expectations and the README docs-category tool
+list/count (`README.md` docs section, currently "22 tools"), and regenerate
+`tests/fixtures/mcp-migration-inventory.json` via
+`node scripts/inventory-mcp-migration.mjs --write-snapshot tests/fixtures/mcp-migration-inventory.json`.

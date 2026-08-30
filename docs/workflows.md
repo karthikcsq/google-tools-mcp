@@ -35,6 +35,37 @@ For a small localized change, use `modifyText`. For an append-only change, use `
 
 The server tracks reads before writes and uses the document revision to reduce the risk of overwriting a collaborator's newer edit.
 
+## Rewrite one section of a Google Doc
+
+`replaceRangeWithMarkdown` builds real structure (headings, nested lists, tables) inside a
+range you choose, so a section rewrite no longer forces a choice between
+`replaceDocumentWithMarkdown` (whole body) and `modifyText` (text only, flattens list nesting).
+
+1. Call `readDocument` with `format: "index"` to see elements and their indices, or skip
+   straight to addressing the section by its heading.
+2. Call `replaceRangeWithMarkdown` with `dryRun: true` to confirm the resolved range and see
+   whether anything unrepresentable sits inside it.
+3. Repeat without `dryRun`.
+
+```json
+{
+  "documentId": "your-document-id",
+  "target": { "afterHeading": "Roadmap" },
+  "markdown": "1. Ship it\n   1. Write the tests\n   2. Review\n2. Rest\n"
+}
+```
+
+The section runs from just below the matched heading to the next heading of the same or
+shallower level, so sub-headings stay part of it. `preserveHeading: false` replaces the
+heading too, `target: {startIndex, endIndex}` addresses any range explicitly, and
+`startIndex == endIndex` inserts markdown at an index without deleting anything. Content
+outside the range is untouched, and fidelity is only checked inside it — a document full of
+images elsewhere no longer blocks a clean section rewrite.
+
+The new content is inserted before the old content is deleted, both under the same revision
+guard. If the delete fails, the document holds both copies and the error names the exact
+range still to remove, so a partial failure never leaves the section missing.
+
 ## Write a spreadsheet range
 
 Read the relevant range before overwriting it. `writeSpreadsheet` overwrites cells; use `appendRows` when adding rows is the intended operation.
