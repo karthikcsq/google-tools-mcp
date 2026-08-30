@@ -13,6 +13,10 @@ jest.unstable_mockModule('../dist/clients.js', () => ({
 jest.unstable_mockModule('../dist/markdown-transformer/index.js', () => ({
     insertMarkdown,
     formatInsertResult,
+    // createDocument also converts the freshly created document to markdown so it
+    // can seed read state (#87). Mocking the module means every export the module
+    // under test imports has to be present here, not just the ones this file drives.
+    docsJsonToMarkdown: () => '# seeded',
 }));
 
 const { register } = await import('../dist/tools/drive/createDocument.js');
@@ -25,10 +29,27 @@ function getTool() {
 
 const log = { info() {}, warn() {}, error() {}, debug() {} };
 const createdDocument = { id: 'doc-123', name: 'Roadmap', webViewLink: 'https://docs.google.com/document/d/doc-123/edit' };
+const createdDocumentBody = {
+    revisionId: 'rev-123',
+    body: {
+        content: [{
+            startIndex: 1,
+            endIndex: 2,
+            paragraph: {
+                elements: [{ startIndex: 1, endIndex: 2, textRun: { content: '\n' } }],
+            },
+        }],
+    },
+};
 
 function setSuccessfulClients() {
     fakeDrive = { files: { create: jest.fn(async () => ({ data: createdDocument })) } };
-    fakeDocs = { documents: { batchUpdate: jest.fn(async () => ({ data: {} })) } };
+    fakeDocs = {
+        documents: {
+            get: jest.fn(async () => ({ data: createdDocumentBody })),
+            batchUpdate: jest.fn(async () => ({ data: {} })),
+        },
+    };
     insertMarkdown.mockReset().mockResolvedValue({ warnings: [] });
     formatInsertResult.mockClear();
 }
@@ -46,6 +67,14 @@ describe('createDocument', () => {
         expect(result).toEqual({ id: 'doc-123', name: 'Roadmap', url: createdDocument.webViewLink });
         expect(fakeDocs.documents.batchUpdate).not.toHaveBeenCalled();
         expect(insertMarkdown).not.toHaveBeenCalled();
+    });
+
+    it('seeds read state after successful creation', async () => {
+        setSuccessfulClients();
+        const result = JSON.parse(await getTool().execute({ title: 'Roadmap' }, { log }));
+
+        expect(fakeDocs.documents.get).toHaveBeenCalledWith({ documentId: 'doc-123', fields: '*' });
+        expect(result).toEqual({ id: 'doc-123', name: 'Roadmap', url: createdDocument.webViewLink });
     });
 
     it('places the document in its parent folder and inserts raw initial content', async () => {
@@ -75,7 +104,7 @@ describe('createDocument', () => {
         insertMarkdown.mockRejectedValue(new Error('internal transport detail'));
         const result = JSON.parse(await getTool().execute({ title: 'Roadmap', initialContent: '# Heading' }, { log }));
 
-        expect(result.warnings).toEqual(['Document created but initial content failed.']);
+        expect(result.warnings).toEqual(['Initial content was not added to document doc-123.']);
         expect(result.warningNote).toBe('The document was created, but its initial content could not be added.');
         expect(JSON.stringify(result)).not.toContain('internal transport detail');
     });

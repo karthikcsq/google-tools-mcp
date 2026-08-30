@@ -1,8 +1,19 @@
-import { UserError, wrapOperationError } from '../../errors.js';
+import { UserError, redactDiagnostic, registerSecret, wrapOperationError } from '../../errors.js';
+
+let registeredMapsKey = null;
+let unregisterMapsKey = null;
+
+function registerMapsApiKey(apiKey) {
+    if (apiKey === registeredMapsKey) return;
+    unregisterMapsKey?.();
+    registeredMapsKey = apiKey;
+    unregisterMapsKey = registerSecret(apiKey);
+}
 
 export function getMapsApiKey() {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     if (!apiKey) throw new UserError('Set GOOGLE_MAPS_API_KEY to use Maps tools. This must be a Google Maps Platform API key, separate from Google OAuth.');
+    registerMapsApiKey(apiKey);
     return apiKey;
 }
 
@@ -18,10 +29,10 @@ const SECRET_QUERY_PARAM_PATTERN = /([?&](?:key|api[_-]?key|access_token|token)=
 // the failed URL) can leak the credential to the MCP caller or its logs.
 export function redactSecrets(text) {
     if (typeof text !== 'string') return text;
-    let redacted = text;
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-    if (apiKey) redacted = redacted.split(apiKey).join('[REDACTED]');
-    return redacted.replace(SECRET_QUERY_PARAM_PATTERN, '$1[REDACTED]');
+    if (apiKey) registerMapsApiKey(apiKey);
+    const redacted = redactDiagnostic(text);
+    return String(redacted).replace(SECRET_QUERY_PARAM_PATTERN, '$1[REDACTED]');
 }
 
 export async function mapsFetch(url, options = {}) {

@@ -6,7 +6,10 @@ import { register as addTab } from './addTab.js';
 import { register as appendToGoogleDoc } from './appendToGoogleDoc.js';
 import { register as deleteRange } from './deleteRange.js';
 import { register as modifyText } from './modifyText.js';
+import { register as batchModifyText } from './batchModifyText.js';
 import { register as findAndReplace } from './findAndReplace.js';
+import { register as replaceRangeWithMarkdown } from './replaceRangeWithMarkdown.js';
+import { register as listHeadings } from './listHeadings.js';
 // Structure
 import { register as insertTable } from './insertTable.js';
 import { register as insertTableWithData } from './insertTableWithData.js';
@@ -24,7 +27,10 @@ export function registerDocsTools(server) {
     appendToGoogleDoc(server);
     deleteRange(server);
     modifyText(server);
+    batchModifyText(server);
     findAndReplace(server);
+    replaceRangeWithMarkdown(server);
+    listHeadings(server);
     // Structure
     insertTable(server);
     insertTableWithData(server);

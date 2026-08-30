@@ -11,9 +11,8 @@ describe('MCP migration inventory baseline', () => {
             ...actualInventory,
             files: {
                 ...actualInventory.files,
-                // The observer becomes tracked only when this test is committed.
-                // Exclude that one self-reference, but retain the test-file
-                // inventory guard for every other tracked test source file.
+                // Exclude the observer's self-reference, but retain the test-file
+                // inventory guard for every other tracked or pending test source.
                 tests: actualInventory.files.tests.filter(({ file }) => file !== inventoryTestPath),
             },
         };

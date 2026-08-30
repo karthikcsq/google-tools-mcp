@@ -17,17 +17,32 @@ let readFileImpl;
 let writeFileCalls;
 let unlinkCalls;
 let mkdirCalls;
+let chmodCalls;
 
 jest.unstable_mockModule('fs/promises', () => ({
     readFile: (...args) => readFileImpl(...args),
     writeFile: (...args) => { writeFileCalls.push(args); return Promise.resolve(); },
     mkdir: (...args) => { mkdirCalls.push(args); return Promise.resolve(); },
+    chmod: (...args) => { chmodCalls.push(args); return Promise.resolve(); },
+    open: (filePath) => Promise.resolve({
+        writeFile: (...args) => { writeFileCalls.push([filePath, ...args]); return Promise.resolve(); },
+        sync: () => Promise.resolve(),
+        close: () => Promise.resolve(),
+    }),
+    rename: () => Promise.resolve(),
     unlink: (...args) => { unlinkCalls.push(args); return Promise.resolve(); },
 }));
 
-let execCalls;
+let execFileCalls;
 jest.unstable_mockModule('child_process', () => ({
-    exec: (cmd, cb) => { execCalls.push(cmd); if (cb) cb(null); },
+    // The browser opener now goes through shellSafe's runArgv, which uses
+    // execFile rather than exec (issue #125). Without this export the whole
+    // suite fails to link, and without recording the argv a real browser would
+    // open during the test. Signature is execFile(command, args, options, cb).
+    execFile: (command, args, options, cb) => {
+        execFileCalls.push([command, ...(args ?? [])]);
+        if (typeof cb === 'function') cb(null, '', '');
+    },
 }));
 
 let oauth2Instances;
@@ -81,7 +96,8 @@ beforeEach(() => {
     writeFileCalls = [];
     unlinkCalls = [];
     mkdirCalls = [];
-    execCalls = [];
+    chmodCalls = [];
+    execFileCalls = [];
     getTokenImpl = async () => { throw new Error('getTokenImpl not configured for this test'); };
     refreshAccessTokenImpl = async () => { throw new Error('refreshAccessTokenImpl not configured for this test'); };
     readFileImpl = async () => {
@@ -137,6 +153,8 @@ describe('auth.js interactive OAuth consent flow (issue #115)', () => {
         await clientPromise;
 
         expect(instance.lastAuthUrlOpts).toMatchObject({ access_type: 'offline', prompt: 'consent' });
+        expect(execFileCalls).toHaveLength(1);
+        expect(execFileCalls[0].join(' ')).toContain('accounts.google.com');
     });
 
     it('requests re-consent on the invalid_grant recovery path', async () => {
@@ -200,6 +218,10 @@ describe('auth.js interactive OAuth consent flow (issue #115)', () => {
         expect(writeFileCalls).toHaveLength(1);
         const savedPayload = JSON.parse(writeFileCalls[0][1]);
         expect(savedPayload.refresh_token).toBe('RT4');
+        expect(chmodCalls).toEqual(expect.arrayContaining([
+            [expect.stringMatching(/[\\/]google-tools-mcp$/), 0o700],
+            [expect.stringMatching(/[\\/]google-tools-mcp[\\/]token\.json$/), 0o600],
+        ]));
         expect(infoSpy.mock.calls.some(([message]) => message === 'Authentication successful!')).toBe(true);
 
         infoSpy.mockRestore();

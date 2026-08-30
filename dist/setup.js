@@ -8,6 +8,12 @@ import * as os from 'os';
 import { exec, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
+import { getConfigDir } from './config.js';
+import { buildClientEntry, createClientAdapters, reconcileClientEntry } from './clientAdapters.js';
+import { checkCredentials, inspectToken } from './setupInspect.js';
+import { HTTP_OPERATIONS_DOC_URL, resolveHttpServiceConfig, startHttpService } from './httpLifecycle.js';
+import { ensureHttpToken } from './httpState.js';
+import { openBrowser } from './shellSafe.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -45,31 +51,11 @@ const AUDIENCE_URL =
 // wizard actually tells the user about it instead of just asserting a
 // hardcoded string.
 export const UPDATE_COMMAND = 'npm install -g google-tools-mcp@latest';
+let backupSequence = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function openBrowser(url) {
-    const platform = process.platform;
-    let cmd;
-    if (platform === 'win32') {
-        cmd = `start "" "${url}"`;
-    } else if (platform === 'darwin') {
-        cmd = `open "${url}"`;
-    } else {
-        cmd = `xdg-open "${url}"`;
-    }
-    exec(cmd, () => {});
-}
-
-function getConfigDir() {
-    const xdg = process.env.XDG_CONFIG_HOME;
-    const base = xdg || path.join(os.homedir(), '.config');
-    const baseDir = path.join(base, 'google-tools-mcp');
-    const profile = process.env.GOOGLE_MCP_PROFILE;
-    return profile ? path.join(baseDir, profile) : baseDir;
-}
-
 function hasCli(name) {
     try {
         execSync(`${name} --version`, { stdio: 'ignore' });
@@ -243,7 +229,7 @@ async function enableApisProgrammatically(authClient, projectNumber) {
 // ---------------------------------------------------------------------------
 // Setup flow
 // ---------------------------------------------------------------------------
-export async function runSetup() {
+export async function runFirstInstallSetup() {
     console.clear();
 
     p.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
@@ -401,12 +387,13 @@ export async function runSetup() {
 
     // ── Save credentials ─────────────────────────────────────────────────
     const configDir = getConfigDir();
-    await fs.mkdir(configDir, { recursive: true });
+    await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
     const envPath = path.join(configDir, '.env');
-    const envContent = `GOOGLE_CLIENT_ID=${clientId}\nGOOGLE_CLIENT_SECRET=${clientSecret}\n`;
-    await fs.writeFile(envPath, envContent);
+    const envBackup = await backupEnvFile(envPath);
+    await mergeCredentialEnv(envPath, { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret });
     const displayPath = envPath.replace(os.homedir(), '~');
     p.log.success(`Credentials saved to ${chalk.dim(displayPath)}`);
+    if (envBackup) p.log.message(chalk.dim(`Previous credentials backed up to ${envBackup.replace(os.homedir(), '~')}`));
 
     // ── Step 4: Authenticate ─────────────────────────────────────────────
     p.log.step(chalk.cyan.bold('Step 4') + chalk.dim(' · ') + 'Authenticate with Google');
@@ -556,72 +543,26 @@ export async function runSetup() {
         ) + chalk.cyan(UPDATE_COMMAND) + chalk.dim(' to update, or re-run this wizard.'));
     }
 
-    const hasCodex = hasCli('codex');
-    const hasClaude = hasCli('claude');
-    if (hasCodex) {
-        const install = await p.confirm({
-            message: 'Add to Codex as an MCP server?',
-            active: 'yes',
-            inactive: 'no',
-            initialValue: true,
-        });
-        if (p.isCancel(install)) cancelled();
+    const transport = await configureTransport(launch);
+    const registered = await registerClients(launch, transport);
 
-        const codexAddCmd = `codex mcp add google -- ${launch.shellDisplay}`;
-        if (install) {
-            const s = p.spinner();
-            s.start('Adding to Codex...');
-            try {
-                await runCommand(codexAddCmd);
-                s.stop('Added to Codex!');
-            } catch (err) {
-                s.stop('Failed to add automatically');
-                p.log.warn(`Error: ${err.message}`);
-                p.log.message(`Run manually:\n${chalk.cyan(codexAddCmd)}`);
-            }
-        } else {
-            p.log.message(`To add later:\n${chalk.cyan(codexAddCmd)}`);
-        }
-    }
-
-    if (hasClaude) {
-        const install = await p.confirm({
-            message: 'Add to Claude Code as a user-scope MCP server?',
-            active: 'yes',
-            inactive: 'no',
-            initialValue: true,
-        });
-        if (p.isCancel(install)) cancelled();
-
-        const claudeAddCmd = `claude mcp add -s user google -- ${launch.shellDisplay}`;
-        if (install) {
-            const s = p.spinner();
-            s.start('Adding to Claude Code...');
-            try {
-                await runCommand(claudeAddCmd);
-                s.stop('Added to Claude Code!');
-            } catch (err) {
-                s.stop('Failed to add automatically');
-                p.log.warn(`Error: ${err.message}`);
-                p.log.message(`Run manually:\n${chalk.cyan(claudeAddCmd)}`);
-            }
-        } else {
-            p.log.message(`To add later:\n${chalk.cyan(claudeAddCmd)}`);
-        }
-    }
-
-    if (!hasCodex && !hasClaude) {
-        const jsonSnippet = JSON.stringify({
-            mcpServers: { google: { command: launch.command, args: launch.args } },
-        });
+    if (!registered.detected) {
+        const jsonSnippet = transport.transport === 'stdio'
+            ? JSON.stringify({ mcpServers: { google: { command: launch.command, args: launch.args } } })
+            : JSON.stringify({ mcpServers: { google: { type: 'http', url: transport.url,
+                headers: { Authorization: 'Bearer <read from the private http-token file>' } } } });
         p.log.message([
             'Add to your MCP client:',
             '',
             chalk.dim('Codex:'),
-            chalk.cyan(`  codex mcp add google -- ${launch.shellDisplay}`),
+            chalk.cyan(transport.transport === 'stdio'
+                ? `  codex mcp add google --env CODEX_MCP_PROTOCOL_VERSION=2026-07-28 -- ${launch.shellDisplay}`
+                : `  codex mcp add google --url ${transport.url} --bearer-token-env-var GOOGLE_MCP_HTTP_TOKEN`),
             '',
             chalk.dim('Claude Code:'),
-            chalk.cyan(`  claude mcp add -s user google -- ${launch.shellDisplay}`),
+            chalk.cyan(transport.transport === 'stdio'
+                ? `  claude mcp add -s user google -- ${launch.shellDisplay}`
+                : `  Re-run setup with Claude Code installed; the bearer token is never printed.`),
             '',
             chalk.dim('Other clients') + chalk.dim(' (.mcp.json):'),
             chalk.cyan(`  ${jsonSnippet}`),
@@ -636,9 +577,252 @@ export async function runSetup() {
         chalk.dim('Upgrading and using GOOGLE_MCP_TRANSPORT=http?'),
         chalk.dim('  HTTP is now stateless (MCP 2026-07-28). Removed: /sse, /messages,'),
         chalk.dim('  /ping, DELETE session termination, and the Mcp-Session-Id header.'),
-        chalk.dim('  Point clients at the plain POST endpoint; see docs/http-mode.md.'),
-        chalk.dim('  stdio setups (this one) need no changes.'),
+        chalk.dim(`  Point clients at the plain POST endpoint; see ${HTTP_OPERATIONS_DOC_URL}.`),
+        chalk.dim(`  Configured transport: ${transport.transport}.`),
     ].join('\n'));
 
     p.outro(chalk.green.bold('Setup complete!') + chalk.dim(' You\'re ready to use google-tools-mcp.'));
+}
+
+// Captured client config is secret-bearing by default (finding 6): a key-name
+// heuristic like /token|secret|password|authorization/ misses common
+// credential values such as GOOGLE_MAPS_API_KEY, plain API_KEY, or
+// AWS_ACCESS_KEY_ID. Rather than trying to enumerate every provider's naming
+// convention, every value nested under `env` (the launch environment we
+// captured from an existing stdio entry) or `headers` (HTTP auth headers) is
+// blanket-redacted regardless of its key name. Top-level fields such as
+// `command`, `args`, `url`, `type`, and `bearer_token_env_var` are not
+// credential values themselves (the last one is only the *name* of an
+// environment variable, never its value) and are kept for readability.
+function redactEntry(value) {
+    if (Array.isArray(value)) return value.map(redactEntry);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+        if ((key === 'env' || key === 'headers') && item && typeof item === 'object' && !Array.isArray(item)) {
+            return [key, Object.fromEntries(Object.keys(item).map((inner) => [inner, '[REDACTED]']))];
+        }
+        return [key, /token|secret|password|authorization/i.test(key) ? '[REDACTED]' : redactEntry(item)];
+    }));
+}
+
+export async function backupClientEntry(adapter, entry, { configDir = getConfigDir(), appendFile = fs.appendFile, mkdir = fs.mkdir, chmod = fs.chmod, open = fs.open } = {}) {
+    // A pre-fix config directory can already exist at a looser mode (e.g.
+    // 0755): `mkdir`'s `mode` only applies when it actually creates the
+    // directory, so a returning upgrade needs an explicit chmod too.
+    await mkdir(configDir, { recursive: true, mode: 0o700 });
+    await chmod(configDir, 0o700).catch((error) => { if (process.platform !== 'win32') throw error; });
+    const logPath = path.join(configDir, 'client-config-backups.log');
+    // Same reasoning for the file: `open(..., 'a', mode)` only sets the mode
+    // on creation, so an existing pre-fix log (created with the platform's
+    // default umask) needs its own chmod before anything else is appended to it.
+    const handle = await open(logPath, 'a', 0o600);
+    await handle.close();
+    await chmod(logPath, 0o600).catch((error) => { if (process.platform !== 'win32') throw error; });
+    await appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), client: adapter.name, entry: redactEntry(entry) })}\n`);
+}
+
+export async function backupEnvFile(envPath, { readFile = fs.readFile, open = fs.open, readdir = fs.readdir, unlink = fs.unlink, lstat = fs.lstat } = {}) {
+    try {
+        const stat = await lstat(envPath);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Refusing to back up unsafe credential .env path.');
+    } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+    const backup = `${envPath}.bak.${Date.now()}-${backupSequence++}`;
+    const content = await readFile(envPath);
+    let handle;
+    let complete = false;
+    try {
+        handle = await open(backup, 'wx', 0o600);
+        await handle.writeFile(content);
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        complete = true;
+    } finally {
+        await handle?.close().catch(() => {});
+        if (!complete) await unlink(backup).catch(() => {});
+    }
+    const backups = (await readdir(path.dirname(envPath))).filter(name => name.startsWith(`${path.basename(envPath)}.bak.`)).sort().reverse();
+    await Promise.all(backups.slice(2).map(name => unlink(path.join(path.dirname(envPath), name))));
+    return backup;
+}
+
+export async function mergeCredentialEnv(envPath, values, { readFile = fs.readFile, lstat = fs.lstat, mkdir = fs.mkdir, writeFile = fs.writeFile, rename = fs.rename, unlink = fs.unlink } = {}) {
+    let existing = '';
+    try {
+        const stat = await lstat(envPath);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Refusing to modify unsafe credential .env path.');
+        existing = await readFile(envPath, 'utf8');
+    } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+    }
+    const lines = existing ? existing.split(/(?<=\n)/) : [];
+    const replaced = new Set();
+    const output = lines.map(line => {
+        const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+        if (!match || !(match[1] in values)) return line;
+        replaced.add(match[1]);
+        return `${match[1]}=${values[match[1]]}\n`;
+    });
+    const missing = Object.entries(values).filter(([key]) => !replaced.has(key));
+    if (missing.length && output.length && !output.at(-1).endsWith('\n')) output.push('\n');
+    for (const [key, value] of missing) output.push(`${key}=${value}\n`);
+    const dir = path.dirname(envPath);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    await fs.chmod(dir, 0o700);
+    const temporary = `${envPath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+        await writeFile(temporary, output.join(''), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        await fs.chmod(temporary, 0o600);
+        await rename(temporary, envPath);
+        await fs.chmod(envPath, 0o600);
+    } finally { await unlink(temporary).catch(() => {}); }
+}
+
+// Both directions are written, and stdio is written explicitly rather than
+// deleted. The user .env is only the highest-priority config file: a leftover
+// GOOGLE_MCP_TRANSPORT=http in the cwd or package .env would otherwise be
+// picked up on the next launch and send the process to HTTP while the client
+// that setup just repaired sits waiting on stdio.
+export async function persistTransportSelection(transport, { configDir = getConfigDir() } = {}) {
+    const selected = transport === 'http' ? 'http' : 'stdio';
+    await mergeCredentialEnv(path.join(configDir, '.env'), { GOOGLE_MCP_TRANSPORT: selected });
+    return selected;
+}
+
+export async function configureTransport(launch, {
+    select = p.select,
+    ensureToken = ensureHttpToken,
+    startService = startHttpService,
+    configDir = getConfigDir(),
+    persistTransport = (transport) => persistTransportSelection(transport, { configDir }),
+    env = process.env,
+} = {}) {
+    const answer = await select({
+        message: 'How should MCP clients connect?',
+        options: [
+            { value: 'stdio', label: 'One process per client', hint: 'simpler, current default' },
+            { value: 'http', label: 'One shared loopback server', hint: 'faster startup, managed lifecycle' },
+        ],
+        initialValue: 'stdio',
+    });
+    if (p.isCancel(answer)) cancelled();
+    if (answer !== 'http') {
+        // Switching back from a previous shared-HTTP setup has to undo the
+        // persisted selection, and has to update this process too so anything
+        // later in the same setup run sees the transport it just chose.
+        await persistTransport('stdio');
+        env.GOOGLE_MCP_TRANSPORT = 'stdio';
+        return Object.freeze({ transport: 'stdio' });
+    }
+
+    // Establish the server before writing either client entry. If startup,
+    // authentication, or discovery fails, setup stops with every client still
+    // pointed at its previous configuration.
+    const config = resolveHttpServiceConfig(env);
+    // GOOGLE_MCP_HTTP_NO_AUTH=1 disables the bearer gate entirely, so minting
+    // and persisting a token would produce a credential nothing checks and push
+    // Codex down a manual path it does not need.
+    const tokenInfo = config.noAuth ? { token: null, source: 'disabled', path: null } : await ensureToken();
+    if (tokenInfo.token) env.GOOGLE_MCP_HTTP_TOKEN = tokenInfo.token;
+    const service = await startService({ launch, env });
+    if (!service.healthy) throw new Error('Shared HTTP lifecycle did not become healthy; client configuration was not changed.');
+    await persistTransport('http');
+    env.GOOGLE_MCP_TRANSPORT = 'http';
+    return Object.freeze({ transport: 'http', url: service.state.url || config.url, token: tokenInfo.token,
+        noAuth: config.noAuth, tokenPath: tokenInfo.path || null,
+        tokenSource: tokenInfo.source, serviceStatus: service.status });
+}
+
+export async function registerClients(launch, transport = { transport: 'stdio' }, {
+    adapters = createClientAdapters(),
+    ui = p,
+} = {}) {
+    let detected = false;
+    for (const adapter of adapters) {
+        if (!await adapter.detect()) continue;
+        detected = true;
+        const desired = buildClientEntry(adapter.name, { ...transport, launch });
+        const result = await reconcileClientEntry(adapter, desired, {
+            // The token path, never the token: the Codex completion instruction
+            // reads the private file instead of printing its bytes.
+            tokenPath: transport.tokenPath, noAuth: Boolean(transport.noAuth),
+            confirm: async ({ action, current }) => {
+                if (action === 'replace') {
+                    ui.log.message(`${adapter.name} current entry:\n${chalk.dim(JSON.stringify(redactEntry(current.entry)))}\nRecommended:\n${chalk.cyan(adapter.addCommand(desired, { redact: true }))}`);
+                }
+                const answer = await ui.confirm({ message: action === 'replace' ? `Repair the ${adapter.name} google MCP entry?` : `Add to ${adapter.name} as an MCP server?`, initialValue: true });
+                if (ui.isCancel(answer)) cancelled();
+                return answer;
+            },
+            backup: current => backupClientEntry(adapter, current.entry),
+        });
+        if (!result.ok) {
+            ui.log.error(`${adapter.name} was left unconfigured (${result.status}). Setup is incomplete.`);
+            if (result.explanation) ui.log.message(result.explanation);
+            ui.log.message(`Run these exact commands to finish configuring ${adapter.name}:\n${chalk.cyan(result.manualCommand)}`);
+            throw new Error(`${adapter.name} MCP registration ${result.status}`);
+        }
+        const message = { added: 'Added', replaced: 'Repaired', unchanged: 'Already correct, skipped', declined: 'Left unchanged' }[result.status];
+        ui.log.success(`${adapter.name}: ${message}.`);
+    }
+    return { detected };
+}
+
+async function existingLaunchTarget() {
+    if (!hasCli('npm')) return null;
+    try {
+        const root = (await runCommand('npm root -g')).trim();
+        const indexPath = resolveGlobalIndexPath(root);
+        await fs.access(indexPath);
+        return buildLaunchCommand({ ok: true, indexPath });
+    } catch { return null; }
+}
+
+// Returning users do not revisit cloud-project or credential prompts.  The
+// token check deliberately has no persistence side effects; only an explicit
+// reauth or failed refresh reaches the browser flow.
+export async function runSetup({
+    reauth = false,
+    checkCredentialsImpl = checkCredentials,
+    inspectTokenImpl = inspectToken,
+    existingLaunchTargetImpl = existingLaunchTarget,
+    configureTransportImpl = configureTransport,
+    registerClientsImpl = registerClients,
+    runAuthFlowImpl = async () => (await import('./auth.js')).runAuthFlow(),
+    ui = p,
+    clear = () => console.clear(),
+} = {}) {
+    const credentials = await checkCredentialsImpl();
+    if (!credentials.configured) return runFirstInstallSetup();
+
+    clear();
+    ui.intro(chalk.bgCyan.bold.white(' google-tools-mcp setup '));
+    const token = await inspectTokenImpl();
+    // A service-account installation is already fully authenticated through
+    // SERVICE_ACCOUNT_PATH. There is no OAuth token to inspect and no browser
+    // flow that would improve anything, so --reauth has nothing to act on.
+    const usesServiceAccount = credentials.source === 'service-account';
+    ui.log.message(usesServiceAccount
+        ? `Service account credentials are configured and valid${credentials.serviceAccount?.impersonateUser ? ` (impersonating ${credentials.serviceAccount.impersonateUser})` : ''}. Skipping project setup and OAuth.${reauth ? ' --reauth does not apply to service-account authentication.' : ''}`
+        : token.status === 'valid' && !reauth
+            ? 'Existing OAuth credentials and token are valid. Skipping project setup and OAuth.'
+            : `Existing credentials found; token is ${token.status}${reauth ? ' and --reauth was requested' : ''}.`);
+    if (!usesServiceAccount && (reauth || token.status !== 'valid')) {
+        ui.log.step('Authenticate with Google');
+        await runAuthFlowImpl();
+        ui.log.success('Authenticated with Google.');
+    }
+    let launch = await existingLaunchTargetImpl();
+    if (!launch) {
+        const result = await installGlobalFastLaunch();
+        let runningIndexPath = resolveRunningIndexPath();
+        try { await fs.access(runningIndexPath); } catch { runningIndexPath = null; }
+        launch = buildLaunchCommand(result, { runningIndexPath });
+        if (!launch) throw new Error('Could not find or install a usable MCP launch command.');
+    } else {
+        ui.log.success('Existing global launch target is valid. Skipping npm install.');
+    }
+    const transport = await configureTransportImpl(launch);
+    await registerClientsImpl(launch, transport, { ui });
+    ui.outro(chalk.green.bold('Setup complete!') + chalk.dim(' Existing configuration was preserved or repaired.'));
 }

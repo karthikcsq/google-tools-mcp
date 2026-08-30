@@ -8,12 +8,21 @@
 //   google-tools-mcp          Start the MCP server (default)
 //   google-tools-mcp auth     Run the interactive OAuth flow
 //   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
+//   google-tools-mcp doctor   Inspect setup without changing files or tokens
+import './config.js';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'node:url';
 import { logger } from './logger.js';
-import { getConfigDir } from './auth.js';
+import { getConfigDir } from './config.js';
 import { checkForUpdate } from './updateCheck.js';
-import { resolveHttpAuthConfig, assertSafeHttpBinding, generateToken } from './httpAuth.js';
+import { assertSafeHttpBinding } from './httpAuth.js';
 import { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntimeLifecycle } from './mcpServer.js';
+import {
+    assertHttpServiceConfigurationMatch, createPublishedState, getHttpServiceStatus, resolveHttpServiceConfig, restartHttpService,
+    startHttpService, stopHttpService,
+} from './httpLifecycle.js';
+import { ensureHttpToken, publishHttpState, removeHttpState, removeHttpStateSync } from './httpState.js';
+import { createDoctorDesiredEntryResolver, formatDoctorReport, resolveDoctorTransport } from './doctor.js';
 
 // Read our own published version straight from package.json rather than
 // hardcoding it. `files: ["dist"]` in package.json only restricts what npm
@@ -22,16 +31,127 @@ import { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntim
 // checkout and once installed globally.
 const require = createRequire(import.meta.url);
 const { version: packageVersion } = require('../package.json');
+const entrypointPath = fileURLToPath(import.meta.url);
+const subcommand = process.argv[2];
+
+// The only `stop` outcomes where the requested action actually completed (or
+// there was nothing to stop). Everything else -- including any future status
+// -- means the recorded process is still there and must exit non-zero.
+const STOP_SUCCESS_STATUSES = new Set(['stopped', 'stale-state-removed', 'not-running']);
+
+function statusOutput(report, json) {
+    if (json) return `${JSON.stringify(report, null, 2)}\n`;
+    if (!report.healthy) return `Shared HTTP service is not healthy (${report.diagnostic}).\n`;
+    return `Shared HTTP service is healthy at ${report.state.url} (pid ${report.state.pid}, ` +
+        `${report.identity.name} ${report.identity.version}, profile ${report.state.profile}, token source ${report.tokenSource}).\n`;
+}
+
+
+async function exitOperationsCli(code) {
+    // Node's Windows fetch implementation releases an async libuv handle just
+    // after the response body closes. An immediate process.exit can trip its
+    // UV_HANDLE_CLOSING assertion; leave enough time for the SDK probe to
+    // unwind even when parallel test workers are loading the event loop.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    process.exit(code);
+}
+
+// Lifecycle commands run before an MCP transport is opened. The default stdio
+// path below continues to reserve stdout exclusively for protocol messages.
+if (['start', 'status', 'restart', 'stop'].includes(subcommand)) {
+    const json = process.argv.slice(3).includes('--json');
+    const launch = { command: process.execPath, args: [entrypointPath] };
+    try {
+        if (subcommand === 'status') {
+            const report = await getHttpServiceStatus();
+            process.stdout.write(statusOutput(report, json));
+            await exitOperationsCli(report.healthy ? 0 : 1);
+        }
+        if (subcommand === 'stop') {
+            const result = await stopHttpService();
+            process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : `Shared HTTP service: ${result.status}.\n`);
+            // Anything other than a confirmed stop (or nothing having been
+            // running to begin with) means the requested action did not
+            // happen -- e.g. 'foreign-or-unverified' or 'auth-mismatch' leave
+            // the recorded process alive and untouched. Callers such as shell
+            // scripts and service managers must see a non-zero exit code in
+            // that case, not just a status string they may not parse. New
+            // statuses default to failure here rather than success. See finding 11.
+            await exitOperationsCli(STOP_SUCCESS_STATUSES.has(result.status) ? 0 : 1);
+        }
+        const result = subcommand === 'restart'
+            ? await restartHttpService({ launch })
+            : await startHttpService({ launch });
+        const state = result.state || result.started?.state;
+        if (!state) {
+            // restartHttpService can return a 'stop-timeout'/'stop-incomplete'
+            // result with no started state when the previous process was not
+            // confirmed stopped (finding 8). That is a failed restart, not a
+            // silent success.
+            process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : `Shared HTTP service ${subcommand}: ${result.status}.\n`);
+            await exitOperationsCli(1);
+        }
+        process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` :
+            `Shared HTTP service ${result.status} at ${state.url}.\n`);
+        await exitOperationsCli(0);
+    } catch (error) {
+        process.stderr.write(`Shared HTTP ${subcommand} failed: ${error?.message || 'unknown failure'}\n`);
+        await exitOperationsCli(1);
+    }
+}
+
+if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
+    process.stdout.write([
+        'Usage: google-tools-mcp [command]',
+        '',
+        '  (no command)     Start the stdio MCP server',
+        '  auth             Run Google OAuth authorization',
+        '  setup [--reauth] Configure credentials and MCP clients',
+        '  doctor [--json]  Inspect credentials, clients, and shared HTTP health',
+        '  serve            Run the managed shared HTTP service in the foreground',
+        '  start [--json]   Start or attach to the shared HTTP service',
+        '  status [--json]  Authenticated health and MCP identity check',
+        '  restart [--json] Stop, start, and authenticate a replacement service',
+        '  stop [--json]    Stop the managed shared HTTP service',
+        '',
+    ].join('\n'));
+    process.exit(0);
+}
 
 // --- Setup subcommand ---
 if (process.argv[2] === 'setup') {
     const { runSetup } = await import('./setup.js');
     try {
-        await runSetup();
+        await runSetup({ reauth: process.argv.slice(3).includes('--reauth') });
         process.exit(0);
     } catch (error) {
         console.error('\nSetup failed:', error.message || error);
         process.exit(1);
+    }
+}
+
+// --- Doctor subcommand ---
+if (process.argv[2] === 'doctor') {
+    const json = process.argv.slice(3).includes('--json');
+    const { createClientAdapters } = await import('./clientAdapters.js');
+    const { inspectSetup } = await import('./setupInspect.js');
+    try {
+        const launch = { command: process.execPath, args: [entrypointPath] };
+        const doctorTransport = await resolveDoctorTransport({ env: process.env, getHttpStatus: getHttpServiceStatus });
+        const httpConfigForDoctor = doctorTransport === 'http' ? resolveHttpServiceConfig(process.env) : null;
+        const transport = doctorTransport === 'http'
+            ? { transport: 'http', url: httpConfigForDoctor.url, noAuth: httpConfigForDoctor.noAuth }
+            : { transport: 'stdio' };
+        const desiredEntries = await createDoctorDesiredEntryResolver({ launch, transport, env: process.env });
+        const report = await inspectSetup({ adapters: createClientAdapters(), desiredEntries, httpExpected: doctorTransport === 'http' });
+        if (json) process.stdout.write(formatDoctorReport(report, true));
+        else {
+            process.stdout.write(formatDoctorReport(report));
+        }
+        process.exit(report.healthy ? 0 : 1);
+    } catch {
+        process.stdout.write(formatDoctorReport({ healthy: false, inspectionError: true, problems: ['Could not inspect setup.'], clients: [] }, json));
+        process.exit(2);
     }
 }
 
@@ -56,16 +176,16 @@ if (process.argv[2] === 'auth') {
 // 2026-07-28 HTTP runtime ("httpStream" is kept only so an existing config
 // keeps starting, since there is no separate streamed transport any more).
 const transportEnv = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase();
-const useHttp = transportEnv === 'http' || transportEnv === 'httpstream';
-const httpPort = Number(process.env.GOOGLE_MCP_PORT) || 3939;
-const httpEndpoint = process.env.GOOGLE_MCP_ENDPOINT || '/mcp';
+const useHttp = subcommand === 'serve' || transportEnv === 'http' || transportEnv === 'httpstream';
+// resolveHttpServiceConfig validates GOOGLE_MCP_PORT, GOOGLE_MCP_ENDPOINT,
+// GOOGLE_MCP_HTTP_HOST, the profile, and the loopback-only deployment boundary.
+let httpConfig = null;
 
 // --- HTTP security ---
 // The HTTP transport exposes the authenticated Google tool surface over a local
 // URL. Gate it behind a bearer token + Origin validation and bind to loopback
 // by default so it isn't reachable by untrusted local processes, browser-
 // delivered requests, or the network. (PR #36 review)
-const httpAuth = resolveHttpAuthConfig(process.env);
 if (useHttp) {
     // Refuse to start rather than log a warning after the fact: a non-loopback
     // host combined with GOOGLE_MCP_HTTP_NO_AUTH=1 is a remotely reachable,
@@ -74,28 +194,23 @@ if (useHttp) {
     // Written straight to stderr (not the logger) so LOG_LEVEL=error/silent
     // can't hide the reason the process refused to start.
     try {
-        assertSafeHttpBinding(httpAuth);
+        httpConfig = resolveHttpServiceConfig(process.env);
+        assertSafeHttpBinding(httpConfig);
     } catch (configError) {
         process.stderr.write(`FATAL: ${configError.message}\n`);
         process.exit(1);
     }
 }
-let httpToken = httpAuth.explicitToken;
-if (useHttp && !httpAuth.noAuth && !httpToken) {
-    // No token configured — generate a one-time one so the server is never
-    // unauthenticated by accident. Log it prominently; the operator should set
-    // GOOGLE_MCP_HTTP_TOKEN to a fixed value to keep it stable across restarts.
-    httpToken = generateToken();
-    // Write straight to stderr rather than through the logger. LOG_LEVEL=error
-    // and LOG_LEVEL=silent are both documented settings, and either one would
-    // swallow a warn-level message — starting a server that demands a token
-    // nobody ever saw, so every client gets rejected with no way to recover.
-    process.stderr.write(
-        'GOOGLE_MCP_HTTP_TOKEN is not set — generated a one-time token for this run.\n' +
-        `  Token: ${httpToken}\n` +
-        '  Clients must send:  Authorization: Bearer <token>\n' +
-        '  Set GOOGLE_MCP_HTTP_TOKEN to keep this stable across restarts.\n'
-    );
+let httpToken = null;
+let httpTokenInfo = null;
+if (useHttp && !httpConfig.noAuth) {
+    try {
+        httpTokenInfo = await ensureHttpToken();
+        httpToken = httpTokenInfo.token;
+    } catch (tokenError) {
+        process.stderr.write(`FATAL: Could not load the shared HTTP token (${tokenError?.message || 'unknown failure'}).\n`);
+        process.exit(1);
+    }
 }
 
 // --- Process lifecycle logging ---
@@ -114,7 +229,21 @@ process.on('exit', (code) => {
 // preloaded once into a definition list, then each stdio connection / HTTP
 // request gets a side-effect-free SDK server built from it.
 const profile = (process.env.GOOGLE_MCP_PROFILE || 'default').trim() || 'default';
+let ownsHttpState = false;
 try {
+    if (useHttp) {
+        const existing = await getHttpServiceStatus();
+        if (existing.healthy) {
+            try {
+                assertHttpServiceConfigurationMatch(existing, httpConfig, packageVersion);
+            } catch (configurationError) {
+                process.stderr.write(`FATAL: ${configurationError.message}\n`);
+                await exitOperationsCli(1);
+            }
+            process.stderr.write(`Shared HTTP service is already healthy at ${existing.state.url}; attach clients to that instance.\n`);
+            await exitOperationsCli(0);
+        }
+    }
     logger.info('Starting google-tools-mcp server...');
     const factory = await prepareMcpServerFactory({ logger });
     // process.uptime() covers the whole life of this node process, including
@@ -135,19 +264,32 @@ try {
         // lifecycle left to dispatch on, and no legacy /sse or /messages route
         // to leave open.
         runtime = await startV2HttpServer(factory, {
-            auth: { token: httpToken, noAuth: httpAuth.noAuth, allowedOrigins: httpAuth.allowedOrigins },
-            endpoint: httpEndpoint,
-            host: httpAuth.host,
-            port: httpPort,
+            auth: { token: httpToken, noAuth: httpConfig.noAuth, allowedOrigins: httpConfig.allowedOrigins },
+            endpoint: httpConfig.endpoint,
+            host: httpConfig.host,
+            port: httpConfig.port,
             profile,
             logger,
         });
+        const published = await publishHttpState(createPublishedState(httpConfig, { version: packageVersion }));
+        ownsHttpState = true;
+        const httpRuntime = runtime;
+        runtime = Object.freeze({
+            ...httpRuntime,
+            async close() {
+                try { await httpRuntime.close(); }
+                finally {
+                    await removeHttpState({ expectedPid: process.pid });
+                    ownsHttpState = false;
+                }
+            },
+        });
         readyMs = Math.round(process.uptime() * 1000);
-        logger.info(`MCP Server running over HTTP at http://${httpAuth.host}:${httpPort}${httpEndpoint} in ${readyMs}ms.`);
+        logger.info(`MCP Server running over HTTP at ${published.url} in ${readyMs}ms.`);
         // "bearer-token", hyphenated: the log redactor treats `Bearer <word>`
         // as a credential and would rewrite the unhyphenated phrase to
         // "Bearer [REDACTED] required".
-        logger.info(`Auth: ${httpAuth.noAuth ? 'DISABLED (GOOGLE_MCP_HTTP_NO_AUTH) — do not use on a shared machine' : 'bearer-token required'}; bound to ${httpAuth.host}.`);
+        logger.info(`Auth: ${httpConfig.noAuth ? 'DISABLED (GOOGLE_MCP_HTTP_NO_AUTH) — do not use on a shared machine' : `bearer-token required (${httpTokenInfo.source})`}; bound to ${httpConfig.host}.`);
         logger.info('Shared mode: point every client at this URL instead of spawning one stdio server per client.');
         logger.info('HTTP is stateless (MCP 2026-07-28): no Mcp-Session-Id, no /sse, and read state is never carried ' +
             'between requests. Docs edits over HTTP need the readHandle returned by readDocument; guarded Sheets and ' +
@@ -194,6 +336,15 @@ try {
             // surface as an unhandled rejection.
         });
 } catch (startError) {
-    logger.error('FATAL: Server failed to start:', startError.message || startError);
+    if (startError?.code === 'EADDRINUSE' && httpConfig) {
+        process.stderr.write(`FATAL: Port ${httpConfig.port} is already in use by an unmanaged or unhealthy process. ` +
+            'Stop that process or set GOOGLE_MCP_PORT to a free loopback port, then update client URLs.\n');
+    } else {
+        logger.error('FATAL: Server failed to start:', startError.message || startError);
+    }
     process.exit(1);
 }
+
+process.on('exit', () => {
+    if (ownsHttpState) removeHttpStateSync({ expectedPid: process.pid });
+});

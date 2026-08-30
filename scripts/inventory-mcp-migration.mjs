@@ -2,10 +2,12 @@
 /**
  * Deterministic baseline for the fastmcp-to-SDK migration.
  *
- * This deliberately inventories versioned and non-ignored working source
- * files rather than walking the filesystem, so node_modules, build artifacts,
- * editor files, and local test output cannot change the report. The default tool count is loaded
- * through the production registerAllTools path with legacy aliases disabled.
+ * This deliberately inventories tracked and non-ignored untracked source files
+ * rather than walking the filesystem, so a snapshot generated before staging
+ * still covers new runtime/tests while node_modules, build artifacts, editor
+ * files, and ignored local output cannot change the report. The default tool
+ * count is loaded through the production registerAllTools path with legacy
+ * aliases disabled.
  *
  * Usage:
  *   node scripts/inventory-mcp-migration.mjs          # readable report
@@ -37,16 +39,16 @@ function findMatches(source, expression) {
     return matches;
 }
 
-function trackedSourceFiles(repositoryRoot) {
+function repositorySourceFiles(repositoryRoot) {
     const gitRoot = asRepositoryPath(repositoryRoot);
     const output = execFileSync(
         'git',
-        // Include intentional, non-ignored additions so a snapshot can be
-        // regenerated before its accompanying tests are committed. Filter
-        // deleted index entries below for the same reason.
-        ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--cached', '--others', '--exclude-from=.gitignore', '--', 'dist/**', 'tests/**'],
+        ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--cached', '--others', '--exclude-standard', '--', 'dist/**', 'tests/**'],
         { cwd: repositoryRoot, encoding: 'utf8' },
     );
+    // `--cached` still lists index entries whose working file is gone, so a
+    // snapshot regenerated before a deletion is staged would report files that
+    // no longer exist. Drop those, for the same reason `--others` is included.
     const deleted = new Set(execFileSync(
         'git',
         ['-c', `safe.directory=${gitRoot}`, 'ls-files', '--deleted', '--', 'dist/**', 'tests/**'],
@@ -150,7 +152,7 @@ function inventoryFileEntries(files) {
 }
 
 export async function collectMigrationInventory({ repositoryRoot = REPOSITORY_ROOT } = {}) {
-    const files = trackedSourceFiles(repositoryRoot);
+    const files = repositorySourceFiles(repositoryRoot);
     const runtime = await inspectFiles(repositoryRoot, files.runtime);
     const tests = await inspectFiles(repositoryRoot, files.tests);
     const allSource = [...runtime, ...tests];
@@ -158,8 +160,8 @@ export async function collectMigrationInventory({ repositoryRoot = REPOSITORY_RO
     return {
         schemaVersion: 1,
         inventoryScope: {
-            runtime: 'Versioned or non-ignored working dist/**/*.js and dist/**/*.mjs files',
-            tests: 'Versioned or non-ignored working tests/**/*.js and tests/**/*.mjs files',
+            runtime: 'Tracked and non-ignored untracked dist/**/*.js and dist/**/*.mjs files',
+            tests: 'Tracked and non-ignored untracked tests/**/*.js and tests/**/*.mjs files',
         },
         files: {
             runtime: inventoryFileEntries(files.runtime),

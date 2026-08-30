@@ -6,3 +6,6 @@ token.json
 CLAUDE.md
 AGENTS.md
 coverage/
+
+# Raw Codex agent transcripts. Briefs are tracked; streaming output is not.
+.planning/out-*.md
