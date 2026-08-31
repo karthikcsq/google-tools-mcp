@@ -6,6 +6,13 @@ import {
     ensureHttpToken, getHttpStatePaths, publishHttpState, readHttpState, removeHttpState,
 } from '../dist/httpState.js';
 
+import { createRequire } from 'node:module';
+
+// These fixtures stand in for "the version this server reports", which comes
+// from package.json. Pinning a literal meant every release broke these suites
+// and got "fixed" by editing the number, so read the manifest instead.
+const PACKAGE_VERSION = createRequire(import.meta.url)('../package.json').version;
+
 async function fixture() {
     return fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-http-state-'));
 }
@@ -42,7 +49,7 @@ describe('shared HTTP state and token persistence', () => {
         try {
             const input = {
                 pid: process.pid, port: 43123, host: '127.0.0.1', endpoint: '/mcp',
-                startedAt: new Date().toISOString(), version: '2.0.0', profile: 'default',
+                startedAt: new Date().toISOString(), version: PACKAGE_VERSION, profile: 'default',
             };
             const published = await publishHttpState(input, { configDir });
             expect(published.url).toBe('http://127.0.0.1:43123/mcp');

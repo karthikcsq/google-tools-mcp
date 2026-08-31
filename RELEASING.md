@@ -37,6 +37,11 @@ gh api repos/karthikcsq/google-tools-mcp/environments \
 You want `npm-publish` with `required_reviewers` in its rules. An empty list
 means the environment exists but does not gate anything.
 
+Since 3.0.0 the `validate` job checks this itself and fails the release if the
+gate is missing, so a tag pushed before this step is done stops in seconds
+instead of publishing unapproved. The check runs in the ungated job, so it
+cannot be skipped by declining an approval that was never going to be requested.
+
 ### 2. Add the npm trusted publisher (required)
 
 <https://www.npmjs.com/package/google-tools-mcp/access>

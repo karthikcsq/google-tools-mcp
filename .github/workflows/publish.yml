@@ -48,6 +48,33 @@ jobs:
             exit 1
           fi
 
+      # GitHub does not treat a missing environment as an error: referencing one
+      # creates it, with no protection rules. So `environment: npm-publish` on the
+      # publish job below looks gated whether or not anyone ever configured it,
+      # and an unconfigured environment publishes to npm with no approval at all.
+      # Check for the gate here, in the ungated job, so a missing one fails in
+      # seconds rather than silently publishing. See RELEASING.md.
+      - name: Verify the npm-publish environment actually requires a reviewer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! body="$(gh api "repos/${GITHUB_REPOSITORY}/environments/npm-publish" 2>&1)"; then
+            echo "Could not read the npm-publish environment, so this check cannot confirm"
+            echo "that a human approval gate exists. Refusing rather than assuming one does."
+            echo "API said: ${body}"
+            exit 1
+          fi
+          rules="$(printf '%s' "$body" | jq -r '[.protection_rules[].type] | join(",")')"
+          echo "Protection rules on npm-publish: [${rules:-none}]"
+          if ! printf '%s' "$body" | jq -e '[.protection_rules[].type] | index("required_reviewers")' >/dev/null; then
+            echo ""
+            echo "The npm-publish environment has no required reviewers, so the publish job"
+            echo "would run unapproved. Fix: Settings -> Environments -> npm-publish ->"
+            echo "Required reviewers. See RELEASING.md."
+            exit 1
+          fi
+
       - name: Verify tag matches package.json version
         shell: bash
         run: |

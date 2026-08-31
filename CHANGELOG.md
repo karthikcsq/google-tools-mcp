@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (next: 3.0.0)
+## 3.0.0 - 2026-08-31
 
 Migration to MCP specification **2026-07-28** on the official MCP TypeScript
 SDK v2. FastMCP, mcp-proxy, and the v1 SDK are gone. **stdio users: nothing in
@@ -53,9 +53,27 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   service principal. Handles, trackers, and workspace ownership are valid only
   for that deployment; multiple profiles or horizontal scale are out of scope.
 
+### Security
+
+- **The `feedback` tool could execute arbitrary shell commands through a crafted
+  issue title** (#114). Titles and bodies were interpolated into a `gh` command
+  string, so shell metacharacters in user-supplied text reached the shell. Every
+  `gh` invocation now passes an argv array to `execFile` with no shell involved.
+- **The three browser-open helpers no longer build shell command strings around
+  a URL** (#125). `start`, `open`, and `xdg-open` were invoked through a shell
+  with the URL concatenated in; they now go through a shared `runArgv` helper
+  that passes the URL as a single argv element.
+- **Re-authentication could report success without replacing the refresh token**
+  (#115). `authenticate()` now requests re-consent on every call, including the
+  explicit `google-tools-mcp auth` path and the `invalid_grant` recovery path,
+  and throws instead of reporting "Authentication successful!" when the exchange
+  returns no refresh token. The token file is written atomically and chmodded
+  `0600`, and its directory `0700`.
+
 ### Added
 
-- `GET /healthz`, authenticated, liveness only.
+- `GET /healthz`, authenticated, liveness only. Part of making the shared HTTP
+  transport production-ready before it could be considered as a default (#75).
 - `server/discover` carrying supported versions, capabilities, `serverInfo`, and
   server `instructions`, with `cacheHints` (60s TTL, private scope) on both
   `server/discover` and `tools/list` so clients can cache the catalog.
@@ -81,7 +99,8 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   `suggested*` map while preserving every index.
 - `replaceRangeWithMarkdown`: replaces an index range in a Google Doc with
   parsed Markdown in one call, instead of a `deleteRange` + `appendMarkdown`
-  pair.
+  pair. Part of replacing destructive full-body rewrites with safe structured
+  editing (#88).
 - `updateComment`: edits the body of an existing Google Docs comment.
 - `batchModifyText`: applies multiple `modifyText`-style edits to a document
   in a single call, so multi-edit workflows no longer need one round trip per
@@ -106,6 +125,25 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   concurrent change since the read cannot be proven not to touch the target
   range, and re-resolve a `textToFind` target against the current document
   when it can; every rejection names what changed and where (#108).
+
+- `listFolderContents` gains `depth` and `maxItems` for bounded recursive
+  traversal (#99). Mapping one subtree previously took 14 sequential calls. A
+  single-page listing that hit its cap now says so through `truncated` and a
+  `truncationReason` naming the fix, instead of silently returning a short list.
+- A shared machine configuration file is loaded before startup and applied
+  across MCP clients (#82), so settings no longer have to be duplicated into
+  every client's config block.
+- Diagnostics are actionable rather than decorative (#91): structured
+  tool-call logs, startup timing visible where the README says to look, and a
+  troubleshooting runbook. Caller-supplied text never reaches persisted
+  diagnostics.
+- `setup` and `update` are idempotent and repair existing client configs
+  instead of appending duplicates or leaving a half-written entry (#48).
+- `modifyText` can create bullets and numbered lists (#120), so a mid-document
+  insert can match the formatting of the rest of the document.
+- `readDocument` surfaces link targets that disagree with their display text
+  (#117), including `mailto:` links, rather than leaving the mismatch for the
+  reader to notice.
 
 ### Fixed
 
@@ -167,6 +205,32 @@ your config changes.** The breaking changes are all in shared HTTP mode.
     not to occur in it, replacing a timestamp-plus-random string nothing ever
     checked. The same message now produces the same bytes.
   - ASCII-only messages are otherwise byte-compatible.
+
+- `createDraft` and `updateDraft` no longer double-decode quoted-printable,
+  which was stripping every `=` from the body (#116).
+- `replaceDocumentWithMarkdown` no longer emits literal `**` or `~~` into the
+  document when a delimiter carries a trailing space, as in `**text **` (#118).
+- `modifyText` no longer raises a phantom staleness error when the document has
+  not actually changed and the diff is empty; an immediate identical retry used
+  to succeed, which is the signature of a false positive (#119).
+- `modifyText` replacement text no longer silently inherits the character style
+  of the text it replaced, which italicized whole inserted sections (#121).
+- `readDocument` no longer overwrites the local mirror file and destroys pending
+  edits (#122).
+- Markdown export is round-trip safe across a header that follows a list (#123).
+  The blank line between them survived export but was lost on push, merging the
+  header into the last list item.
+- `copyFile` no longer ignores its `name` parameter (#124).
+- `listFolderContents` scopes depth-1 listings to the shared drive that contains
+  the folder (#126). The originally filed symptom, empty results for every
+  second-level subfolder, did not reproduce under four independent lines of
+  investigation; the real adjacent defect was silent truncation, now reported.
+- The umbrella `googleapis` dependency is replaced by the ten per-API
+  `@googleapis/*` packages the server actually uses (#71). Installed size drops
+  from 195 MB across 1,823 files to 8.1 MB across 148, `node_modules` as a whole
+  from 303 MB / 11,591 files to 117 MB / 9,916, and cold import from roughly
+  1,120 ms to 149 ms. `npx` re-verifies the tree per file on every launch, so
+  the file count is paid back on every start.
 
 ### Removed (internal)
 
