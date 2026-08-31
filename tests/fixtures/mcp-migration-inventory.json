@@ -576,6 +576,9 @@
         "file": "tests/copyFile.test.js"
       },
       {
+        "file": "tests/createAndCopyReadSeeding.test.js"
+      },
+      {
         "file": "tests/createDocument.test.js"
       },
       {
@@ -1006,7 +1009,7 @@
       },
       {
         "file": "dist/tools/drive/copyFile.js",
-        "line": 5,
+        "line": 11,
         "match": ".addTool({"
       },
       {
@@ -1411,7 +1414,7 @@
       },
       {
         "file": "dist/tools/sheets/createSpreadsheet.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {

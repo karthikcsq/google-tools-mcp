@@ -1,6 +1,12 @@
 import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getDriveClient } from '../../clients.js';
+import { getDriveClient, getDocsClient } from '../../clients.js';
+import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
+import { trackRead } from '../../readTracker.js';
+import { mintDocsReadHandle } from '../../docsHandles.js';
+
+const GOOGLE_DOC_MIME_TYPE = 'application/vnd.google-apps.document';
+const GOOGLE_SHEET_MIME_TYPE = 'application/vnd.google-apps.spreadsheet';
 export function register(server) {
     server.addTool({
         name: 'copyFile',
@@ -51,14 +57,62 @@ export function register(server) {
                 const response = await drive.files.copy({
                     fileId: args.fileId,
                     requestBody: copyMetadata,
-                    fields: 'id,name,webViewLink',
+                    fields: 'id,name,webViewLink,mimeType,modifiedTime',
                     supportsAllDrives: true,
                 });
                 const copiedFile = response.data;
+                let readHandle;
+                let readStateWarning;
+                if (copiedFile.mimeType === GOOGLE_DOC_MIME_TYPE) {
+                    // A Docs mutation needs the exact content and revision it
+                    // is based on. Fetch the copied document rather than
+                    // treating the source copy operation as a content read.
+                    try {
+                        const docs = await getDocsClient();
+                        const seedRes = await docs.documents.get({ documentId: copiedFile.id, fields: '*' });
+                        const contentSource = seedRes.data;
+                        const markdownContent = docsJsonToMarkdown(contentSource);
+                        trackRead(copiedFile.id, copiedFile.modifiedTime, markdownContent, seedRes.data.revisionId);
+                        const minted = await mintDocsReadHandle({
+                            documentId: copiedFile.id,
+                            tabId: null,
+                            revisionId: seedRes.data.revisionId ?? null,
+                            contentSource,
+                            content: markdownContent,
+                        });
+                        readHandle = minted?.readHandle;
+                    }
+                    catch (seedError) {
+                        // The Drive copy already succeeded. Do not turn a
+                        // failed post-copy read into an orphaned file; leave
+                        // it unseeded so the next mutation fails closed.
+                        log.warn(`Copied Google Doc ${copiedFile.id} but read state could not be seeded: ${seedError.message}`);
+                        readStateWarning = 'The Google Doc copy was created, but its read state could not be seeded. Call readDocument before the next mutation.';
+                    }
+                }
+                else if (copiedFile.mimeType === GOOGLE_SHEET_MIME_TYPE) {
+                    // Sheets reads intentionally record no content or revision,
+                    // so a copied Sheet must use that same honest baseline.
+                    try {
+                        trackRead(copiedFile.id);
+                    }
+                    catch (seedError) {
+                        log.warn(`Copied Google Sheet ${copiedFile.id} but read state could not be seeded: ${seedError.message}`);
+                        readStateWarning = 'The Google Sheet copy was created, but its read state could not be seeded. Call readSpreadsheet before the next mutation.';
+                    }
+                }
+                // Arbitrary binary copies deliberately stay unseeded. Some
+                // generic mutations (for example deleteFile) are guarded, but
+                // copyFile has no content snapshot for a binary destination;
+                // claiming a read here would silently weaken that guard.
                 return JSON.stringify({
                     id: copiedFile.id,
                     name: copiedFile.name,
                     url: copiedFile.webViewLink,
+                    ...(readHandle && {
+                        readHandleNote: 'This document copy has been seeded as read. You can mutate it immediately without calling readDocument first.',
+                    }),
+                    ...(readStateWarning && { warnings: [readStateWarning] }),
                 }, null, 2);
             }
             catch (error) {

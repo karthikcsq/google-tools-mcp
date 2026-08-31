@@ -2,6 +2,7 @@ import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient, getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { trackRead } from '../../readTracker.js';
 export function register(server) {
     server.addTool({
         name: 'createSpreadsheet',
@@ -51,11 +52,26 @@ export function register(server) {
                         initialDataStatus = 'failed';
                     }
                 }
+                // Match readSpreadsheet's deliberately metadata-only state.
+                // The Drive file exists even if its optional initial-data write
+                // failed, and the guard is about whether this tool just created
+                // the target, not whether every follow-up request succeeded.
+                // Tracking is best effort: a bookkeeping failure must never hide
+                // a successfully-created spreadsheet from the caller.
+                let readStateWarning;
+                try {
+                    trackRead(spreadsheetId);
+                }
+                catch (seedError) {
+                    log.warn(`Spreadsheet ${spreadsheetId} created but read state could not be seeded: ${seedError.message}`);
+                    readStateWarning = 'Spreadsheet was created, but its read state could not be seeded. Call readSpreadsheet before the next mutation.';
+                }
                 return JSON.stringify({
                     id: spreadsheetId,
                     name: driveResponse.data.name,
                     url: driveResponse.data.webViewLink,
                     ...(initialDataStatus ? { initialData: initialDataStatus } : {}),
+                    ...(readStateWarning ? { warnings: [readStateWarning] } : {}),
                 }, null, 2);
             }
             catch (error) {
