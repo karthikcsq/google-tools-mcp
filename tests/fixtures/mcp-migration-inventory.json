@@ -1311,22 +1311,22 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 258,
+        "line": 260,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 282,
+        "line": 284,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 303,
+        "line": 305,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 451,
+        "line": 453,
         "match": ".addTool({"
       },
       {

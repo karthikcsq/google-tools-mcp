@@ -2,7 +2,7 @@
 // tokens, which would make doctor and returning-user detection destructive.
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { google } from 'googleapis';
+import { OAuth2Client } from 'google-auth-library';
 import { getConfigDir, getConfigFiles, getConfigWarnings } from './config.js';
 import { getTokenPath, loadClientSecrets, SCOPES } from './auth.js';
 import { entriesEqual } from './clientAdapters.js';
@@ -46,7 +46,7 @@ export async function checkCredentials({ load = loadClientSecrets, env = process
     catch { return { configured: false, source: 'oauth' }; }
 }
 
-export async function inspectToken({ tokenPath = getTokenPath(), readFile = fs.readFile, OAuth2 = google.auth.OAuth2, credentialsLoader = loadClientSecrets, env = process.env } = {}) {
+export async function inspectToken({ tokenPath = getTokenPath(), readFile = fs.readFile, OAuth2 = OAuth2Client, credentialsLoader = loadClientSecrets, env = process.env } = {}) {
     // There is no OAuth token in a service-account installation, and reading or
     // refreshing one would be meaningless rather than merely absent.
     if (resolveAuthSource(env) === 'service-account') return { status: 'not-applicable', source: 'service-account' };

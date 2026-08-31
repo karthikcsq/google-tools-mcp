@@ -113,9 +113,9 @@ Auth is deferred. The server starts and completes its MCP handshake without touc
 
 ## Dependencies
 
-`@modelcontextprotocol/server` and `@modelcontextprotocol/node` (both pinned exactly at `2.0.0`; the MCP SDK v2 the facade wraps), `hono`, `googleapis`, `google-auth-library`, `zod` for schemas, `@clack/prompts` + `chalk` for the wizard, and `markdown-it` / `diff` / `mammoth` / `pdf-parse` for document conversion.
+`@modelcontextprotocol/server` and `@modelcontextprotocol/node` (both pinned exactly at `2.0.0`; the MCP SDK v2 the facade wraps), `hono`, the per-API `@googleapis/*` packages (`docs`, `drive`, `sheets`, `script`, `gmail`, `calendar`, `forms`, `slides`, `tasks`, `serviceusage`), `google-auth-library`, `zod` for schemas, `@clack/prompts` + `chalk` for the wizard, and `markdown-it` / `diff` / `mammoth` / `pdf-parse` for document conversion.
 
-`googleapis` dominates startup cost. Before adding anything at the top level, read [startup-performance.md](startup-performance.md).
+Top-level imports dominate startup cost. The umbrella `googleapis` package used to be about 80% of it and was replaced by the per-API packages in #71. Before adding anything at the top level, read [startup-performance.md](startup-performance.md).
 
 ## Tests
 

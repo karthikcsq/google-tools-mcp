@@ -28,19 +28,20 @@ jest.unstable_mockModule('../dist/auth.js', () => ({
     SCOPES: [],
 }));
 
-jest.unstable_mockModule('googleapis', () => ({
-    google: {
-        slides: () => ({ presentations: { get: presentationsGet } }),
-        docs: () => ({}),
-        drive: () => ({ permissions: { create: permissionsCreate } }),
-        sheets: () => ({}),
-        script: () => ({}),
-        gmail: () => ({}),
-        calendar: () => ({}),
-        forms: () => ({}),
-        tasks: () => ({}),
-    },
+// One factory per @googleapis/* package now that the umbrella is gone (#71).
+jest.unstable_mockModule('@googleapis/slides', () => ({
+    slides: () => ({ presentations: { get: presentationsGet } }),
 }));
+jest.unstable_mockModule('@googleapis/drive', () => ({
+    drive: () => ({ permissions: { create: permissionsCreate } }),
+}));
+jest.unstable_mockModule('@googleapis/docs', () => ({ docs: () => ({}) }));
+jest.unstable_mockModule('@googleapis/sheets', () => ({ sheets: () => ({}) }));
+jest.unstable_mockModule('@googleapis/script', () => ({ script: () => ({}) }));
+jest.unstable_mockModule('@googleapis/gmail', () => ({ gmail: () => ({}) }));
+jest.unstable_mockModule('@googleapis/calendar', () => ({ calendar: () => ({}) }));
+jest.unstable_mockModule('@googleapis/forms', () => ({ forms: () => ({}) }));
+jest.unstable_mockModule('@googleapis/tasks', () => ({ tasks: () => ({}) }));
 
 const { resetClients, initializeGoogleClient, getSlidesClient } = await import('../dist/clients.js');
 const { executeBatchUpdate } = await import('../dist/googleDocsApiHelpers.js');

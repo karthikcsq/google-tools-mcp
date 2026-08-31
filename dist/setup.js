@@ -7,7 +7,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { exec, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { google } from 'googleapis';
+import { serviceusage } from '@googleapis/serviceusage';
 import { getConfigDir } from './config.js';
 import { buildClientEntry, createClientAdapters, reconcileClientEntry } from './clientAdapters.js';
 import { checkCredentials, inspectToken } from './setupInspect.js';
@@ -199,7 +199,7 @@ function extractProjectNumberFromClientId(clientId) {
 // Service Usage API. Returns { ok: true } on success, or
 // { ok: false, error } on failure (caller falls back to the manual URL).
 async function enableApisProgrammatically(authClient, projectNumber) {
-    const serviceUsage = google.serviceusage({ version: 'v1', auth: authClient });
+    const serviceUsage = serviceusage({ version: 'v1', auth: authClient });
     const batchRes = await serviceUsage.services.batchEnable({
         parent: `projects/${projectNumber}`,
         requestBody: { serviceIds: REQUIRED_APIS },
