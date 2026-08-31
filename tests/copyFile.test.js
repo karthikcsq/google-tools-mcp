@@ -9,6 +9,10 @@ import { describe, expect, it, jest } from '@jest/globals';
 let fakeDrive;
 jest.unstable_mockModule('../dist/clients.js', () => ({
     getDriveClient: async () => fakeDrive,
+    // copyFile only asks for a Docs client when Drive identifies the new
+    // destination as a Google Doc. These #124 schema tests use generic
+    // metadata, but the named export must still exist for ESM linking.
+    getDocsClient: async () => { throw new Error('Docs client not used in this suite'); },
 }));
 
 const { register } = await import('../dist/tools/drive/copyFile.js');

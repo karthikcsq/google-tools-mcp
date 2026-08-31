@@ -53,6 +53,7 @@ const {
 } = await import('../dist/mcpServer.js');
 const { register: registerCreateDocument } = await import('../dist/tools/drive/createDocument.js');
 const { register: registerCreateFromTemplate } = await import('../dist/tools/drive/createFromTemplate.js');
+const { register: registerCopyFile } = await import('../dist/tools/drive/copyFile.js');
 const { register: registerAppendText } = await import('../dist/tools/docs/appendToGoogleDoc.js');
 const { resetHandleRuntimeState } = await import('../dist/handleRuntime.js');
 const { hasBeenRead } = await import('../dist/readTracker.js');
@@ -87,7 +88,15 @@ function setUpGoogleMocks(docId, { text = 'seeded content\n', revisionId = REVIS
     });
     fakeDocs = { documents: { get: documentsGet, batchUpdate } };
     const filesCreate = jest.fn(async () => ({ data: { id: docId, name: 'New Doc', webViewLink: 'https://docs/new-doc' } }));
-    const filesCopy = jest.fn(async () => ({ data: { id: docId, name: 'From Template', webViewLink: 'https://docs/from-template' } }));
+    const filesCopy = jest.fn(async () => ({
+        data: {
+            id: docId,
+            name: 'From Template',
+            webViewLink: 'https://docs/from-template',
+            mimeType: 'application/vnd.google-apps.document',
+            modifiedTime: '2026-01-01T00:00:00.000Z',
+        },
+    }));
     fakeDrive = {
         files: {
             create: filesCreate,
@@ -104,6 +113,7 @@ async function buildFactory() {
         registerTools: async (server) => {
             registerCreateDocument(server);
             registerCreateFromTemplate(server);
+            registerCopyFile(server);
             registerAppendText(server);
         },
     });
@@ -307,6 +317,29 @@ describe('createDocument seeds post-create read state (#87 gap 2)', () => {
         expect(body.id).toBe(docId);
         expect(body.warnings).toBeDefined();
         expect(body.warnings.some((w) => w.includes(docId))).toBe(true);
+    });
+});
+
+describe('copyFile seeds a copied Google Doc with a complete read snapshot (#87)', () => {
+    it('v2 HTTP: the returned readHandle authorizes an immediate append against the copied revision', async () => {
+        const docId = freshDocId('copydoc-http');
+        const { batchUpdate } = setUpGoogleMocks(docId);
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const copied = await call(handler, 'copyFile', { fileId: 'template-1' });
+            expect(copied.isError).toBeFalsy();
+            expect(copied.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(textOf(copied)).toMatch(/seeded as read/i);
+
+            batchUpdate.mockClear();
+            const write = await call(handler, 'appendText', {
+                documentId: docId, text: 'appended', readHandle: copied.readHandle,
+            });
+            expect(write.isError).toBeFalsy();
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
+            expect(batchUpdate.mock.calls[0][0].requestBody.writeControl).toEqual({ requiredRevisionId: REVISION });
+        } finally { await handler.close(); }
     });
 });
 
