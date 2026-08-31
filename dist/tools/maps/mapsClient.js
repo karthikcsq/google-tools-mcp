@@ -35,6 +35,13 @@ export function redactSecrets(text) {
     return String(redacted).replace(SECRET_QUERY_PARAM_PATTERN, '$1[REDACTED]');
 }
 
+export function mapsApiNameForUrl(url) {
+    if (url.startsWith('https://places.googleapis.com/v1/')) return 'Places API (New)';
+    if (url.startsWith('https://maps.googleapis.com/maps/api/geocode/')) return 'Geocoding API';
+    if (url.startsWith('https://routes.googleapis.com/directions/v2:computeRoutes')) return 'Routes API';
+    return 'the Google Maps Platform API';
+}
+
 export async function mapsFetch(url, options = {}) {
     let response;
     try { response = await fetch(url, options); }
@@ -52,7 +59,14 @@ export async function mapsFetch(url, options = {}) {
     if (!response.ok || apiStatusError) {
         const status = data?.error?.status || data?.status || response.status;
         const message = data?.error?.message || data?.error_message || response.statusText || 'Unknown error';
-        throw new UserError(redactSecrets(`Google Maps API error (${status}): ${message}`));
+        const authorizationFailure = data?.error?.status === 'PERMISSION_DENIED'
+            || data?.status === 'REQUEST_DENIED'
+            || response.status === 403;
+        const displayMessage = authorizationFailure && !/[.!?]$/.test(message) ? `${message}.` : message;
+        const guidance = authorizationFailure
+            ? ` This usually means the ${mapsApiNameForUrl(url)} is not enabled on the Google Cloud project for GOOGLE_MAPS_API_KEY, or the key has API restrictions that exclude it. Enable it at https://console.cloud.google.com/apis/library and check the key's restrictions at https://console.cloud.google.com/apis/credentials. This key is separate from Google OAuth, so other working tools do not confirm it is configured.`
+            : '';
+        throw new UserError(redactSecrets(`Google Maps API error (${status}): ${displayMessage}${guidance}`));
     }
     return data;
 }
