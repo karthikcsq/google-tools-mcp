@@ -33,16 +33,22 @@ function defaultAliasEnvironment() {
 
 describe('MCP SDK v2 compatibility spike', () => {
     it('pins the Phase 1 platform and direct dependency floor', async () => {
-        const [packageJson, lockfile, rootZodManifest] = await Promise.all([
+        const [packageJson, lockfile, rootZodManifest, sdkNodeManifest] = await Promise.all([
             readFile(new URL('../package.json', import.meta.url), 'utf8').then(JSON.parse),
             readFile(new URL('../package-lock.json', import.meta.url), 'utf8').then(JSON.parse),
             readFile(new URL('../node_modules/zod/package.json', import.meta.url), 'utf8').then(JSON.parse),
+            readFile(new URL('../node_modules/@modelcontextprotocol/node/package.json', import.meta.url), 'utf8').then(JSON.parse),
         ]);
 
         expect(packageJson.engines.node).toBe('>=20');
         expect(packageJson.dependencies['@modelcontextprotocol/server']).toBe('2.0.0');
         expect(packageJson.dependencies['@modelcontextprotocol/node']).toBe('2.0.0');
-        expect(packageJson.dependencies.hono).toBe('^4.11.4');
+        // The floor moved from ^4.11.4 to ^4.13.5 in #129: every hono release
+        // through 4.12.33 carries published advisories, so the manifest itself
+        // must not permit one. ^4.13.5 is a strict subset of the SDK's declared
+        // peer range, asserted below, so this tightens the pin without breaking it.
+        expect(packageJson.dependencies.hono).toBe('^4.13.5');
+        expect(sdkNodeManifest.peerDependencies.hono).toBe('^4.11.4');
         expect(packageJson.dependencies.zod).toBe('^4.2.0');
         expect(lockfile.packages[''].dependencies['@modelcontextprotocol/server']).toBe('2.0.0');
         expect(lockfile.packages[''].dependencies['@modelcontextprotocol/node']).toBe('2.0.0');

@@ -136,3 +136,18 @@ deliberately the exception, preserved to detect the upstream fix.
 This phase does not replace FastMCP, modify `dist/index.js`, remove session
 routes, migrate error imports, or create production HTTP/stdio handlers. Those
 changes remain Phase 2 and must use the observed contracts above.
+
+## Amendment, 2026-08-31: Hono floor raised to `^4.13.5`
+
+The manifest request for `hono` moved from `^4.11.4` to `^4.13.5` while clearing the
+production audit findings in #129. Every hono release through 4.12.33 carries published
+advisories, so a manifest floor of `^4.11.4` permitted a resolution that `npm audit` flags,
+even though the lockfile in this repository resolved a patched build.
+
+`@modelcontextprotocol/node@2.0.0` still declares `peerDependencies.hono` as `^4.11.4`.
+`^4.13.5` is a strict subset of that range, so this tightens the floor without changing which
+SDK version is compatible. `tests/mcpSdkV2Compatibility.test.js` asserts both the new floor and
+the SDK's declared peer range, so a future SDK release that narrows its peer range will fail
+loudly rather than resolve to something unintended.
+
+The table above is the record of the original spike and is left as it was on 2026-08-16.
