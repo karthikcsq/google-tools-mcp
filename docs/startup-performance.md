@@ -37,7 +37,7 @@ Four of those five are pure launcher overhead. The setup wizard installs globall
 
 ## Measured numbers
 
-One Windows 11 machine, node v22.22.3, `google-tools-mcp@2.0.0`, warm npm cache. Single machine, so treat the absolute values as illustrative and the ratios as the point.
+One Windows 11 machine, node v22.22.3, warm npm cache. Single machine, so treat the absolute values as illustrative and the ratios as the point. The `npx` and boot figures below predate the #71 dependency swap described further down.
 
 **Client-reported time to connect, via `npx`:**
 
@@ -65,7 +65,28 @@ googleapis: 8403ms   fastmcp: 1683ms   zod: 4ms
 
 These numbers were measured while `fastmcp` was still the runtime. It was removed in the 2026-07-28 migration and replaced by `@modelcontextprotocol/server` + `@modelcontextprotocol/node`, so its ~1.6s line is historical; re-measure with the snippet below before quoting a total. The conclusion is unchanged, because it was never about the MCP framework:
 
-`import('googleapis')` is about 80% of server startup and essentially all of the variance. It is module resolution and evaluation across the umbrella package's 196MB and 1823 files, paid on every launch, warm cache included. Tracked in [issue #71](https://github.com/karthikcsq/google-tools-mcp/issues/71), which proposes swapping to the per-API `@googleapis/*` packages.
+`import('googleapis')` was about 80% of server startup and essentially all of the variance. It was module resolution and evaluation across the umbrella package's 195MB and 1,823 files, paid on every launch, warm cache included.
+
+**This was fixed in [#71](https://github.com/karthikcsq/google-tools-mcp/issues/71).** The umbrella package is gone, replaced by the ten per-API `@googleapis/*` packages the server actually uses. Measured on 2026-08-30, same machine, three runs each:
+
+| | umbrella `googleapis` | the ten scoped packages |
+| --- | --- | --- |
+| installed size | 195 MB | 8.1 MB |
+| file count | 1,823 | 148 |
+| cold `import()` | 1054 / 1112 / 1203 ms | 149 / 139 / 158 ms |
+
+About 24 times smaller, 12 times fewer files, and roughly a second off every launch.
+
+Across the whole install, which is what `npx` actually walks:
+
+| `node_modules` | size | files |
+| --- | --- | --- |
+| with umbrella `googleapis` | 303 MB | 11,591 |
+| with the ten scoped packages | 117 MB | 9,916 |
+
+The file count matters independently of the bytes: `npx` re-resolves and verifies the tree per file on every start, so 1,675 fewer files is paid back on every launch.
+
+The import timings here are much faster than the 6054/8403ms above because those were taken on a colder machine; the ratio is the durable part.
 
 The practical read: after removing `npx`, roughly 8 to 11 seconds of the 30 second budget is gone before the server can answer a handshake, on a machine with nothing else wrong with it. Slow disks, antivirus real-time scanning, or a cold page cache consume the rest of the margin.
 
@@ -132,6 +153,6 @@ Any new top-level import is paid on every launch by every user, against a budget
 ## Related issues
 
 - [#46](https://github.com/karthikcsq/google-tools-mcp/issues/46) — original report of npx losing the race against the 30s timeout
-- [#71](https://github.com/karthikcsq/google-tools-mcp/issues/71) — swap umbrella `googleapis` for per-API `@googleapis/*` packages
+- [#71](https://github.com/karthikcsq/google-tools-mcp/issues/71) — swap umbrella `googleapis` for per-API `@googleapis/*` packages (**done**, see Measured numbers above)
 - [#78](https://github.com/karthikcsq/google-tools-mcp/issues/78) — startup timing is not visible where the README says to look
 - [#80](https://github.com/karthikcsq/google-tools-mcp/issues/80) — setup wizard leaves an existing config on `npx`

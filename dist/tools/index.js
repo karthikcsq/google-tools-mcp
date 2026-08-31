@@ -13,7 +13,9 @@ import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { getLogFilePath, getStructuredLogFilePath, logger, readRecentToolCalls } from '../logger.js';
 import { getPublicErrorMessage, publicError } from '../errors.js';
-import { google } from 'googleapis';
+import { drive as driveApi } from '@googleapis/drive';
+import { gmail as gmailApi } from '@googleapis/gmail';
+import { calendar as calendarApi } from '@googleapis/calendar';
 import { registerLegacyAliases } from './legacyAliases.js';
 
 const REPO = 'karthikcsq/google-tools-mcp';
@@ -343,7 +345,7 @@ export async function registerAllTools(server) {
             if (client && report.auth.status === 'valid') {
                 // Drive
                 try {
-                    const drive = google.drive({ version: 'v3', auth: client });
+                    const drive = driveApi({ version: 'v3', auth: client });
                     const res = await drive.about.get({ fields: 'user' });
                     report.services.drive = { status: 'ok', account: res.data.user?.emailAddress || 'unknown' };
                 } catch (err) {
@@ -352,7 +354,7 @@ export async function registerAllTools(server) {
 
                 // Gmail
                 try {
-                    const gmail = google.gmail({ version: 'v1', auth: client });
+                    const gmail = gmailApi({ version: 'v1', auth: client });
                     const res = await gmail.users.getProfile({ userId: 'me' });
                     report.services.gmail = { status: 'ok', email: res.data.emailAddress || 'unknown' };
                 } catch (err) {
@@ -361,7 +363,7 @@ export async function registerAllTools(server) {
 
                 // Calendar
                 try {
-                    const calendar = google.calendar({ version: 'v3', auth: client });
+                    const calendar = calendarApi({ version: 'v3', auth: client });
                     await calendar.calendarList.list({ maxResults: 1 });
                     report.services.calendar = { status: 'ok' };
                 } catch (err) {

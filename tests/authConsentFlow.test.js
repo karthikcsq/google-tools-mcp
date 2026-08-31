@@ -6,7 +6,7 @@
 // This exercises the real interactive OAuth flow in dist/auth.js end to end:
 // a real localhost HTTP server is started (as the real flow does) and driven
 // with a real HTTP GET to its callback URL, mirroring the browser redirect.
-// Only 'googleapis' (network calls), 'google-auth-library', 'child_process'
+// Only 'google-auth-library' (network calls and the OAuth2 client), 'child_process'
 // (browser opener), and 'fs/promises' (credential persistence) are mocked,
 // the same boundary legacyAliasAuthRetry.test.js uses for the equivalent
 // production auth-retry path.
@@ -72,11 +72,13 @@ class MockOAuth2 {
     }
 }
 
-jest.unstable_mockModule('googleapis', () => ({
-    google: { auth: { OAuth2: MockOAuth2 } },
-}));
+// auth.js takes OAuth2Client straight from google-auth-library now that the
+// umbrella googleapis package is gone (#71), so the OAuth2 stand-in belongs in
+// this factory. A module gets exactly one factory, and every name the code
+// under test imports from it has to be present or the suite fails to link.
 jest.unstable_mockModule('google-auth-library', () => ({
     JWT: class {},
+    OAuth2Client: MockOAuth2,
 }));
 
 const authModule = await import('../dist/auth.js');

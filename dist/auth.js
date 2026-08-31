@@ -1,8 +1,10 @@
 // Combined auth for google-tools-mcp.
 // Merges GDrive + Gmail scopes into a single OAuth flow.
 // Config dir: ~/.config/google-tools-mcp/ (with GOOGLE_MCP_PROFILE subdirs).
-import { google } from 'googleapis';
-import { JWT } from 'google-auth-library';
+// `google.auth.OAuth2` was only ever OAuth2Client re-exported from
+// google-auth-library, which is already a direct dependency, so this file needs
+// no scoped API package at all (#71).
+import { JWT, OAuth2Client } from 'google-auth-library';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -153,7 +155,7 @@ async function loadSavedCredentialsIfExist() {
         }
 
         const { client_secret, client_id } = await loadClientSecrets();
-        const client = new google.auth.OAuth2(client_id, client_secret);
+        const client = new OAuth2Client(client_id, client_secret);
         client.setCredentials(credentials);
         return client;
     } catch {
@@ -220,7 +222,7 @@ async function authenticate() {
     await new Promise((resolve) => server.listen(requestedPort, 'localhost', resolve));
     const port = server.address().port;
     const redirectUri = `http://localhost:${port}`;
-    const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
+    const oAuth2Client = new OAuth2Client(client_id, client_secret, redirectUri);
     const authorizeUrl = oAuth2Client.generateAuthUrl({
         access_type: 'offline',
         scope: SCOPES.join(' '),

@@ -1,6 +1,17 @@
 // Combined clients for google-tools-mcp.
 // Lazy-loads all Google API clients (Docs, Drive, Sheets, Script, Gmail) on first use.
-import { google } from 'googleapis';
+// Each API comes from its own @googleapis/* package rather than the umbrella
+// `googleapis`, which ships every Google API and costs ~195MB / 1,823 files and
+// about a second of import time per launch for the nine we actually use (#71).
+import { docs } from '@googleapis/docs';
+import { drive } from '@googleapis/drive';
+import { sheets } from '@googleapis/sheets';
+import { script } from '@googleapis/script';
+import { gmail } from '@googleapis/gmail';
+import { calendar } from '@googleapis/calendar';
+import { forms } from '@googleapis/forms';
+import { slides } from '@googleapis/slides';
+import { tasks } from '@googleapis/tasks';
 import { publicError, isPublicError, wrapOperationError } from './errors.js';
 import { authorize } from './auth.js';
 import { logger } from './logger.js';
@@ -176,10 +187,10 @@ export async function initializeGoogleClient() {
     if (googleDocs && googleDrive && googleSheets)
         return { authClient, googleDocs, googleDrive, googleSheets, googleScript };
     await ensureAuth();
-    if (!googleDocs) googleDocs = google.docs({ version: 'v1', auth: authClient });
-    if (!googleDrive) googleDrive = google.drive({ version: 'v3', auth: authClient });
-    if (!googleSheets) googleSheets = google.sheets({ version: 'v4', auth: authClient });
-    if (!googleScript) googleScript = google.script({ version: 'v1', auth: authClient });
+    if (!googleDocs) googleDocs = docs({ version: 'v1', auth: authClient });
+    if (!googleDrive) googleDrive = drive({ version: 'v3', auth: authClient });
+    if (!googleSheets) googleSheets = sheets({ version: 'v4', auth: authClient });
+    if (!googleScript) googleScript = script({ version: 'v1', auth: authClient });
     return { authClient, googleDocs, googleDrive, googleSheets, googleScript };
 }
 
@@ -187,7 +198,7 @@ export async function initializeGoogleClient() {
 export async function initializeGmailClient() {
     if (gmailClient) return { authClient, gmailClient };
     await ensureAuth();
-    if (!gmailClient) gmailClient = google.gmail({ version: 'v1', auth: authClient });
+    if (!gmailClient) gmailClient = gmail({ version: 'v1', auth: authClient });
     return { authClient, gmailClient };
 }
 
@@ -195,7 +206,7 @@ export async function initializeGmailClient() {
 export async function initializeCalendarClient() {
     if (calendarClient) return { authClient, calendarClient };
     await ensureAuth();
-    if (!calendarClient) calendarClient = google.calendar({ version: 'v3', auth: authClient });
+    if (!calendarClient) calendarClient = calendar({ version: 'v3', auth: authClient });
     return { authClient, calendarClient };
 }
 
@@ -203,7 +214,7 @@ export async function initializeCalendarClient() {
 export async function initializeFormsClient() {
     if (formsClient) return { authClient, formsClient };
     await ensureAuth();
-    if (!formsClient) formsClient = google.forms({ version: 'v1', auth: authClient });
+    if (!formsClient) formsClient = forms({ version: 'v1', auth: authClient });
     return { authClient, formsClient };
 }
 
@@ -211,7 +222,7 @@ export async function initializeFormsClient() {
 export async function initializeSlidesClient() {
     if (slidesClient) return { authClient, slidesClient };
     await ensureAuth();
-    if (!slidesClient) slidesClient = google.slides({ version: 'v1', auth: authClient });
+    if (!slidesClient) slidesClient = slides({ version: 'v1', auth: authClient });
     return { authClient, slidesClient };
 }
 
@@ -328,7 +339,7 @@ export async function getSlidesClient() {
 export async function initializeTasksClient() {
     if (tasksClient) return { authClient, tasksClient };
     await ensureAuth();
-    if (!tasksClient) tasksClient = google.tasks({ version: 'v1', auth: authClient });
+    if (!tasksClient) tasksClient = tasks({ version: 'v1', auth: authClient });
     return { authClient, tasksClient };
 }
 

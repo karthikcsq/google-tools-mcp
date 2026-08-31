@@ -32,20 +32,20 @@ jest.unstable_mockModule('../dist/auth.js', () => ({
     SCOPES: ['https://www.googleapis.com/auth/gmail.settings.basic'],
 }));
 
-jest.unstable_mockModule('googleapis', () => ({
-    google: {
-        gmail: () => ({ users: { settings: { getImap: (...args) => getImapImpl(...args) } } }),
-        drive: () => ({}),
-        docs: () => ({}),
-        sheets: () => ({}),
-        calendar: () => ({}),
-        forms: () => ({}),
-        slides: () => ({}),
-        tasks: () => ({}),
-        script: () => ({}),
-        auth: { OAuth2: function OAuth2() { this.setCredentials = () => {}; this.on = () => {}; } },
-    },
+// One factory per @googleapis/* package now that the umbrella is gone (#71).
+// dist/auth.js is fully mocked above, so nothing in this graph reaches
+// google-auth-library and the old google.auth.OAuth2 stub has no caller left.
+jest.unstable_mockModule('@googleapis/gmail', () => ({
+    gmail: () => ({ users: { settings: { getImap: (...args) => getImapImpl(...args) } } }),
 }));
+jest.unstable_mockModule('@googleapis/drive', () => ({ drive: () => ({}) }));
+jest.unstable_mockModule('@googleapis/docs', () => ({ docs: () => ({}) }));
+jest.unstable_mockModule('@googleapis/sheets', () => ({ sheets: () => ({}) }));
+jest.unstable_mockModule('@googleapis/calendar', () => ({ calendar: () => ({}) }));
+jest.unstable_mockModule('@googleapis/forms', () => ({ forms: () => ({}) }));
+jest.unstable_mockModule('@googleapis/slides', () => ({ slides: () => ({}) }));
+jest.unstable_mockModule('@googleapis/tasks', () => ({ tasks: () => ({}) }));
+jest.unstable_mockModule('@googleapis/script', () => ({ script: () => ({}) }));
 
 function invalidGrantError() {
     const err = new Error('invalid_grant: Token has been expired or revoked.');
