@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { UserError } from '../dist/errors.js';
+import { mapsApiNameForUrl, mapsFetch } from '../dist/tools/maps/mapsClient.js';
 
 function createMockServer() {
     const tools = new Map();
@@ -24,6 +25,77 @@ afterEach(() => {
 });
 
 describe('Maps tools', () => {
+    it.each([
+        ['https://places.googleapis.com/v1/places:searchText', 'Places API (New)'],
+        ['https://maps.googleapis.com/maps/api/geocode/json?address=123+Main', 'Geocoding API'],
+        ['https://routes.googleapis.com/directions/v2:computeRoutes', 'Routes API'],
+        ['https://example.com/unknown', 'the Google Maps Platform API'],
+    ])('names the Maps API for %s', (url, apiName) => {
+        expect(mapsApiNameForUrl(url)).toBe(apiName);
+    });
+
+    it('guides a Places API (New) permission denial without dropping its status', async () => {
+        global.fetch = jest.fn().mockResolvedValue(response(
+            { error: { status: 'PERMISSION_DENIED', message: 'API not enabled' } },
+            { ok: false, status: 403, statusText: 'Forbidden' },
+        ));
+        await expect(mapsFetch('https://places.googleapis.com/v1/places:searchText')).rejects.toThrow(
+            'Google Maps API error (PERMISSION_DENIED): API not enabled. This usually means the Places API (New) is not enabled on the Google Cloud project for GOOGLE_MAPS_API_KEY, or the key has API restrictions that exclude it. Enable it at https://console.cloud.google.com/apis/library and check the key\'s restrictions at https://console.cloud.google.com/apis/credentials. This key is separate from Google OAuth, so other working tools do not confirm it is configured.',
+        );
+    });
+
+    it('guides a legacy Geocoding API request denial', async () => {
+        global.fetch = jest.fn().mockResolvedValue(response(
+            { status: 'REQUEST_DENIED', error_message: 'API key is not authorized' },
+            { ok: false, status: 403, statusText: 'Forbidden' },
+        ));
+        await expect(mapsFetch('https://maps.googleapis.com/maps/api/geocode/json?address=123+Main')).rejects.toThrow(
+            'Google Maps API error (REQUEST_DENIED): API key is not authorized. This usually means the Geocoding API is not enabled on the Google Cloud project for GOOGLE_MAPS_API_KEY, or the key has API restrictions that exclude it. Enable it at https://console.cloud.google.com/apis/library and check the key\'s restrictions at https://console.cloud.google.com/apis/credentials. This key is separate from Google OAuth, so other working tools do not confirm it is configured.',
+        );
+    });
+
+    it('guides a bare Routes API HTTP 403', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: false,
+            status: 403,
+            statusText: 'Forbidden',
+            json: jest.fn().mockRejectedValue(new SyntaxError('Unexpected end of JSON input')),
+        });
+        await expect(mapsFetch('https://routes.googleapis.com/directions/v2:computeRoutes')).rejects.toThrow(
+            'Google Maps API error (403): Forbidden. This usually means the Routes API is not enabled on the Google Cloud project for GOOGLE_MAPS_API_KEY, or the key has API restrictions that exclude it. Enable it at https://console.cloud.google.com/apis/library and check the key\'s restrictions at https://console.cloud.google.com/apis/credentials. This key is separate from Google OAuth, so other working tools do not confirm it is configured.',
+        );
+    });
+
+    it('keeps non-authorization API errors byte-identical to main', async () => {
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce(response(
+                { status: 'OVER_QUERY_LIMIT', error_message: 'Daily quota exceeded' },
+                { ok: false, status: 429, statusText: 'Too Many Requests' },
+            ))
+            .mockResolvedValueOnce(response(null, { ok: false, status: 500, statusText: 'Internal Server Error' }));
+        await expect(mapsFetch('https://places.googleapis.com/v1/places:searchText')).rejects.toThrow(
+            'Google Maps API error (OVER_QUERY_LIMIT): Daily quota exceeded',
+        );
+        await expect(mapsFetch('https://places.googleapis.com/v1/places:searchText')).rejects.toThrow(
+            'Google Maps API error (500): Internal Server Error',
+        );
+    });
+
+    it('redacts a key query parameter in a permission denial', async () => {
+        global.fetch = jest.fn().mockResolvedValue(response(
+            { error: { status: 'PERMISSION_DENIED', message: 'Failed URL https://places.googleapis.com/v1/places?key=test-key' } },
+            { ok: false, status: 403, statusText: 'Forbidden' },
+        ));
+        let thrown;
+        try {
+            await mapsFetch('https://places.googleapis.com/v1/places?key=test-key');
+        } catch (error) {
+            thrown = error;
+        }
+        expect(thrown.message).toContain('[REDACTED]');
+        expect(thrown.message).not.toContain('key=test-key');
+    });
+
     it('sends the API key and a narrow Places field mask', async () => {
         process.env.GOOGLE_MAPS_API_KEY = 'test-key';
         global.fetch = jest.fn().mockResolvedValue(response({ places: [] }));
