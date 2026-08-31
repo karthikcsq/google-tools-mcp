@@ -8,6 +8,15 @@ import { readFile } from 'node:fs/promises';
 import * as facade from '../dist/mcpServer.js';
 import { createV2HttpHandler, prepareMcpServerFactory, startV2HttpServer, startV2Stdio, MCP_PROTOCOL_VERSION } from '../dist/mcpServer.js';
 import { publicError, redactDiagnostic, registerSecret } from '../dist/errors.js';
+import { createRequire } from 'node:module';
+
+// serverInfo.version comes from package.json, so pinning a literal here means
+// every release breaks this suite and gets "fixed" by editing the number, which
+// tests nothing. Compare against the manifest instead, and assert separately
+// that it is a real version so a wiring break reporting undefined still fails.
+const PACKAGE_VERSION = createRequire(import.meta.url)('../package.json').version;
+const SERVER_INFO = { name: 'google-tools-mcp', version: PACKAGE_VERSION };
+
 import { getRequestContext } from '../dist/requestContext.js';
 
 const TOKEN = 'facade-test-token-that-must-never-reach-a-client';
@@ -71,6 +80,13 @@ function stdioMessages(output) {
 }
 
 describe('official SDK v2 facade', () => {
+    // Guards the comparisons below from going vacuous. They check serverInfo
+    // against package.json rather than a pinned literal, which would silently
+    // pass if both sides were undefined.
+    it('reports a real package version, so the serverInfo comparisons mean something', () => {
+        expect(PACKAGE_VERSION).toMatch(/^\d+\.\d+\.\d+(?:[-+].+)?$/);
+    });
+
     it('registers the current 160-tool catalog through the production facade', async () => {
         const factory = await prepareMcpServerFactory({ registerTools: registerAllTools });
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
@@ -91,7 +107,7 @@ describe('official SDK v2 facade', () => {
             const discover = await (await handler.fetch(modern('server/discover'))).json();
             expect(discover.result.capabilities.tools.listChanged).toBe(false);
             expect(discover.result.instructions).toContain('Google Workspace tools');
-            expect(discover.result._meta['io.modelcontextprotocol/serverInfo']).toEqual({ name: 'google-tools-mcp', version: '2.0.0' });
+            expect(discover.result._meta['io.modelcontextprotocol/serverInfo']).toEqual(SERVER_INFO);
             expect(discover.result.cacheScope).toBe('private');
             const list = await (await handler.fetch(modern('tools/list'))).json();
             expect(list.result.tools.map((tool) => tool.name)).toEqual(['alpha', 'zeta']);
@@ -110,7 +126,7 @@ describe('official SDK v2 facade', () => {
             expect(elapsedMs).toBeLessThan(2000);
             expect(discover.result.supportedVersions).toContain(MCP_PROTOCOL_VERSION);
             expect(discover.result.capabilities.tools.listChanged).toBe(false);
-            expect(discover.result._meta['io.modelcontextprotocol/serverInfo']).toEqual({ name: 'google-tools-mcp', version: '2.0.0' });
+            expect(discover.result._meta['io.modelcontextprotocol/serverInfo']).toEqual(SERVER_INFO);
             expect(discover.result.instructions).toContain('Google Workspace tools');
         } finally { await handler.close(); }
     });
@@ -566,7 +582,7 @@ describe('official SDK v2 facade', () => {
         const send = (id, method, params = {}) => input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params: { ...params, _meta: meta } })}\n`);
         try {
             send(1, 'server/discover');
-            expect((await next()).result._meta['io.modelcontextprotocol/serverInfo'].version).toBe('2.0.0');
+            expect((await next()).result._meta['io.modelcontextprotocol/serverInfo'].version).toBe(PACKAGE_VERSION);
             send(2, 'tools/list');
             expect((await next()).result.tools.map(({ name }) => name)).toEqual(['echo']);
             send(3, 'tools/call', { name: 'echo', arguments: { text: 'wire' } });

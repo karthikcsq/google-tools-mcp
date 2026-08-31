@@ -11,6 +11,13 @@ import { getHttpServiceStatus, resolveHttpServiceConfig, restartHttpService, sta
 import { ensureHttpToken, publishHttpState, readHttpState } from '../dist/httpState.js';
 import { prepareMcpServerFactory, startV2HttpServer } from '../dist/mcpServer.js';
 
+import { createRequire } from 'node:module';
+
+// These fixtures stand in for "the version this server reports", which comes
+// from package.json. Pinning a literal meant every release broke these suites
+// and got "fixed" by editing the number, so read the manifest instead.
+const PACKAGE_VERSION = createRequire(import.meta.url)('../package.json').version;
+
 jest.setTimeout(60_000);
 const execFileAsync = promisify(execFile);
 const ENTRYPOINT = fileURLToPath(new URL('../dist/index.js', import.meta.url));
@@ -40,7 +47,7 @@ async function testRuntime(configDir, profile = 'default') {
     const port = runtime.server.address().port;
     await publishHttpState({
         pid: process.pid, port, host: '127.0.0.1', endpoint: '/mcp', profile,
-        version: '2.0.0', startedAt: new Date().toISOString(),
+        version: PACKAGE_VERSION, startedAt: new Date().toISOString(),
     }, { configDir });
     return { runtime, token: tokenInfo.token, port };
 }
@@ -64,7 +71,7 @@ describe('shared HTTP lifecycle operations', () => {
             const report = await getHttpServiceStatus({ configDir, env: {}, fetchImpl });
             expect(report).toMatchObject({
                 healthy: true,
-                identity: { name: 'google-tools-mcp', version: '2.0.0' },
+                identity: { name: 'google-tools-mcp', version: PACKAGE_VERSION },
                 health: { ok: true },
                 tokenSource: 'file',
             });
@@ -290,7 +297,7 @@ describe('shared HTTP lifecycle operations', () => {
         const configDir = await tempConfig();
         await publishHttpState({
             pid: 999999, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default',
-            version: '2.0.0', startedAt: new Date().toISOString(),
+            version: PACKAGE_VERSION, startedAt: new Date().toISOString(),
         }, { configDir });
         try {
             const result = await stopHttpService({
@@ -303,7 +310,7 @@ describe('shared HTTP lifecycle operations', () => {
 
     it('never signals a live foreign or unauthenticated pid', async () => {
         const configDir = await tempConfig();
-        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: '2.0.0', startedAt: new Date().toISOString() }, { configDir });
+        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: PACKAGE_VERSION, startedAt: new Date().toISOString() }, { configDir });
         const kill = jest.fn((pid, signal) => { if (signal === 0) return true; });
         const fetchImpl = async () => new Response('', { status: 401 });
         try { await expect(stopHttpService({ configDir, kill, fetchImpl, env: {} })).resolves.toMatchObject({ status: 'foreign-or-unverified' });
@@ -319,7 +326,7 @@ describe('shared HTTP lifecycle operations', () => {
         // 'unreachable-or-unauthorized'). That is a rotation, not a foreign
         // process, and must not delete the only record of how to stop it.
         const configDir = await tempConfig();
-        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: '2.0.0', startedAt: new Date().toISOString(), noAuth: false }, { configDir });
+        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: PACKAGE_VERSION, startedAt: new Date().toISOString(), noAuth: false }, { configDir });
         const kill = jest.fn((pid, signal) => { if (signal === 0) return true; });
         const fetchImpl = async () => new Response('', { status: 401 });
         try {
@@ -332,7 +339,7 @@ describe('shared HTTP lifecycle operations', () => {
 
     it('does not spawn a replacement process on restart when the previous stop could not be confirmed', async () => {
         const configDir = await tempConfig();
-        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: '2.0.0', startedAt: new Date().toISOString(), noAuth: false }, { configDir });
+        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: PACKAGE_VERSION, startedAt: new Date().toISOString(), noAuth: false }, { configDir });
         const kill = jest.fn((pid, signal) => { if (signal === 0) return true; });
         const fetchImpl = async () => new Response('', { status: 401 });
         const spawnImpl = jest.fn();
@@ -351,7 +358,7 @@ describe('shared HTTP lifecycle operations', () => {
         const xdgRoot = await tempConfig();
         const configDir = path.join(xdgRoot, 'google-tools-mcp');
         await fs.mkdir(configDir, { recursive: true });
-        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: '2.0.0', startedAt: new Date().toISOString() }, { configDir });
+        await publishHttpState({ pid: process.pid, port: 3939, host: '127.0.0.1', endpoint: '/mcp', profile: 'default', version: PACKAGE_VERSION, startedAt: new Date().toISOString() }, { configDir });
         const env = { ...process.env, CI: 'true', XDG_CONFIG_HOME: xdgRoot, GOOGLE_MCP_TRANSPORT: undefined, GOOGLE_MCP_HTTP_TOKEN: undefined };
         try {
             await expect(execFileAsync(process.execPath, [ENTRYPOINT, 'stop', '--json'], { env, timeout: 40_000 }))
@@ -377,7 +384,7 @@ describe('shared HTTP lifecycle operations', () => {
         const port = runtime.server.address().port;
         await publishHttpState({
             pid: process.pid, port, host: '127.0.0.1', endpoint: '/mcp', profile: 'default',
-            version: '2.0.0', startedAt: new Date().toISOString(), noAuth: true,
+            version: PACKAGE_VERSION, startedAt: new Date().toISOString(), noAuth: true,
         }, { configDir });
         const spawnImpl = jest.fn();
         try {
@@ -420,7 +427,7 @@ describe('shared HTTP lifecycle operations', () => {
         const port = runtime.server.address().port;
         await publishHttpState({
             pid: process.pid, port, host: '127.0.0.1', endpoint: '/mcp', profile: 'default',
-            version: '2.0.0', startedAt: new Date().toISOString(), noAuth: false, allowedOrigins: ['https://old.example'],
+            version: PACKAGE_VERSION, startedAt: new Date().toISOString(), noAuth: false, allowedOrigins: ['https://old.example'],
         }, { configDir });
         const spawnImpl = jest.fn();
         try {
