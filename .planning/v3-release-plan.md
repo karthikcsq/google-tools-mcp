@@ -474,3 +474,71 @@ the mock-factory class (suites fail to load, `Tests:` line looks fine), differen
 2. **#50** — Elliot must add a required reviewer on the npm-publish environment. Admin-only, blocks
    tagging.
 3. Release prep — version bump to 3.0.0, changelog, docs sweep, RELEASING.md, tag.
+
+## 3.0.0 is on main, one admin click from shipping — 2026-08-31
+
+`main` at `e99c37d`, `package.json` at `3.0.0`, zero open PRs.
+
+| PR | What | Merge commit |
+|---|---|---|
+| #131 | #71 scoped `@googleapis/*` swap | `5608726` |
+| #132 | 3.0.0 bump, changelog, publish gate | `e99c37d` |
+
+### #71
+
+Codex hit its usage limit twice, so I did this one directly. The first run was
+also blocked by a briefing error of mine: I wrote "deps are already installed"
+meaning the existing tree, while `constraints.md` flatly claimed no network on a
+sandbox I had launched *with* network access. The agent refused to fabricate a
+lockfile, which was correct. `constraints.md` now makes the launching brief
+authoritative and cites that refusal as the right behaviour.
+
+Measured, three runs each: 195 MB / 1,823 files -> 8.1 MB / 148. Whole
+`node_modules` 303 MB / 11,591 files -> 117 MB / 9,916. Cold import ~1,120 ms ->
+~149 ms. These differ from the issue's figures (five packages on a colder
+machine); the ratio is better than predicted.
+
+Only five runtime files actually imported `googleapis`; the rest of the grep hits
+were scope URLs and comments. `auth.js` and `setupInspect.js` dropped the
+dependency entirely because `google.auth.OAuth2` was only ever `OAuth2Client`
+re-exported from `google-auth-library`.
+
+Verified with `npm ci` from the regenerated lockfile, not just an incremental
+install, plus **22/22 live scenarios against real Google**. Every unit test mocks
+the API clients, so the live run is the only thing that proved the scoped
+packages work rather than merely construct.
+
+### #132
+
+The changelog cited 11 issues; 28 had shipped. Confirmed the missing ones were
+not covered by unnumbered prose either. Added all 19, plus refs for #75 and #88,
+plus a **Security** section the changelog did not have, for #114 (shell injection
+through a `feedback` issue title), #125 (browser-open shell strings), and #115
+(re-auth succeeding without replacing the refresh token).
+
+The bump broke `npm run test:ci` — the exact command the publish workflow runs —
+because three suites pinned `serverInfo` to the literal `'2.0.0'`. They read
+`package.json` now, with a new test asserting it is real semver so the comparison
+cannot pass on two `undefined`s.
+
+### The #50 gate is armed
+
+`environment: npm-publish` looks like an approval gate whether or not one exists,
+because GitHub creates a referenced environment on demand with no protection
+rules. The `validate` job now asks the API and fails if `required_reviewers` is
+absent. It is in the **ungated** job deliberately: a check inside the gated job
+cannot catch a missing gate. An unreadable API is failure, not a pass.
+
+The environment still reads `{"rules": []}`, so the guard is armed and any
+`v3.0.0` tag will fail in seconds until it is configured.
+
+### Left to ship
+
+1. **Elliot, required:** Settings -> Environments -> npm-publish -> Required
+   reviewers -> add himself. Admin-only; my token is `admin: false`.
+2. **Elliot, verify:** the npm trusted publisher matches `karthikcsq` /
+   `google-tools-mcp` / `publish.yml` / `npm-publish` / `npm publish`.
+3. Then tag: `git tag v3.0.0 && git push origin v3.0.0`, approve the run, and
+   follow RELEASING.md's post-release tarball check.
+
+Still open and out of scope for 3.0.0: #128, #129, #130, #87.
