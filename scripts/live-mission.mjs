@@ -34,48 +34,37 @@ import { pathToFileURL } from 'node:url';
 
 import { bootstrap, REPO_ROOT, RESULTS_DIR } from './live-smoke/bootstrap.mjs';
 import { createContext, AssertionFailure, ScenarioSkipped } from './live-smoke/context.mjs';
+import { classifyCreation } from './live-smoke/createdResource.mjs';
 
 const LIVE_DIR = path.join(REPO_ROOT, 'live');
-
-// Tools whose successful result names a resource this runner must clean up.
-//
-// Checked-in live/ scenarios call ctx.track() by hand, which is fine because a
-// human reviewed them. A mission is written by an agent chasing a goal, and
-// "remember to register every file you create for cleanup" is exactly the kind
-// of bookkeeping an agent drops. Forgetting it leaks real files into a real
-// Drive, so the runner does it automatically instead of trusting the mission.
-// Kept in sync with the same map in scripts/live-smoke/call.mjs.
-const CREATING_TOOLS = new Map([
-    ['createDocument', 'drive'],
-    ['createFolder', 'drive'],
-    ['createDocumentFromTemplate', 'drive'],
-    ['createSpreadsheet', 'drive'],
-    ['createPresentation', 'drive'],
-    ['copyFile', 'drive'],
-    ['uploadFile', 'drive'],
-    ['createDraft', 'draft'],
-]);
 
 /**
  * Wrap ctx.call / ctx.tryCall so any successful creating-tool call registers
  * its new resource for cleanup, whether or not the mission remembered to.
+ *
+ * Checked-in live/ scenarios call ctx.track() by hand, which is fine because a
+ * human reviewed them. A mission is written by an agent chasing a goal, and
+ * "remember to register every file you create for cleanup" is exactly the kind
+ * of bookkeeping an agent drops. Forgetting it leaks real files into a real
+ * Drive, so the runner does it automatically instead of trusting the mission.
+ *
+ * `untracked` collects any creating call whose id could not be found. That has
+ * to be loud: a silent skip is how the runner came to print "cleanup 5/5" for a
+ * run that had actually left a presentation behind, because it only ever
+ * counted the resources it managed to notice.
  */
-function autoTrackCreations(ctx, registry) {
+function autoTrackCreations(ctx, registry, untracked) {
     const seen = new Set(registry.map((item) => item.id));
     const register = (toolName, result) => {
-        const kind = CREATING_TOOLS.get(toolName);
-        if (!kind) return;
-        let id;
-        try {
-            id = JSON.parse(typeof result === 'string' ? result : JSON.stringify(result))?.id;
-        } catch {
-            // Not every creating tool returns JSON; a tool that does not name an
-            // id cannot be auto-tracked, and the mission must track it by hand.
+        const creation = classifyCreation(toolName, result);
+        if (!creation) return;
+        if (!creation.id) {
+            untracked.push({ tool: toolName, preview: String(result ?? '').replace(/\s+/g, ' ').slice(0, 160) });
             return;
         }
-        if (typeof id !== 'string' || !id || seen.has(id)) return;
-        seen.add(id);
-        ctx.track(id, kind);
+        if (seen.has(creation.id)) return;
+        seen.add(creation.id);
+        ctx.track(creation.id, creation.kind);
     };
 
     const innerCall = ctx.call;
@@ -211,6 +200,10 @@ async function main() {
     const registry = [];
     const notes = [];
     const frictions = [];
+    // Creating calls that succeeded but whose id the runner could not find.
+    // Each one is something real, sitting in the sandbox, that cleanup will
+    // never reach.
+    const untracked = [];
 
     const ctx = createContext({
         scenario: { name: missionName },
@@ -227,7 +220,7 @@ async function main() {
         frictions.push({ tool: String(tool), text: String(text) });
         journal.write({ kind: 'mission-friction', mission: missionName, tool: String(tool), text: String(text) });
     };
-    autoTrackCreations(ctx, registry);
+    autoTrackCreations(ctx, registry, untracked);
 
     journal.progress(`\n  mission    ${missionName}`);
     if (mission.goal) journal.progress(`  goal       ${mission.goal}`);
@@ -283,6 +276,7 @@ async function main() {
         notes,
         frictions,
         cleanup,
+        untracked,
         journalFile: path.relative(REPO_ROOT, journal.file),
         calls,
     };
@@ -320,15 +314,39 @@ async function main() {
     line('');
     line(`  cleanup     ${cleanup.skipped ? 'skipped (--keep)' : `${cleanup.cleaned}/${cleanup.attempted} trashed`}`);
     for (const f of cleanup.failures) line(`    LEFT BEHIND ${f.kind} ${f.id}: ${f.reason}`);
+    // Printed next to the cleanup count on purpose: without it, that count is a
+    // ratio of the resources the runner happened to recognize, and reads as a
+    // clean sandbox no matter how many it missed.
+    for (const u of untracked) {
+        line(`    UNTRACKED ${u.tool} succeeded but named no id the runner could parse: ${u.preview}`);
+    }
     line(`  report      ${path.relative(REPO_ROOT, reportFile)}`);
     line('');
 
     // A mission that failed is a finding, not a runner error. The runner only
     // exits non-zero when it could not do its own job: a safety refusal, a
     // stdout leak from the tool code path, or cleanup leaving something behind.
-    const runnerFailed = report.totals.safetyRefusals > 0
+    //
+    // `expectsSafetyRefusals` is the one exception, and it is opt-in per
+    // mission and exact. Some boundaries are enforced only by the guard --
+    // Slides creation lands in Drive root whatever parent you give it, so
+    // guard.mjs denies it outright -- and the only way to prove such a deny
+    // still holds is to trip it on purpose. A mission that declares how many it
+    // expects gets exactly that many forgiven; one more than it declared is
+    // still a failure, so this cannot be used to wave refusals through.
+    const expected = Number(mission.expectsSafetyRefusals ?? 0);
+    const unexpectedRefusals = report.totals.safetyRefusals - (Number.isFinite(expected) ? expected : 0);
+    if (expected > 0) {
+        line(`  NOTE        mission declared ${expected} expected safety refusal(s); saw ${report.totals.safetyRefusals}`);
+        line('');
+    }
+    const runnerFailed = unexpectedRefusals !== 0
         || journal.stdoutLeaks > 0
-        || cleanup.failures.length > 0;
+        || cleanup.failures.length > 0
+        // An untracked creation is the same class of failure as a cleanup
+        // failure -- something real is still in the sandbox -- and it is worse,
+        // because nothing else in the report would ever mention it.
+        || untracked.length > 0;
     return runnerFailed ? 1 : 0;
 }
 

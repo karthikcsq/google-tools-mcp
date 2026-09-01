@@ -11,11 +11,17 @@ can take, then a tag, then publish. Delete this file once 3.0.0 is published.
 
 ## Where things stand
 
-`main` = `a9b68f8` (Merge pull request #139). Working tree clean, `main...origin/main` = `0 0`.
+`main` = `73ca178`. **One PR is open and must land before the tag:**
+[#140](https://github.com/karthikcsq/google-tools-mcp/pull/140), six fixes from the pre-tag
+adversarial review (OAuth port hang, OAuth `state` + PKCE, `/healthz` after close, auth
+concurrency latch, the live-harness cleanup and coverage gaps, three code/doc contradictions).
+A seventh claim in that review — that `publish.yml` needs `actions: read` — was **disproven**:
+the repo is public and the environments endpoint reads unauthenticated, so the workflow is
+correct as written. Do not add that permission on the strength of the review.
 
 | Gate | State |
 | --- | --- |
-| `npm test` | 92 suites, 1329 passed, 2 skipped |
+| `npm test` | 94 suites, 1350 passed, 2 skipped |
 | `npm audit --omit=dev` | 0 vulnerabilities |
 | `package.json` version | 3.0.0 |
 | CHANGELOG 3.0.0 section | complete, incl. #129 dependency security work |
@@ -41,14 +47,17 @@ Non-empty means Elliot has done it.
 Run in this order. Do not tag until every one is green.
 
 1. `git fetch origin && git status --short && git rev-list --left-right --count main...origin/main` → clean, `0 0`
-2. `npm ci` then `npm test` → 92 suites green. The `Test Suites:` line is authoritative, never `Tests:` alone.
+2. `npm ci` then `npm test` → 94 suites green. The `Test Suites:` line is authoritative, never `Tests:` alone.
 3. `npm audit --omit=dev` → 0 vulnerabilities
 4. `npm pack --dry-run` → confirm the tarball matches `files: ["dist", "!dist/**/*.test.js"]`; no
    `.husky`, no `live/`, no `scripts/live-*`, no `.planning`, no `tests/`
 5. `node -p "require('./package.json').version"` → `3.0.0`
 6. `npm run live-mission -- live/missions/agent-loop-2-fixes.mjs` → PASS, 0 frictions, cleanup 5/5
+   and `npm run live-mission -- live/missions/verify-created-resource-tracking.mjs` → PASS,
+   cleanup 2/2, exit 0. Then confirm the sandbox folder is empty:
+   `npm run live-call -- listFolderContents folderId=15m5wq1pA8Mn0ETxIaLdN0kaUFwnrfzHN`
 7. `npm run live-coverage` → runs, exits 0 (non-zero means a scenario calls a tool that no
-   longer exists)
+   longer exists). Expect 28 covered / 132 not covered / 2 blocked by design.
 8. Confirm #50 is set (command above)
 
 Then: tag `v3.0.0`, push the tag, Elliot approves the environment gate, publish runs, and the

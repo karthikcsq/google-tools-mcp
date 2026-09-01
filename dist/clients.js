@@ -80,8 +80,20 @@ function classifyAuthFailure(error) {
     return undefined;
 }
 
-async function ensureAuth() {
-    if (authClient) return;
+// Every initializeXClient() below funnels through ensureAuth(), and the v3
+// HTTP runtime is stateless: requests are served concurrently, with no session
+// to serialize them. Without a latch, two requests that arrive before the
+// first authorization finishes both observe `authClient === null` and both
+// call authorize(). On a cold machine that means two interactive browser
+// flows racing for the same loopback callback port, and since authenticate()
+// now rejects on EADDRINUSE rather than hanging, the loser fails outright. On
+// a warm machine it means the token file is read and the client rebuilt more
+// times than necessary. Hold the in-flight Promise so every concurrent caller
+// awaits the same flow.
+let authInFlight = null;
+let reauthInFlight = null;
+
+async function performAuth() {
     try {
         logger.info('Attempting to authorize Google API client...');
         authClient = await authorize();
@@ -99,10 +111,19 @@ async function ensureAuth() {
     }
 }
 
-/**
- * Re-authenticate and rebuild all API clients after an invalid_grant error.
- */
-async function reauthorize() {
+async function ensureAuth() {
+    if (authClient) return;
+    // The latch is cleared as the flow settles, either way, so a failed
+    // authorization is never replayed to the next caller: the request after a
+    // declined consent screen starts a fresh flow rather than inheriting the
+    // stale rejection.
+    if (!authInFlight) {
+        authInFlight = performAuth().finally(() => { authInFlight = null; });
+    }
+    return authInFlight;
+}
+
+async function performReauthorize() {
     logger.info('Re-authorizing after invalid_grant...');
     authClient = null;
     googleDocs = null;
@@ -116,6 +137,21 @@ async function reauthorize() {
     tasksClient = null;
     authClient = await authorize();
     logger.info('Re-authorization successful.');
+}
+
+/**
+ * Re-authenticate and rebuild all API clients after an invalid_grant error.
+ *
+ * Latched for the same reason as ensureAuth, and it matters more here: a
+ * revoked refresh token fails every concurrent in-flight call at once, so
+ * withAuthRetry would otherwise start one re-authorization per failed request
+ * and each would null the shared clients out from under the others mid-rebuild.
+ */
+async function reauthorize() {
+    if (!reauthInFlight) {
+        reauthInFlight = performReauthorize().finally(() => { reauthInFlight = null; });
+    }
+    return reauthInFlight;
 }
 
 /**
@@ -233,6 +269,11 @@ export function getAuthClientIfReady() {
 
 // --- Reset all clients (used by logout) ---
 export function resetClients() {
+    // Drop the latches too, so the first call after a logout starts a genuinely
+    // new authorization instead of awaiting the one that was in flight when the
+    // credentials were thrown away.
+    authInFlight = null;
+    reauthInFlight = null;
     authClient = null;
     googleDocs = null;
     googleDrive = null;

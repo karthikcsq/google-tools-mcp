@@ -177,6 +177,38 @@ describe('official SDK v2 facade', () => {
         } finally { await handler.close(); }
     });
 
+    // The health probe existed to notice a runtime that can no longer serve.
+    // It was the one route that never did: the /healthz branch sat above the
+    // `closed` check, so a drained handler answered 200 {"status":"ok"} while
+    // /mcp already answered 503, and probeHealth() in httpLifecycle.js -- which
+    // gates the whole supervisor on `body.status === 'ok'` -- kept reporting the
+    // service healthy.
+    it('reports the runtime as closed on /healthz once the handler has been closed', async () => {
+        const factory = await factoryWith({ name: 'noop', description: 'n', parameters: z.object({}), execute: async () => 'ok' });
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        const probe = () => handler.fetch(new Request('http://localhost/healthz', { headers: { authorization: `Bearer ${TOKEN}` } }));
+
+        const before = await probe();
+        expect(before.status).toBe(200);
+        expect(await before.json()).toEqual({ status: 'ok', pid: process.pid });
+
+        await handler.close();
+
+        const after = await probe();
+        expect(after.status).toBe(503);
+        expect(await after.json()).toEqual({ status: 'closed', pid: process.pid });
+        // /mcp already reported unavailable; health now agrees with it.
+        const mcp = await handler.fetch(new Request('http://localhost/mcp', {
+            method: 'POST',
+            headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        }));
+        expect(mcp.status).toBe(503);
+        // The auth gate still runs first, so a closed runtime does not become an
+        // unauthenticated liveness oracle.
+        expect((await handler.fetch(new Request('http://localhost/healthz'))).status).toBe(401);
+    });
+
     it('permits validated CORS preflight without credentials while keeping real endpoints authenticated', async () => {
         const factory = await factoryWith({ name: 'noop', parameters: z.object({}), execute: async () => 'ok' });
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN, allowedOrigins: ['https://allowed.example'] } });

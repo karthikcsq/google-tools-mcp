@@ -558,6 +558,9 @@
         "file": "tests/applyParagraphStyleBulletNesting.test.js"
       },
       {
+        "file": "tests/authConcurrency.test.js"
+      },
+      {
         "file": "tests/authConsentFlow.test.js"
       },
       {
@@ -694,6 +697,9 @@
       },
       {
         "file": "tests/listHeadings.test.js"
+      },
+      {
+        "file": "tests/liveHarnessCreatedResource.test.js"
       },
       {
         "file": "tests/maps.test.js"

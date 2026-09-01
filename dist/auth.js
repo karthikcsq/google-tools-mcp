@@ -9,6 +9,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as http from 'http';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 import { getConfigDir, loadConfigFiles } from './config.js';
@@ -215,17 +216,84 @@ function getOAuthCallbackPort() {
     return port;
 }
 
+// RFC 7636 PKCE. Generated here rather than through the library's
+// generateCodeVerifierAsync so the pair is plain data the callback handler can
+// close over without holding a client reference, and so the unit tests that
+// mock google-auth-library do not have to reimplement it.
+function createPkcePair() {
+    const verifier = randomBytes(32).toString('base64url');
+    const challenge = createHash('sha256').update(verifier).digest('base64url');
+    return { verifier, challenge };
+}
+
+/** Constant-time compare of the `state` we issued against the one that came back. */
+function stateMatches(expected, received) {
+    if (typeof received !== 'string') return false;
+    const a = Buffer.from(expected, 'utf8');
+    const b = Buffer.from(received, 'utf8');
+    return a.length === b.length && timingSafeEqual(a, b);
+}
+
 async function authenticate() {
     const { client_secret, client_id } = await loadClientSecrets();
     const server = http.createServer();
     const requestedPort = getOAuthCallbackPort();
-    await new Promise((resolve) => server.listen(requestedPort, 'localhost', resolve));
+    // `server.listen` reports failure by emitting 'error', never by throwing or
+    // by skipping the callback. A resolve-only Promise therefore never settles
+    // when the configured port is taken: authenticate() hangs for the life of
+    // the process, the EADDRINUSE reaches the process-level handler in
+    // index.js which only logs it, and the `port_in_use` remedy that
+    // clients.js already knows how to render is unreachable. Reject instead,
+    // the way startV2HttpServer in mcpServer.js already does.
+    await new Promise((resolve, reject) => {
+        const onError = (error) => {
+            server.close();
+            if (error?.code !== 'EADDRINUSE') {
+                reject(error);
+                return;
+            }
+            // Keep `code` on the rethrown error so classifyAuthFailure in
+            // clients.js still maps it to the port_in_use guidance.
+            const conflict = new Error(
+                `The OAuth callback port ${requestedPort} is already in use, so the browser `
+                + 'authorization flow could not start. Free that port, or set '
+                + 'GOOGLE_MCP_OAUTH_PORT to a different port, or unset it to use an ephemeral one.'
+            );
+            conflict.code = 'EADDRINUSE';
+            reject(conflict);
+        };
+        server.once('error', onError);
+        server.listen(requestedPort, 'localhost', () => {
+            server.removeListener('error', onError);
+            resolve();
+        });
+    });
     const port = server.address().port;
     const redirectUri = `http://localhost:${port}`;
     const oAuth2Client = new OAuth2Client(client_id, client_secret, redirectUri);
+    const state = randomBytes(32).toString('base64url');
+    const pkce = createPkcePair();
     const authorizeUrl = oAuth2Client.generateAuthUrl({
         access_type: 'offline',
         scope: SCOPES.join(' '),
+        // The redirect lands on a loopback server that, without this, accepts
+        // whatever arrives carrying a `code`. Any page the user visits during
+        // the five-minute window can point the browser at
+        // http://localhost:<port>/?code=<an attacker's code>; the exchange
+        // below then succeeds and persists the ATTACKER's refresh token, so
+        // every later tool call operates on someone else's Google account
+        // while looking completely normal. Google's OAuth guidance calls for a
+        // unique, non-guessable state validated on return, which is what the
+        // request handler below does:
+        // https://developers.google.com/identity/protocols/oauth2/resources/best-practices
+        state,
+        // PKCE (RFC 7636) covers the other direction: an authorization code
+        // observed on the loopback redirect is useless to anyone else, because
+        // the verifier never leaves this process. Passed as the literal 'S256'
+        // rather than google-auth-library's CodeChallengeMethod enum so the
+        // suites that mock that module do not have to export one more name.
+        code_challenge_method: 'S256',
+        code_challenge: pkce.challenge,
         // Google only guarantees a refresh_token on the FIRST exchange for a
         // given client/user/scope combination — without forcing re-consent, a
         // returning user (stale/deleted token.json, invalid_grant recovery,
@@ -255,6 +323,18 @@ async function authenticate() {
             const url = new URL(req.url, `http://localhost:${port}`);
             const authCode = url.searchParams.get('code');
             const error = url.searchParams.get('error');
+            // Checked before either outcome below settles the Promise, so a
+            // forged callback can deliver neither a code nor a failure. Note
+            // that a mismatch does NOT reject: rejecting would let anyone who
+            // can reach this port cancel a legitimate sign-in that is still in
+            // progress. Ignore it and keep waiting; the five-minute timeout
+            // above is what bounds the flow.
+            if ((authCode || error) && !stateMatches(state, url.searchParams.get('state'))) {
+                logger.warn('Ignoring an OAuth callback whose state did not match this authorization request.');
+                res.writeHead(400, { 'Content-Type': 'text/html' });
+                res.end('<h1>Authorization rejected</h1><p>This response did not come from the sign-in this app started. You can close this tab.</p>');
+                return;
+            }
             if (error) {
                 clearTimeout(timeout);
                 res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -277,7 +357,7 @@ async function authenticate() {
             res.end();
         });
     });
-    const { tokens } = await oAuth2Client.getToken(code);
+    const { tokens } = await oAuth2Client.getToken({ code, codeVerifier: pkce.verifier });
     oAuth2Client.setCredentials(tokens);
     if (!tokens.refresh_token) {
         // Nothing durable was saved: the next process still has no token.json

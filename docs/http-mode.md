@@ -37,10 +37,15 @@ which paths exist.
 - **One POST endpoint.** Modern (2026-07-28) and supported legacy stateless
   JSON-RPC both go to `POST /mcp`. No handshake route, no stream route, no
   teardown route.
-- **`GET /healthz`.** Authenticated, and returns exactly `{"status":"ok"}` — no
-  version, profile, tool list, handle, client, or environment identity. It is
-  operational liveness, not a second discovery endpoint. Use `server/discover`
-  for protocol discovery.
+- **`GET /healthz`.** Authenticated, and returns exactly
+  `{"status":"ok","pid":<number>}` — no version, profile, tool list, handle, or
+  client identity. It is operational liveness, not a second discovery endpoint;
+  use `server/discover` for protocol discovery. The pid is the one piece of
+  identity it does carry, because `setup` and `status` compare it against the
+  recorded state file to prove the process answering the port is the one they
+  started rather than something else that took it. Once the runtime has been
+  shut down the same route answers `503` with `{"status":"closed"}`, so a
+  supervisor stops treating a drained process as a live one.
 - **`subscriptions/listen`** is accepted and closed gracefully with the empty
   result (this server has nothing to notify: the tool list is fixed). It does
   not hold the connection open.

@@ -342,7 +342,15 @@ export function createV2HttpHandler(factory, {
             logger?.warn?.(result.reason);
             return respond(json(result.status, { error: result.message }));
         }
-        if (path === '/healthz' && request.method === 'GET') return respond(json(200, { status: 'ok', pid: process.pid }));
+        if (path === '/healthz' && request.method === 'GET') {
+            // The closed check belongs here rather than only below the endpoint
+            // routing: a drained handler that still answers 200 keeps a
+            // supervisor or load balancer sending traffic to a process whose
+            // /mcp already 503s, so the one probe meant to notice a dead
+            // runtime is the one thing that never does.
+            if (closed) return respond(json(503, { status: 'closed', pid: process.pid }));
+            return respond(json(200, { status: 'ok', pid: process.pid }));
+        }
         if (path !== endpoint) return respond(json(404, { error: 'Not found' }));
         if (closed) return respond(json(503, { error: 'Service unavailable' }));
         const requestInfo = await classifyModernRequest(request);

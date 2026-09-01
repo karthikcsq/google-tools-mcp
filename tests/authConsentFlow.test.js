@@ -12,6 +12,7 @@
 // production auth-retry path.
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 
 let readFileImpl;
 let writeFileCalls;
@@ -61,8 +62,11 @@ class MockOAuth2 {
         this.lastAuthUrlOpts = opts;
         return 'https://accounts.google.com/o/oauth2/v2/auth?mock=1';
     }
-    async getToken(code) {
-        return getTokenImpl(code);
+    async getToken(options) {
+        // authenticate() now passes { code, codeVerifier } so PKCE reaches the
+        // exchange; recorded here so a test can assert the verifier is sent.
+        this.lastGetTokenOptions = options;
+        return getTokenImpl(options);
     }
     setCredentials(creds) {
         this.credentials = { ...this.credentials, ...creds };
@@ -121,26 +125,42 @@ afterEach(() => {
 // construct first only ever gets 2 args. Waits for it, then drives its
 // local callback server with a real HTTP request, the same way Google's
 // redirect would.
-async function driveOAuthCallback({ code, error } = {}) {
+//
+// By default it echoes back the `state` that authenticate() put on the
+// authorization URL, which is what a genuine Google redirect does. Pass an
+// explicit `state` (including '') to forge a callback that does not belong to
+// this flow. `expectStatus` lets a test assert the HTTP status the callback
+// server returned, since a rejected callback answers 400 and deliberately
+// leaves the flow running.
+async function waitForBrowserFlowClient() {
     const deadline = Date.now() + 2000;
-    let instance;
     // eslint-disable-next-line no-constant-condition
     while (true) {
-        instance = oauth2Instances.find((candidate) => candidate.redirectUri && !candidate.callbackDriven);
-        if (instance) break;
+        const instance = oauth2Instances.find((candidate) => candidate.redirectUri && !candidate.callbackDriven);
+        if (instance) return instance;
         if (Date.now() > deadline) throw new Error('Timed out waiting for the browser-flow OAuth2 client');
         await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    instance.callbackDriven = true;
+}
+
+async function driveOAuthCallback({ code, error, state, markDriven = true, expectStatus } = {}) {
+    const instance = await waitForBrowserFlowClient();
+    if (markDriven) instance.callbackDriven = true;
     const url = new URL(instance.redirectUri);
     if (code) url.searchParams.set('code', code);
     if (error) url.searchParams.set('error', error);
-    await new Promise((resolve, reject) => {
+    const stateToSend = state === undefined ? instance.lastAuthUrlOpts?.state : state;
+    if (stateToSend) url.searchParams.set('state', stateToSend);
+    const status = await new Promise((resolve, reject) => {
         http.get(url, (res) => {
             res.resume();
-            res.on('end', resolve);
+            res.on('end', () => resolve(res.statusCode));
         }).on('error', reject);
     });
+    if (expectStatus !== undefined && status !== expectStatus) {
+        throw new Error(`Callback returned HTTP ${status}, expected ${expectStatus}`);
+    }
+    instance.lastCallbackStatus = status;
     return instance;
 }
 
@@ -227,5 +247,140 @@ describe('auth.js interactive OAuth consent flow (issue #115)', () => {
         expect(infoSpy.mock.calls.some(([message]) => message === 'Authentication successful!')).toBe(true);
 
         infoSpy.mockRestore();
+    });
+});
+
+// The loopback redirect server used to accept any request carrying a `code`.
+// During the five-minute window, a page the user happens to visit could point
+// their browser at http://localhost:<port>/?code=<attacker's code>; the
+// exchange succeeded and this server persisted the ATTACKER's refresh token,
+// so every later tool call ran against someone else's Google account.
+describe('auth.js binds the OAuth callback to the request that started it', () => {
+    it('puts a unique, non-guessable state and an S256 PKCE challenge on the authorization URL', async () => {
+        getTokenImpl = async () => ({ tokens: { access_token: 'AT', refresh_token: 'RT' } });
+
+        const first = authModule.runAuthFlow();
+        const a = await driveOAuthCallback({ code: 'code-a' });
+        await first;
+
+        const second = authModule.runAuthFlow();
+        const b = await driveOAuthCallback({ code: 'code-b' });
+        await second;
+
+        for (const opts of [a.lastAuthUrlOpts, b.lastAuthUrlOpts]) {
+            expect(typeof opts.state).toBe('string');
+            expect(opts.state.length).toBeGreaterThanOrEqual(32);
+            expect(opts.code_challenge_method).toBe('S256');
+            expect(typeof opts.code_challenge).toBe('string');
+        }
+        // A state reused between flows would be guessable from a single observation.
+        expect(a.lastAuthUrlOpts.state).not.toBe(b.lastAuthUrlOpts.state);
+        expect(a.lastAuthUrlOpts.code_challenge).not.toBe(b.lastAuthUrlOpts.code_challenge);
+    });
+
+    it('sends the PKCE code_verifier on the token exchange, and it matches the challenge it advertised', async () => {
+        getTokenImpl = async () => ({ tokens: { access_token: 'AT', refresh_token: 'RT' } });
+
+        const clientPromise = authModule.runAuthFlow();
+        const instance = await driveOAuthCallback({ code: 'code-pkce' });
+        await clientPromise;
+
+        expect(instance.lastGetTokenOptions).toMatchObject({ code: 'code-pkce' });
+        const verifier = instance.lastGetTokenOptions.codeVerifier;
+        expect(typeof verifier).toBe('string');
+        // S256: challenge === base64url(sha256(verifier)). A verifier that does
+        // not derive the advertised challenge protects nothing.
+        expect(createHash('sha256').update(verifier).digest('base64url'))
+            .toBe(instance.lastAuthUrlOpts.code_challenge);
+    });
+
+    it('ignores a forged callback that carries a code but the wrong state, and still accepts the real redirect afterwards', async () => {
+        getTokenImpl = async () => ({ tokens: { access_token: 'AT', refresh_token: 'RT' } });
+        const warnSpy = jest.spyOn(logger, 'warn');
+
+        const clientPromise = authModule.runAuthFlow();
+
+        // The attack: right code shape, state that never belonged to this flow.
+        // markDriven:false keeps the flow open so the next call can be the real one.
+        await driveOAuthCallback({
+            code: 'attacker-authorization-code', state: 'not-the-state-we-issued',
+            markDriven: false, expectStatus: 400,
+        });
+
+        // The flow must still be waiting, not resolved with the attacker's code.
+        const instance = await waitForBrowserFlowClient();
+        expect(instance.lastGetTokenOptions).toBeUndefined();
+
+        // The genuine redirect still completes normally.
+        await driveOAuthCallback({ code: 'the-real-code', expectStatus: 200 });
+        await clientPromise;
+
+        expect(instance.lastGetTokenOptions.code).toBe('the-real-code');
+        expect(warnSpy.mock.calls.some(([m]) => /state did not match/i.test(String(m)))).toBe(true);
+        warnSpy.mockRestore();
+    });
+
+    it('ignores a forged callback carrying no state at all rather than failing the flow', async () => {
+        getTokenImpl = async () => ({ tokens: { access_token: 'AT', refresh_token: 'RT' } });
+
+        const clientPromise = authModule.runAuthFlow();
+        const instance = await waitForBrowserFlowClient();
+
+        await driveOAuthCallback({ code: 'no-state-code', state: '', markDriven: false, expectStatus: 400 });
+        await driveOAuthCallback({ code: 'the-real-code', expectStatus: 200 });
+        await clientPromise;
+
+        expect(instance.lastGetTokenOptions.code).toBe('the-real-code');
+    });
+
+    it('ignores a forged `error` callback, so nobody who can reach the port can cancel a sign-in in progress', async () => {
+        getTokenImpl = async () => ({ tokens: { access_token: 'AT', refresh_token: 'RT' } });
+
+        const clientPromise = authModule.runAuthFlow();
+        await driveOAuthCallback({ error: 'access_denied', state: 'wrong', markDriven: false, expectStatus: 400 });
+        await driveOAuthCallback({ code: 'survived', expectStatus: 200 });
+
+        await expect(clientPromise).resolves.toBeDefined();
+    });
+});
+
+// dist/clients.js has always known how to render a `port_in_use` remedy for
+// EADDRINUSE, but authenticate() awaited a resolve-only listen Promise, so the
+// error was never delivered to a caller: the flow hung for the life of the
+// process and index.js's uncaughtException handler just logged it.
+describe('auth.js reports a busy OAuth callback port instead of hanging', () => {
+    let blocker;
+
+    afterEach(async () => {
+        if (blocker) await new Promise((resolve) => blocker.close(resolve));
+        blocker = null;
+    });
+
+    it('rejects with actionable EADDRINUSE guidance when GOOGLE_MCP_OAUTH_PORT is occupied', async () => {
+        blocker = http.createServer((_req, res) => res.end());
+        const port = await new Promise((resolve) => {
+            blocker.listen(0, 'localhost', () => resolve(blocker.address().port));
+        });
+        process.env.GOOGLE_MCP_OAUTH_PORT = String(port);
+
+        await expect(authModule.runAuthFlow()).rejects.toMatchObject({
+            code: 'EADDRINUSE',
+            message: expect.stringContaining('GOOGLE_MCP_OAUTH_PORT'),
+        });
+        // No browser was opened for a flow that could never accept a redirect.
+        expect(execFileCalls).toHaveLength(0);
+    });
+
+    it('surfaces the port_in_use remedy through the clients.js failure classifier', async () => {
+        // The remedy text lives in dist/clients.js keyed on error.code, so the
+        // rethrown conflict has to keep that code for the guidance to appear.
+        blocker = http.createServer((_req, res) => res.end());
+        const port = await new Promise((resolve) => {
+            blocker.listen(0, 'localhost', () => resolve(blocker.address().port));
+        });
+        process.env.GOOGLE_MCP_OAUTH_PORT = String(port);
+
+        const caught = await authModule.runAuthFlow().catch((error) => error);
+        expect(caught.code).toBe('EADDRINUSE');
     });
 });
