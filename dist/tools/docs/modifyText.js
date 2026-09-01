@@ -46,9 +46,24 @@ const InsertionTarget = z.object({
     insertionIndex: z.number().int().min(1).describe('Index to insert at (1-based).'),
 });
 const ModifyTextParameters = DocumentIdParameter.extend({
+    // A bare union failure is unreadable: zod reports three parallel branches
+    // that each say "expected object, received undefined", with `target` as the
+    // only clue. A live agent read that, could not tell that the indices belong
+    // in a NESTED object, and abandoned the tool. The custom error names all
+    // three accepted shapes, because the overwhelmingly likely mistake is
+    // passing startIndex/endIndex at the top level.
     target: z
-        .union([RangeTarget, TextFindParameter, InsertionTarget])
-        .describe('Target by range indices, text search, or insertion index.'),
+        .union([RangeTarget, TextFindParameter, InsertionTarget], {
+        error: 'target must be a nested object in one of three shapes: '
+            + '{"startIndex":N,"endIndex":M} to address a range, '
+            + '{"textToFind":"..."} (optionally with matchInstance) to search, '
+            + 'or {"insertionIndex":N} to insert at a point. '
+            + 'These go INSIDE target, not at the top level: '
+            + 'use {"documentId":"...","target":{"startIndex":10,"endIndex":20},"text":"new"}, '
+            + 'not {"documentId":"...","startIndex":10,"endIndex":20,"text":"new"}.',
+    })
+        .describe('Target by range indices, text search, or insertion index. Nested object, one of: '
+        + '{"startIndex":N,"endIndex":M}, {"textToFind":"..."}, or {"insertionIndex":N}.'),
     text: z.string().optional().describe('New text to insert or replace with.'),
     style: TextStyleParameters.optional().describe('Text formatting to apply (bold, italic, font size, etc.).'),
     clearStyle: z

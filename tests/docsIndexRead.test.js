@@ -270,6 +270,30 @@ describe('readDocument format=index: output shape', () => {
 });
 
 describe('readDocument format=index: field masks', () => {
+    // Regression guard for a live-only outage. `Document.lists` is a
+    // map<string, List>, and Google's field-mask syntax does not allow
+    // sub-selecting inside map values, so asking for
+    // `lists(listProperties(nestingLevels(glyphType)))` made documents.get
+    // reject the ENTIRE request with "Request contains an invalid argument.
+    // (Code: 400)". format='index' was broken for every document, including an
+    // empty one, while text/markdown/json kept working because they fetch '*'.
+    //
+    // Every mocked test in this file passed throughout, because a mock cannot
+    // validate a field mask. This assertion is the cheap part of the lesson; the
+    // expensive part is live/missions/verify-index-format.mjs, which actually
+    // calls the API. Keep both.
+    it.each([
+        ['INDEX_BODY_FIELDS', () => INDEX_BODY_FIELDS],
+        ['INDEX_TABS_FIELDS', () => INDEX_TABS_FIELDS],
+    ])('%s names lists without sub-selecting into the map (the API rejects that)', (_label, get) => {
+        const mask = get();
+        expect(mask).toContain('lists');
+        // `lists(` anywhere means we are trying to descend into map values.
+        expect(mask).not.toMatch(/lists\(/);
+        expect(mask).not.toContain('listProperties');
+        expect(mask).not.toContain('glyphType');
+    });
+
     it('requests the narrow body mask, never "*", for a legacy document', async () => {
         documentsGet.mockResolvedValue({ data: legacyDoc() });
         await readDocument({ documentId: 'doc-1', format: 'index' });

@@ -46,7 +46,21 @@ const INDEX_BODY_SUBTREE =
     'tableCells(startIndex,endIndex,content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content))))))),' +
     'sectionBreak,tableOfContents)';
 
-const LISTS_SUBTREE = 'lists(listProperties(nestingLevels(glyphType)))';
+// `Document.lists` is a map<string, List>, and Google's field-mask syntax does
+// not allow sub-selecting inside map values. Asking for
+// `lists(listProperties(nestingLevels(glyphType)))` makes documents.get reject
+// the whole request with "Request contains an invalid argument. (Code: 400)",
+// which took format='index' down for EVERY document, including an empty one.
+//
+// Bisected against the live API: `lists` is accepted, `lists(listProperties)`
+// and anything deeper is rejected. Only the index masks name lists this way --
+// the text/markdown/json paths fetch '*' -- which is why nothing else broke and
+// why no mocked test caught it.
+//
+// Bare `lists` returns the whole map, but a List carries only list *properties*
+// (glyph types per nesting level), never content, so the affordability claim
+// that format='index' rests on still holds.
+const LISTS_SUBTREE = 'lists';
 
 /** Field mask for a legacy / body-only index read (`includeTabsContent:false`). */
 export const INDEX_BODY_FIELDS = `revisionId,body(${INDEX_BODY_SUBTREE}),${LISTS_SUBTREE}`;

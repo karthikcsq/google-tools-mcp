@@ -438,6 +438,8 @@ Every index-addressed Docs tool (`modifyText`, `batchModifyText`, `replaceRangeW
 
 `type` is one of `heading`, `listItem`, `paragraph`, `table`, `sectionBreak`, `tableOfContents`, `horizontalRule`, `pageBreak`, or `inlineObject` — a paragraph is exactly one of them, never two. An `inlineObject` is further promoted to a more specific type when the underlying element is one of `footnoteReference`, `columnBreak`, `equation`, `richLink`, `person`, or `autoText`. Ranges are the raw Docs indices, 1-based and end-exclusive, so they can be handed straight to a mutating tool. Top-level ranges never overlap; the one nesting is table cells, which carry their own indices inside their table's `cells` array.
 
+`documentEnd` is the one field that is *not* a usable `endIndex`. It is one past the last addressable index, because the Docs body always ends with a final newline that no range may cover. To address everything from index `N` to the end of the body, pass `endIndex: documentEnd - 1`. Passing `documentEnd` itself is rejected with a message naming the last addressable index.
+
 The fetch is a narrow field mask, not the whole document, including for tabbed documents (`tabId=…`). That is the difference from `format='json'`, which returns the raw unpruned API response and is only for callers that genuinely need suggestions or style provenance — an oversized `json` read without `maxLength` now fails with a message pointing here instead of emitting a megabyte.
 
 Large documents paginate at element boundaries: set `maxResponseChars` (default 100000, `0` disables), and when the response comes back `truncated`, call again with `fromIndex` set to the returned `nextFromIndex`. The Docs API has no start-index cursor, so each page costs one more (narrow) fetch.

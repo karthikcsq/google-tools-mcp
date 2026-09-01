@@ -239,6 +239,17 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
          *  acceptance checks for a tool that does not exist on the base branch. */
         hasTool: (toolName) => tools.has(toolName),
         toolNames: () => [...tools.keys()].sort(),
+        /** The description string a real MCP client sees in its tools/list
+         *  response. Missions call tools by name, so without this they are
+         *  strictly blinder than the agent they stand in for, and they report
+         *  "undocumented" for things the description states plainly. The
+         *  iteration-2 mission recorded exactly that against `help`, whose
+         *  description already said `Pass tool='<toolName>'`. */
+        describe: (toolName) => {
+            const tool = tools.get(toolName);
+            if (!tool) return null;
+            return tool.description ?? null;
+        },
         /** Docs and comment tool results lead with the document URL on its own
          *  line. When a failure message quotes a result, this is the part worth
          *  quoting -- otherwise the reason column is all URL. */

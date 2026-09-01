@@ -262,9 +262,51 @@ export async function registerAllTools(server) {
         description:
             'Show documentation for google-tools-mcp: setup instructions, available tool categories, environment variables, and troubleshooting. ' +
             'Call this when you need guidance on how to use the Google Workspace tools. ' +
-            'Also available: `troubleshoot` (run health check when tools fail) and `feedback` (submit bug reports/feature requests with optional reviewed diagnostics).',
-        parameters: z.object({}),
-        execute: async () => {
+            'Also available: `troubleshoot` (run health check when tools fail) and `feedback` (submit bug reports/feature requests with optional reviewed diagnostics). ' +
+            "Pass tool='<toolName>' to get that one tool's description and full JSON Schema instead of the whole manual.",
+        parameters: z.object({
+            tool: z
+                .string()
+                .optional()
+                .describe("Name of a single tool. Returns its description and JSON Schema for arguments, which is far cheaper than the full manual. Use listTools=true to see valid names."),
+            listTools: z
+                .boolean()
+                .optional()
+                .describe('Return just the list of registered tool names, one per line.'),
+        }),
+        // A live agent burned its first attempt on formatCells because the only
+        // discovery paths were a bare name list and a 40,000-character README
+        // dump, neither of which states a tool's argument shape. It guessed the
+        // underlying Google API shape, which this server does not take. Schemas
+        // are the thing an agent actually needs, so hand them over directly.
+        execute: async (args = {}) => {
+            if (args.listTools) {
+                return [...registeredTools.keys()].sort().join('\n');
+            }
+            if (args.tool) {
+                const found = registeredTools.get(args.tool);
+                if (!found) {
+                    const names = [...registeredTools.keys()].sort();
+                    const near = names.filter((n) => n.toLowerCase().includes(args.tool.toLowerCase())).slice(0, 10);
+                    throw publicError(`No tool named "${args.tool}". `
+                        + (near.length ? `Did you mean: ${near.join(', ')}? ` : '')
+                        + `Call help with listTools=true for all ${names.length} names.`);
+                }
+                let schema;
+                try {
+                    schema = found.parameters ? z.toJSONSchema(found.parameters) : null;
+                } catch {
+                    // A schema that cannot be serialized must not take help down;
+                    // the description alone is still worth returning.
+                    schema = null;
+                }
+                return JSON.stringify({
+                    name: found.name,
+                    description: found.description ?? null,
+                    inputSchema: schema,
+                    ...(schema ? {} : { note: 'This tool\'s schema could not be serialized. Rely on the description.' }),
+                }, null, 2);
+            }
             const __dirname = path.dirname(fileURLToPath(import.meta.url));
             const readmePath = path.resolve(__dirname, '..', '..', 'README.md');
             const diagnosticsSection = '\n\n## Diagnostics & Feedback\n\n' +

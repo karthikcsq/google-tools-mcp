@@ -54,7 +54,22 @@ export function register(server) {
             data.foregroundColor !== undefined ||
             data.backgroundColor !== undefined ||
             data.horizontalAlignment !== undefined ||
-            data.numberFormat !== undefined, { message: 'At least one formatting option must be provided.' }),
+            data.numberFormat !== undefined, {
+            // Naming the accepted options matters more than it looks. This tool
+            // takes FLAT options with hex-string colors, not the nested Google
+            // Sheets API CellFormat shape ({format:{backgroundColor:{red,green,
+            // blue},textFormat:{...}}}), which is what a caller who knows the
+            // underlying API will reach for first. When they do, every key lands
+            // in the unknown-key bucket, no option is set, and the old message
+            // ("At least one formatting option must be provided.") read as
+            // "you passed nothing" while they had in fact passed a full format
+            // object. A live agent lost an attempt to exactly this.
+            message: 'At least one formatting option must be provided, as a top-level argument: '
+                + 'bold, italic, fontSize, foregroundColor, backgroundColor, horizontalAlignment, or numberFormat. '
+                + 'Colors are hex strings such as "#D9EAD3". This tool does not take the nested Google Sheets API '
+                + 'CellFormat shape, so {"format":{"backgroundColor":{"red":1}}} sets nothing; '
+                + 'use {"backgroundColor":"#FF0000"} instead.',
+        }),
         execute: async (args, { log }) => {
             const sheets = await getSheetsClient();
             log.info(`Formatting cells in range "${args.range}" of spreadsheet ${args.spreadsheetId}`);
