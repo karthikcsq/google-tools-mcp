@@ -23,22 +23,15 @@ import * as path from 'node:path';
 import { bootstrap, RESULTS_DIR, ENV_VAR } from './bootstrap.mjs';
 import { BLOCKED_TOOLS, stripHint } from './context.mjs';
 import { truncateDeep } from './journal.mjs';
+import { classifyCreation } from './createdResource.mjs';
 
 const LEDGER = path.join(RESULTS_DIR, 'live-call-created.jsonl');
 
-// Tools whose successful result names a resource this harness is responsible
-// for cleaning up. Everything else is either read-only or edits something that
-// was already tracked when it was created.
-const CREATING_TOOLS = new Map([
-    ['createDocument', 'drive'],
-    ['createFolder', 'drive'],
-    ['createDocumentFromTemplate', 'drive'],
-    ['createSpreadsheet', 'drive'],
-    ['createPresentation', 'drive'],
-    ['copyFile', 'drive'],
-    ['uploadFile', 'drive'],
-    ['createDraft', 'draft'],
-]);
+// The map of creating tools and the id extraction now live in
+// ./createdResource.mjs, shared with scripts/live-mission.mjs. They were
+// duplicated, and both copies read only `parsed.id`, so createPresentation
+// (`presentationId`) and createDocumentFromTemplate (plain text) were listed as
+// tracked and never actually recorded.
 
 function usage() {
     return [
@@ -103,14 +96,21 @@ function appendLedger(entry) {
 }
 
 function recordCreated(toolName, result, runId) {
-    const kind = CREATING_TOOLS.get(toolName);
-    if (!kind || typeof result !== 'string') return null;
-    let parsed;
-    try { parsed = JSON.parse(result); } catch { return null; }
-    const id = parsed?.id ?? parsed?.draft?.id ?? parsed?.message?.id ?? null;
-    if (!id) return null;
-    appendLedger({ ts: new Date().toISOString(), runId, tool: toolName, id, kind });
-    return { id, kind };
+    const creation = classifyCreation(toolName, result);
+    if (!creation) return null;
+    if (!creation.id) {
+        // The ledger is the only record of what a live-call run made. A
+        // creating tool that succeeded and got no ledger entry is a file in the
+        // sandbox that `--cleanup` will never find, so say so on stderr rather
+        // than returning null and looking like a read-only call.
+        process.stderr.write(
+            `WARNING: ${toolName} succeeded but named no id this harness could parse, `
+            + 'so it was NOT recorded for cleanup. Trash it by hand.\n'
+        );
+        return null;
+    }
+    appendLedger({ ts: new Date().toISOString(), runId, tool: toolName, id: creation.id, kind: creation.kind });
+    return { id: creation.id, kind: creation.kind };
 }
 
 async function cleanup({ guard, journal, tools }, explicitIds = []) {

@@ -3,8 +3,13 @@
 ## 3.0.0 - 2026-08-31
 
 Migration to MCP specification **2026-07-28** on the official MCP TypeScript
-SDK v2. FastMCP, mcp-proxy, and the v1 SDK are gone. **stdio users: nothing in
-your config changes.** The breaking changes are all in shared HTTP mode.
+SDK v2. FastMCP, mcp-proxy, and the v1 SDK are gone. The breaking changes are
+all in shared HTTP mode. **stdio users: nothing in your config changes, with one
+exception — Codex.** Codex pins stdio servers to the legacy lifecycle unless it
+is told otherwise, so a Codex stdio registration needs
+`CODEX_MCP_PROTOCOL_VERSION=2026-07-28` added to its `env` block. Every other
+stdio client is unaffected. See
+[docs/http-mode.md](docs/http-mode.md#codex).
 
 ### Breaking
 
@@ -15,8 +20,11 @@ your config changes.** The breaking changes are all in shared HTTP mode.
     compatibility transport mcp-proxy always stood up alongside the configured
     endpoint, with no supported way to turn it off.
   - `GET /ping` — mcp-proxy's unauthenticated liveness route. Replaced by
-    authenticated `GET /healthz`, which returns exactly `{"status":"ok"}` and no
-    server, version, profile, tool, handle, or environment identity.
+    authenticated `GET /healthz`, which returns exactly
+    `{"status":"ok","pid":<number>}` and no server, version, profile, tool,
+    handle, or client identity. The pid is there because `setup` and `status`
+    compare it against the recorded state file to prove the process answering
+    the port is the one they started.
   - The `GET` that attached to a session's event stream and the `DELETE` that
     terminated a session.
 
@@ -67,7 +75,12 @@ your config changes.** The breaking changes are all in shared HTTP mode.
 - `npm run live-coverage` reports which of the 160 registered tools are driven
   against the real Google API by checked-in code (28) and which have unit tests
   only (132), and exits non-zero if a scenario calls a tool that is no longer
-  registered. It runs offline, registering every category against a recording
+  registered. Tools that provably cannot reach Google are reported separately
+  rather than counted as covered, because a scenario names them only to assert
+  the refusal holds: `forwardMessage`, which the runner blocks before
+  `execute()`, and `createPresentation`, which `guard.mjs` denies outright
+  because the Slides API creates in Drive root whatever parent it is given. It
+  runs offline, registering every category against a recording
   stub. The point is that "all suites pass" and "this tool works" are different
   claims, and the gap between them should be a number rather than a feeling.
 - Jest `testTimeout` raised to 30s. The four suites that call `registerAllTools`
@@ -77,9 +90,34 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   it reproduced on 1 of 3 cold cycles while never failing across 12 consecutive
   warm runs. The module loading is legitimate work, so the time budget was what
   was wrong.
+- The live harness could leave real files in a real Drive and still report a
+  clean run. `live-mission` and `live-call` each kept their own copy of the
+  "tools that create something" map, under a comment saying the two were kept in
+  sync, and both then read `JSON.parse(result).id` and nothing else. That
+  silently dropped two of the eight tools they listed: `createPresentation`
+  answers with `presentationId`, and `createDocumentFromTemplate` answers in
+  prose, so `JSON.parse` threw and the id was discarded. Anything not registered
+  is never trashed, and the cleanup line still printed `N/N` because `N` only
+  counted what the runner had noticed. One shared extractor now handles every
+  shape including the prose form, and a creating call whose id cannot be found
+  is reported as `UNTRACKED` and fails the run rather than passing quietly.
 
 ### Security
 
+- **The OAuth callback is now bound to the request that started it.** The
+  loopback redirect server accepted any request carrying a `code`, and the
+  authorization URL carried no `state`. During the five-minute sign-in window,
+  a page the user happened to visit could point their browser at
+  `http://localhost:<port>/?code=<the attacker's code>`; the exchange succeeded
+  and this server persisted the **attacker's** refresh token, so every later
+  tool call ran against someone else's Google account while looking entirely
+  normal. `authenticate()` now issues a random `state`, compares it in constant
+  time on return, and ignores any callback that does not match — ignores rather
+  than rejects, so nobody who can reach the port can cancel a sign-in that is
+  still in progress. PKCE (`S256`) is sent on the same flow, so an
+  authorization code observed on the loopback redirect is useless without the
+  verifier, which never leaves the process. Matches
+  [Google's OAuth guidance](https://developers.google.com/identity/protocols/oauth2/resources/best-practices).
 - **Seven production `npm audit` findings cleared, and the manifest floors moved
   past the vulnerable ranges** (#129). `hono` advances 4.12.9 to 4.13.5 and
   `markdown-it` 14.1.1 to 14.3.1, pulling their affected transitive dependencies
@@ -183,6 +221,29 @@ your config changes.** The breaking changes are all in shared HTTP mode.
 
 ### Fixed
 
+- **A busy OAuth callback port hung the whole sign-in instead of reporting
+  itself.** `authenticate()` awaited `server.listen()` on a Promise with no
+  rejection path, and `listen` reports failure by emitting `error`, never by
+  throwing. With `GOOGLE_MCP_OAUTH_PORT` set to a port already in use, the flow
+  never settled: the `EADDRINUSE` went to the process-level handler in
+  `index.js`, which logs and returns, and the caller waited forever. The
+  `port_in_use` remedy `clients.js` has always carried was unreachable as a
+  result. It now rejects with that remedy named, and the port in it.
+- **Authentication was not concurrency-safe, and HTTP mode is concurrent.**
+  `ensureAuth()` checked `authClient` and then awaited, with nothing holding the
+  gap, so requests arriving before the first authorization finished each started
+  their own — six concurrent cold requests produced six authorizations, which on
+  a cold machine means six browser windows racing for one loopback port.
+  `reauthorize()` had the same hole and a worse consequence: a revoked refresh
+  token fails every in-flight call at once, and each failure nulled the shared
+  clients out from under the others mid-rebuild. Both now hold the in-flight
+  Promise, and both release it when it settles, so a declined consent screen is
+  never replayed to the next caller.
+- **`GET /healthz` reported a closed runtime as healthy.** The health branch sat
+  above the `closed` check, so a drained handler answered `200 {"status":"ok"}`
+  while `/mcp` already answered `503` — the one probe meant to notice a dead
+  runtime was the only route that never did. It now answers
+  `503 {"status":"closed"}`, still behind the same auth gate.
 - **`readDocument(format='markdown')` wrapped every run in a colour span nobody
   asked for, which made read-back verification impossible.** #14 requires every
   run this server writes to carry an explicit `foregroundColor`, and Google's
@@ -197,6 +258,14 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   by the live agent loop, whose agent read the mangled markdown, concluded its
   own edit had deleted the heading, and spent three documents and seven calls
   chasing a data-loss bug that was never happening.
+
+  Known limitation, stated plainly: text a human deliberately coloured
+  `#000001` now exports without its colour span. There is no way to avoid this.
+  Google's API drops an all-zero RGB value, so #14 forces *some* non-zero
+  stand-in for "explicitly the default", and whichever value is chosen is a
+  colour a person could in principle pick. The trade is one indistinguishable-
+  from-black shade against a reader that was unusable for verification on every
+  document this server writes.
 - **`modifyText` rejected a wrong-shaped `target` with an unreadable union
   dump.** Passing `startIndex`/`endIndex` at the top level (the natural mistake
   for anyone who has not seen the schema) produced three parallel branches each

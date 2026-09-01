@@ -540,14 +540,19 @@ registration and start-at-login examples.
 
 The server speaks MCP **2026-07-28** on the official MCP TypeScript SDK v2. The
 whole HTTP session lifecycle is gone. **stdio is unaffected** — if you don't set
-`GOOGLE_MCP_TRANSPORT`, nothing in your config needs to change.
+`GOOGLE_MCP_TRANSPORT`, nothing in your config needs to change, with one
+exception. A **Codex** stdio registration needs
+`CODEX_MCP_PROTOCOL_VERSION=2026-07-28` in its `env` block, because Codex pins
+stdio servers to the legacy lifecycle unless told otherwise. See
+[the Codex section](docs/http-mode.md#codex).
 
 Removed, all returning `404` after the auth check:
 
 - `GET /sse` and its `POST /messages` companion (the legacy SSE compatibility
   transport the old runtime always stood up).
 - `GET /ping`, the old unauthenticated liveness route. Use authenticated
-  `GET /healthz`, which returns exactly `{"status":"ok"}`.
+  `GET /healthz`, which returns exactly `{"status":"ok","pid":<number>}`, and
+  `503` with `{"status":"closed"}` once the runtime has been shut down.
 - The `GET` that attached to a session's event stream and the `DELETE` that
   terminated a session.
 - The `Mcp-Session-Id` header. It is never required and never returned.

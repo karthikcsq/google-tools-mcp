@@ -255,6 +255,11 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
          *  quoting -- otherwise the reason column is all URL. */
         lastLine: (value) => String(value ?? '').trim().split(/\r?\n/).pop(),
         track,
+        /** Every id registered for cleanup so far, whether the scenario called
+         *  track() itself or the mission runner auto-registered it. A probe
+         *  that checks auto-tracking cannot use track() to do it, since that is
+         *  the thing being verified. */
+        registryIds: () => registry.map((item) => item.id),
         createDoc,
         createFolder,
         fail,
