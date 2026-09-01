@@ -307,3 +307,72 @@ describe('markdown export round-trips through the importer', () => {
         });
     });
 });
+
+// ---------------------------------------------------------------------------
+// The explicit-default-black sentinel (#14 fallout, found by the live agent loop)
+// ---------------------------------------------------------------------------
+//
+// Issue #14 requires every run this server writes to carry an explicit
+// foregroundColor. Google's Color endpoint drops an all-zero RGB value, so
+// `getDefaultTextColor` falls back to the nearest representable explicit black,
+// (0, 0, 1/255) => `#000001`. That lands on every run of every document created
+// from markdown.
+//
+// Echoing it back made read-back verification impossible: a document created
+// from `## Next steps` read back as
+// `## <span style="color:#000001">Next steps</span>`. A live agent compared the
+// read-back against its own source, concluded the write had eaten the heading,
+// and burned three documents and seven calls chasing a data-loss bug that was
+// not happening. No unit test covered it because none asserted on the exported
+// string for a coloured run.
+describe('rich markdown export and the default-black sentinel', () => {
+    const SENTINEL = { color: { rgbColor: { red: 0, green: 0, blue: 1 / 255 } } };
+
+    it('does not wrap runs carrying the #000001 default-black sentinel', () => {
+        const markdown = docsJsonToMarkdown({
+            body: {
+                content: [
+                    para([run('Next steps\n', { foregroundColor: SENTINEL })], {
+                        paragraphStyle: { namedStyleType: 'HEADING_2' },
+                    }),
+                    para([run('Some body text.\n', { foregroundColor: SENTINEL })]),
+                ],
+            },
+        }, { richMarkdown: true });
+
+        expect(markdown).not.toContain('<span');
+        expect(markdown).not.toContain('#000001');
+        expect(markdown).toContain('## Next steps');
+        expect(markdown).toContain('Some body text.');
+    });
+
+    it('still exports a colour the author actually chose', () => {
+        const markdown = docsJsonToMarkdown({
+            body: {
+                content: [
+                    para([run('danger\n', {
+                        foregroundColor: { color: { rgbColor: { red: 1, green: 0, blue: 0 } } },
+                    })]),
+                ],
+            },
+        }, { richMarkdown: true });
+
+        expect(markdown).toContain('color:#ff0000');
+    });
+
+    it('suppresses the sentinel without dropping other styling on the same run', () => {
+        const markdown = docsJsonToMarkdown({
+            body: {
+                content: [
+                    para([run('highlighted\n', {
+                        foregroundColor: SENTINEL,
+                        backgroundColor: { color: { rgbColor: { red: 1, green: 1, blue: 0 } } },
+                    })]),
+                ],
+            },
+        }, { richMarkdown: true });
+
+        expect(markdown).toContain('background-color:#ffff00');
+        expect(markdown).not.toContain('color:#000001');
+    });
+});

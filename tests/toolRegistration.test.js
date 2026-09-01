@@ -332,3 +332,58 @@ describe('Total tool count', () => {
         expect(server.getTools().size).toBe(232);
     });
 });
+
+// ---------------------------------------------------------------------------
+// help: per-tool schema lookup
+//
+// A live agent (see docs/live-agent-loop.md) lost an attempt on formatCells
+// because the only discovery paths were a bare list of names and a ~39,000
+// character README dump, neither of which states a tool's argument shape. It
+// guessed the underlying Google Sheets API shape, which this server does not
+// take. These tests pin the cheaper path that replaced that guess.
+// ---------------------------------------------------------------------------
+describe('help: per-tool discovery', () => {
+    let help;
+    beforeAll(async () => {
+        delete process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES;
+        const server = createMockServer();
+        const { registerAllTools } = await import('../dist/tools/index.js');
+        const info = jest.spyOn((await import('../dist/logger.js')).logger, 'info').mockImplementation(() => {});
+        try {
+            await registerAllTools(server);
+        } finally { info.mockRestore(); }
+        help = server.getTools().get('help');
+    });
+
+    it('returns a single tool description and JSON Schema, not the manual', async () => {
+        const raw = await help.execute({ tool: 'formatCells' });
+        const payload = JSON.parse(raw);
+        expect(payload.name).toBe('formatCells');
+        expect(payload.description).toEqual(expect.any(String));
+        expect(payload.inputSchema.type).toBe('object');
+        expect(Object.keys(payload.inputSchema.properties)).toEqual(
+            expect.arrayContaining(['spreadsheetId', 'range', 'bold', 'backgroundColor']),
+        );
+        expect(payload.inputSchema.required).toEqual(expect.arrayContaining(['spreadsheetId', 'range']));
+        // The whole point is that this is cheap next to the full manual.
+        expect(raw.length).toBeLessThan(10000);
+    });
+
+    it('lists every registered tool name when asked', async () => {
+        const names = (await help.execute({ listTools: true })).split('\n');
+        expect(names).toContain('formatCells');
+        expect(names).toContain('readDocument');
+        expect(names.length).toBe(160);
+        expect([...names]).toEqual([...names].sort());
+    });
+
+    it('suggests a near match rather than failing blankly on a typo', async () => {
+        await expect(help.execute({ tool: 'formatCell' })).rejects.toThrow(/Did you mean: formatCells/);
+    });
+
+    it('still returns the full manual when called with no arguments', async () => {
+        const manual = await help.execute({});
+        expect(manual).toContain('Diagnostics & Feedback');
+        expect(manual.length).toBeGreaterThan(10000);
+    });
+});

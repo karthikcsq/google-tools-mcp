@@ -984,7 +984,7 @@
       },
       {
         "file": "dist/tools/docs/modifyText.js",
-        "line": 183,
+        "line": 198,
         "match": ".addTool({"
       },
       {
@@ -1319,17 +1319,17 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 284,
+        "line": 326,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 305,
+        "line": 347,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 453,
+        "line": 495,
         "match": ".addTool({"
       },
       {

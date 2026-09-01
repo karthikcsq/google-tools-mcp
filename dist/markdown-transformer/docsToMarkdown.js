@@ -546,9 +546,27 @@ function convertTextRun(textRun, options) {
     }
     return formatted + (trailingNewline ? '\n' : '');
 }
+// `#000001` is not a colour anyone picks. It is this server's own sentinel for
+// "explicitly the document default": issue #14 needs every run to carry an
+// explicit foregroundColor, and Google's Color endpoint drops an all-zero RGB
+// value, so `getDefaultTextColor` falls back to the nearest representable
+// explicit black (0, 0, 1/255). Every document this server writes from markdown
+// therefore carries it on every run.
+//
+// Echoing it back as author intent made `readDocument(format='markdown')`
+// unusable for verification: a document created from `## Next steps` read back
+// as `## <span style="color:#000001">Next steps</span>`, so an agent comparing
+// the read-back against its own source concluded the write had destroyed the
+// heading. A live agent burned three documents and seven calls on exactly that,
+// chasing a data-loss bug that was never happening. Suppressing the sentinel
+// loses nothing: it is indistinguishable from black on screen, and it means
+// "no colour was chosen" by construction.
+const DEFAULT_BLACK_SENTINEL_HEX = '#000001';
+
 function applyRichTextStyle(text, style) {
     const styles = [];
-    const fg = rgbColorToHex(style.foregroundColor?.color?.rgbColor);
+    const rawFg = rgbColorToHex(style.foregroundColor?.color?.rgbColor);
+    const fg = rawFg === DEFAULT_BLACK_SENTINEL_HEX ? null : rawFg;
     const bg = rgbColorToHex(style.backgroundColor?.color?.rgbColor);
     const fontSize = style.fontSize?.magnitude;
     const fontFamily = style.weightedFontFamily?.fontFamily;
