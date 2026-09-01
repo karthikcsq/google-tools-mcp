@@ -53,8 +53,44 @@ your config changes.** The breaking changes are all in shared HTTP mode.
   service principal. Handles, trackers, and workspace ownership are valid only
   for that deployment; multiple profiles or horizontal scale are out of scope.
 
+### Testing
+
+- **The live agent loop.** `npm run live-mission` runs a whole multi-step task in
+  one process against the real Google API, written by an agent that was given a
+  goal rather than a script. This closes a structural gap: `live-call` starts a
+  fresh process per call, so the read tracker and read handles die between them,
+  making create-then-write (the most common real agent workflow, and the subject
+  of #87 and #135) impossible to prove. The runner records every call, failure,
+  retry, and friction note to a JSON report. Protocol in
+  [`.claude/skills/live-agent-loop/SKILL.md`](.claude/skills/live-agent-loop/SKILL.md),
+  reference in [docs/live-agent-loop.md](docs/live-agent-loop.md).
+- `npm run live-coverage` reports which of the 160 registered tools are driven
+  against the real Google API by checked-in code (28) and which have unit tests
+  only (132), and exits non-zero if a scenario calls a tool that is no longer
+  registered. It runs offline, registering every category against a recording
+  stub. The point is that "all suites pass" and "this tool works" are different
+  claims, and the gap between them should be a number rather than a feeling.
+- Jest `testTimeout` raised to 30s. The four suites that call `registerAllTools`
+  dynamically import all 12 tool categories (~180 modules): about 750ms warm, but
+  measured past Jest's 5s default against a cold filesystem cache. That is
+  exactly the CI shape, since both workflows run `npm ci` and then the suite, and
+  it reproduced on 1 of 3 cold cycles while never failing across 12 consecutive
+  warm runs. The module loading is legitimate work, so the time budget was what
+  was wrong.
+
 ### Security
 
+- **Seven production `npm audit` findings cleared, and the manifest floors moved
+  past the vulnerable ranges** (#129). `hono` advances 4.12.9 to 4.13.5 and
+  `markdown-it` 14.1.1 to 14.3.1, pulling their affected transitive dependencies
+  (`@hono/node-server`, `@xmldom/xmldom`, `linkify-it`, `qs`) with them. Bumping
+  only the lockfile would have left `hono: ^4.11.4` and `markdown-it: ^14.1.1`
+  in `package.json`, so a consumer resolving fresh could land back inside the
+  advisory range; the declared floors moved too. `diff` advances 7.0.0 to 9.0.0
+  after checking every `diffLines`/`createPatch` call site in this repository
+  against v7, v8, and v9 output for all four label shapes the Docs diff path
+  produces. The v9 changes are confined to `parsePatch` and `formatPatch`,
+  which this server never calls.
 - **The `feedback` tool could execute arbitrary shell commands through a crafted
   issue title** (#114). Titles and bodies were interpolated into a `gh` command
   string, so shell metacharacters in user-supplied text reached the shell. Every
@@ -147,6 +183,71 @@ your config changes.** The breaking changes are all in shared HTTP mode.
 
 ### Fixed
 
+- **`readDocument(format='markdown')` wrapped every run in a colour span nobody
+  asked for, which made read-back verification impossible.** #14 requires every
+  run this server writes to carry an explicit `foregroundColor`, and Google's
+  Color endpoint drops an all-zero RGB value, so the fallback is the nearest
+  representable explicit black: `#000001`. That landed on every run of every
+  document created from markdown, and the reader echoed it back as author
+  intent. A document created from `## Next steps` read back as
+  `## <span style="color:#000001">Next steps</span>`. The reader now suppresses
+  that one sentinel value, which is indistinguishable from black on screen and
+  means "no colour was chosen" by construction; a colour the author actually
+  picked still exports, and other styling on the same run is untouched. Found
+  by the live agent loop, whose agent read the mangled markdown, concluded its
+  own edit had deleted the heading, and spent three documents and seven calls
+  chasing a data-loss bug that was never happening.
+- **`modifyText` rejected a wrong-shaped `target` with an unreadable union
+  dump.** Passing `startIndex`/`endIndex` at the top level (the natural mistake
+  for anyone who has not seen the schema) produced three parallel branches each
+  saying "expected object, received undefined", which reads as "you passed
+  nothing" to a caller who passed plenty. The union now carries an explicit
+  message naming all three accepted shapes and showing the nesting, with the
+  wrong form next to the right one.
+- `documentEnd` in a `format='index'` read is now documented as what it is: one
+  past the last addressable index, because the Docs body always ends with a
+  final newline no range may cover. The README said element ranges "can be
+  handed straight to a mutating tool", and a caller reasonably extended that to
+  `documentEnd` and got a rejection. Use `documentEnd - 1`.
+- **`readDocument(format='index')` was rejected by Google for every document,
+  including an empty one.** The field mask asked for
+  `lists(listProperties(nestingLevels(glyphType)))`, but `Document.lists` is a
+  `map<string, List>` and Google's field-mask syntax does not allow
+  sub-selecting inside map values, so `documents.get` failed the whole request
+  with "Request contains an invalid argument. (Code: 400)". The mask now names
+  `lists` whole. No unit test caught this because every Docs test mocks
+  `documents.get`, and a mock cannot validate a field mask; all 92 suites passed
+  before and after. Found by the live agent loop, on the first mission.
+- **`help` can now return one tool at a time.** `help` previously returned the
+  entire 39,279-character README on every call, which is enough to push a real
+  agent into skipping discovery and guessing argument names. `help` now accepts
+  `tool` (returns that tool's description and JSON Schema, ~3,000 characters)
+  and `listTools` (just the registered names). Calling it with no arguments
+  still returns the full manual, so nothing that worked before changed.
+- **`formatCells` now names its accepted arguments when none are supplied.**
+  The tool takes flat options with hex-string colors, not the nested Google
+  Sheets API `CellFormat` shape, which is what a caller who knows the underlying
+  API reaches for first. When they did, every key landed in the unknown-key
+  bucket and the old message ("At least one formatting option must be
+  provided.") read as "you passed nothing" while they had in fact passed a full
+  format object. The message now lists the seven real options and shows the
+  wrong-shape example next to the right one.
+- `createSpreadsheet` and `copyFile` now seed read-tracker state, so creating a
+  spreadsheet or copying a file and immediately writing to it no longer fails
+  with "this file has not been read in this session". Sheets writes are guarded
+  (`writeSpreadsheet`, `batchWrite`, `clearSpreadsheetRange`), so this made the
+  most obvious workflow those tools have unusable. Docs copies re-fetch content
+  and revision and mint a read handle; Sheets copies and creates record the same
+  metadata-only baseline `readSpreadsheet` does; binary copies stay deliberately
+  unseeded, because claiming a read that never happened would convert a loud
+  rejection into a silent overwrite (#87, #135).
+- Maps authorization failures now name the specific Google Cloud API that needs
+  enabling (Places API (New), Geocoding API, or Routes API), derived from the
+  request URL, plus the console pages for enabling it and for checking key
+  restrictions. `PERMISSION_DENIED`, `REQUEST_DENIED`, and bare `403` all
+  qualify; every other error is byte-identical to before. Previously the message
+  was "The caller does not have permission", which reads as broken OAuth when
+  the real cause is a separate, unconfigured `GOOGLE_MAPS_API_KEY` (#128, #133).
 - `resolveComment` now posts a resolve-action reply and verifies it
   persisted, **throwing** if the comment still reports unresolved, instead of
   silently writing an ignored field and returning a soft note asking the user
