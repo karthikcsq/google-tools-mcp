@@ -301,6 +301,36 @@ export function trackMutation(fileId, newRevisionId) {
 }
 
 /**
+ * Re-arm the WriteControl revision after an operation of our own that
+ * advanced the Docs revision WITHOUT touching the document body.
+ *
+ * Drive comment operations (comments.create/update/delete, replies.create,
+ * including the resolve reply) are the known case: each one moves the Docs
+ * `revisionId`, but Drive's `modifiedTime` stays exactly where it was, so
+ * guardMutation's external-change check passes and the next write goes out
+ * pinned to the pre-comment revision. Google then refuses it as a revision
+ * conflict and the caller is told the document "changed since you last read
+ * it" when the only thing that changed is the comment they just added.
+ *
+ * Unlike trackMutation this keeps `content` and `modifiedTime`: the body did
+ * not change, so the snapshot is still the right thing to diff against and
+ * the timestamp is still the right thing to compare. Only the revision moves.
+ * A non-string revision is ignored rather than clearing the guard, so a failed
+ * refresh leaves the next write failing closed (conflict, re-read) instead of
+ * open (no writeControl at all).
+ *
+ * @param fileId
+ * @param revisionId The Docs revisionId fetched AFTER the operation completed.
+ */
+export function refreshRevision(fileId, revisionId) {
+    const entry = logForCurrentSession().get(fileId);
+    if (!entry || entry.requiresReread) return;
+    if (typeof revisionId === 'string' && revisionId.length > 0) {
+        entry.revisionId = revisionId;
+    }
+}
+
+/**
  * Mark a file as needing a fresh read before any further mutation.
  *
  * Use this instead of trackMutation after a write whose resulting revision we

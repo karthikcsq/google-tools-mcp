@@ -160,6 +160,9 @@
         "file": "dist/tools/docs/comments/resolveComment.js"
       },
       {
+        "file": "dist/tools/docs/comments/trackedRevision.js"
+      },
+      {
         "file": "dist/tools/docs/comments/updateComment.js"
       },
       {
@@ -570,6 +573,9 @@
         "file": "tests/batchModifyTextHandleIntegration.test.js"
       },
       {
+        "file": "tests/commentRevisionRefresh.test.js"
+      },
+      {
         "file": "tests/comments.test.js"
       },
       {
@@ -908,12 +914,12 @@
       },
       {
         "file": "dist/tools/docs/comments/addComment.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/comments/deleteComment.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
@@ -928,17 +934,17 @@
       },
       {
         "file": "dist/tools/docs/comments/replyToComment.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/comments/resolveComment.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/docs/comments/updateComment.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
