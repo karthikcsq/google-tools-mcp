@@ -160,7 +160,9 @@ async function main() {
         // sandbox after cleanup, and which of this run's drafts still exist.
         // Both live in cleanup.mjs, shared with live-mission.
         const leftover = keep ? null : await listLeftovers({ tools, folderId, registry, runId, journal });
-        const leftoverDrafts = keep ? null : await listLeftoverDrafts({ tools, registry });
+        const drafts = keep ? null : await listLeftoverDrafts({ tools, registry });
+        const leftoverDrafts = drafts?.left ?? null;
+        const unverifiedDrafts = drafts?.unverified ?? [];
 
         // --- summary (the only thing that goes to stdout) ------------------
         const nameWidth = Math.max(18, ...results.map((r) => r.slug.length));
@@ -193,10 +195,13 @@ async function main() {
             if (leftover?.all) {
                 lines.push(`Test folder after cleanup: ${leftover.all.length} item(s)${leftover.all.length ? ` — ${leftover.all.map((f) => `${f.name} (${f.id})`).join(', ')}` : ''}.`);
                 for (const f of leftover.owned) lines.push(`  LEFT BEHIND by this run: ${f.name} (${f.id})`);
+            } else if (leftover?.unverified) {
+                lines.push(`Test folder after cleanup: UNVERIFIED — ${leftover.unverified}`);
             }
             if (leftoverDrafts) {
                 lines.push(`Drafts this run created and did not delete: ${leftoverDrafts.length}${leftoverDrafts.length ? ` — ${leftoverDrafts.join(', ')}` : ''}.`);
             }
+            for (const d of unverifiedDrafts) lines.push(`  UNVERIFIED draft ${d.id}: ${d.reason}`);
         }
         lines.push(`Stdout leaks from tool code paths: ${journal.stdoutLeaks}.`);
         lines.push(`Guard: ${guard.stats.parentLookups} containment lookup(s), ${guard.stats.denials.length} refusal(s), ${guard.stats.quota.waits} quota wait(s), ${guard.stats.quota.retries} rate-limit retry(ies).`);
@@ -208,7 +213,11 @@ async function main() {
         journal.write({ kind: 'run-end', passed, failed, skipped, cleanup: { cleaned: cleanup.cleaned, attempted: cleanup.attempted, failures: cleanup.failures }, stdoutLeaks: journal.stdoutLeaks });
         await journal.close();
 
-        process.exitCode = failed > 0 || cleanup.failures.length > 0 || (leftoverDrafts?.length ?? 0) > 0 || (leftover?.owned.length ?? 0) > 0 ? 1 : 0;
+        // An audit that could not be completed fails the run the same way a
+        // leak does: "nothing found" and "could not look" never share an exit code.
+        process.exitCode = failed > 0 || cleanup.failures.length > 0
+            || (leftoverDrafts?.length ?? 0) > 0 || unverifiedDrafts.length > 0
+            || (leftover?.owned.length ?? 0) > 0 || Boolean(leftover?.unverified) ? 1 : 0;
     }
     return process.exitCode ?? 0;
 }

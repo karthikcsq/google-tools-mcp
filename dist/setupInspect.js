@@ -90,19 +90,34 @@ const ANY_DIST_INDEX = /[\\/]dist[\\/]index\.js$/i;
  * path to either, and `<node> /path/to/a/clone/dist/index.js`. Every one of
  * those runs this server. The clone case is recognised by the package.json
  * two directories up naming this package, read with the injectable `readFile`.
+ *
+ * "Starts the server" is the whole claim. dist/index.js dispatches on its
+ * first argument, so `google-tools-mcp doctor` runs doctor and exits, and a
+ * registration that carries any argument after the launch target is not an
+ * MCP server entry however this package got onto the command line. Arguments
+ * before the target (`npx -y`, `node --inspect`) belong to the launcher and
+ * are allowed. An env block that switches GOOGLE_MCP_TRANSPORT to HTTP is
+ * likewise not a stdio launch, whatever the command says.
  */
 export async function launchesThisPackage(entry, { readFile = fs.readFile } = {}) {
     if (!entry || typeof entry !== 'object' || entry.url || typeof entry.command !== 'string') return false;
+    const transport = String(entry.env?.GOOGLE_MCP_TRANSPORT ?? '').trim().toLowerCase();
+    if (transport === 'http' || transport === 'httpstream') return false;
     const command = path.basename(entry.command);
     const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
-    if (PACKAGE_BIN.test(command)) return true;
-    if (NPX_BIN.test(command)) return args.some(arg => NPX_PACKAGE_ARG.test(arg));
-    for (const arg of args) {
-        if (PACKAGE_INDEX.test(arg)) return true;
+    const nothingAfter = (index) => args.slice(index + 1).length === 0;
+    if (PACKAGE_BIN.test(command)) return args.length === 0;
+    if (NPX_BIN.test(command)) {
+        const index = args.findIndex(arg => NPX_PACKAGE_ARG.test(arg));
+        return index !== -1 && args.slice(0, index).every(arg => arg.startsWith('-')) && nothingAfter(index);
+    }
+    for (const [index, arg] of args.entries()) {
+        if (!args.slice(0, index).every(prior => prior.startsWith('-'))) break;
+        if (PACKAGE_INDEX.test(arg)) return nothingAfter(index);
         if (!ANY_DIST_INDEX.test(arg) || !path.isAbsolute(arg)) continue;
         try {
             const manifest = JSON.parse(await readFile(path.join(path.dirname(path.dirname(arg)), 'package.json'), 'utf8'));
-            if (manifest?.name === 'google-tools-mcp') return true;
+            if (manifest?.name === 'google-tools-mcp') return nothingAfter(index);
         } catch {
             // Not readable or not JSON: not a clone of this package that we can vouch for.
         }

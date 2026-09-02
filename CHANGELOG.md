@@ -129,6 +129,16 @@ stdio client is unaffected. See
 - `verify-preserve-heading` probe 3 deletes a heading on purpose; its verdict
   logic expected the heading to survive and reported false friction on every
   run. The probe now states which outcome it expects.
+- The post-cleanup audit fails closed. It listed only the top level of the test
+  folder, so a file inside a folder the run created was hidden behind its
+  parent; a listing that threw came back as an empty array; a listing the tool
+  cut short was read as complete; and any `getDraft` error (auth, quota,
+  network) was taken as "the draft is gone". The scan is now recursive
+  (`depth: 'all'`, up to 5000 items), and a listing that could not be made, was
+  truncated, or skipped a folder it could not read is reported as `UNVERIFIED`
+  and fails the run. Only an error carrying a real 404 status counts as a
+  deleted draft; anything else is reported per draft and fails the run too.
+  Covered by `tests/liveHarnessCleanupAudit.test.js`.
 
 ### Security
 
@@ -307,7 +317,11 @@ stdio client is unaffected. See
   prefers a direct launch. A Codex entry without `CODEX_MCP_PROTOCOL_VERSION`
   in its env stays a problem, and now names the missing variable and value. An
   entry that launches something else, a `@latest` target, or an HTTP URL that
-  differs is still a problem.
+  differs is still a problem. So is an entry that launches this package with a
+  subcommand or flag after it (`google-tools-mcp doctor`, `npx google-tools-mcp
+  setup`, `dist/index.js auth`), because `dist/index.js` dispatches on
+  `argv[2]` and such an entry never starts the server, and one whose env sets
+  `GOOGLE_MCP_TRANSPORT` to an HTTP transport.
 - **`doctor --json` printed `"args": "[Circular]"` for the second client.** The
   diagnostic redactor treated every object it had already seen as a cycle, so
   the `args` array the two recommended entries share was replaced on its second

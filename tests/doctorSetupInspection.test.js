@@ -213,6 +213,37 @@ describe('doctor report and setup inspection', () => {
             const http = await inspect('Claude Code', { type: 'http', url: 'http://127.0.0.1:9999/mcp' }, { type: 'http', url: 'http://127.0.0.1:3939/mcp' });
             expect(http.clients[0].problem).toBe('entry differs from recommended configuration');
         });
+
+        it.each([
+            ['the bin with a subcommand', () => ({ command: 'google-tools-mcp', args: ['doctor'] })],
+            ['the bin with a flag', () => ({ command: 'google-tools-mcp', args: ['--json'] })],
+            ['npx with a subcommand after the package', () => ({ command: 'npx', args: ['-y', 'google-tools-mcp', 'setup'] })],
+            ['npx with the package named after a non-flag', () => ({ command: 'npx', args: ['some-other-package', 'google-tools-mcp'] })],
+            ['the global install with a subcommand', ({ globalIndex }) => ({ command: process.execPath, args: [globalIndex, 'auth'] })],
+            ['node with a script before the package index', ({ globalIndex }) => ({ command: process.execPath, args: ['wrapper.js', globalIndex] })],
+            ['the bin with env switching the transport to HTTP', () => ({ command: 'google-tools-mcp', args: [], env: { GOOGLE_MCP_TRANSPORT: 'http' } })],
+        ])('does not accept %s as a server launch', async (_label, makeEntry) => {
+            // dist/index.js dispatches on argv[2]: `google-tools-mcp doctor`
+            // runs doctor and exits, it never opens the MCP transport. Anything
+            // after the launch target, or an env that moves the transport off
+            // stdio, is not a registration of this server.
+            await withRealFiles(async (files) => {
+                const report = await inspect('Claude Code', makeEntry(files), claudeDesired);
+                expect(report.healthy).toBe(false);
+                expect(report.clients[0].problem).toBe('entry differs from recommended configuration');
+                expect(report.clients[0].note).toBeUndefined();
+            });
+        });
+
+        it('still allows launcher flags before the target', async () => {
+            await withRealFiles(async ({ globalIndex }) => {
+                const inspectFlag = await inspect('Claude Code', { command: process.execPath, args: ['--no-warnings', globalIndex] }, claudeDesired);
+                expect(inspectFlag.healthy).toBe(true);
+                expect(inspectFlag.clients[0].note).toMatch(/launches google-tools-mcp/);
+                const npxYes = await inspect('Claude Code', { command: 'npx', args: ['--yes', 'google-tools-mcp'] }, claudeDesired);
+                expect(npxYes.healthy).toBe(true);
+            });
+        });
     });
 
     it('reports a service-account-only installation as healthy with no OAuth files', async () => {

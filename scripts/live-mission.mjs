@@ -231,7 +231,8 @@ async function main() {
     // registry only ever describes what the runner noticed, so "cleanup N/N"
     // on its own cannot tell a clean sandbox from a blind runner.
     const leftover = keep ? null : await listLeftovers({ tools, folderId, registry, runId, journal });
-    const leftoverDrafts = keep ? [] : await listLeftoverDrafts({ tools, registry });
+    const drafts = keep ? { left: [], unverified: [] } : await listLeftoverDrafts({ tools, registry });
+    const leftoverDrafts = drafts.left;
     await journal.close();
 
     const { perTool, calls } = summarizeCalls(journal.file);
@@ -266,8 +267,9 @@ async function main() {
         // Every id the runner registered, so a --keep run (or a failed cleanup)
         // names exactly what is sitting in the sandbox.
         registry: registry.map(({ id, kind }) => ({ id, kind })),
-        leftover: leftover ? { owned: leftover.owned, foreign: leftover.foreign } : null,
+        leftover: leftover ? { owned: leftover.owned, foreign: leftover.foreign, unverified: leftover.unverified } : null,
         leftoverDrafts,
+        unverifiedDrafts: drafts.unverified,
         untracked,
         journalFile: path.relative(REPO_ROOT, journal.file),
         calls,
@@ -314,8 +316,11 @@ async function main() {
         line(`  sandbox     ${leftover.all.length} item(s) after cleanup`);
         for (const f of leftover.owned) line(`    LEFT BEHIND by this run: ${f.name} (${f.id})`);
         for (const f of leftover.foreign) line(`    not this run's: ${f.name} (${f.id})`);
+    } else if (leftover?.unverified) {
+        line(`  sandbox     UNVERIFIED: ${leftover.unverified}`);
     }
     for (const id of leftoverDrafts) line(`    LEFT BEHIND draft ${id}`);
+    for (const d of drafts.unverified) line(`    UNVERIFIED draft ${d.id}: ${d.reason}`);
     // Printed next to the cleanup count on purpose: without it, that count is a
     // ratio of the resources the runner happened to recognize, and reads as a
     // clean sandbox no matter how many it missed.
@@ -349,9 +354,13 @@ async function main() {
         // failure -- something real is still in the sandbox -- and it is worse,
         // because nothing else in the report would ever mention it.
         || untracked.length > 0
-        // And the check that does not trust the registry at all.
+        // And the check that does not trust the registry at all. An audit
+        // that could not be completed is a failure too: "nothing found"
+        // and "could not look" must never print the same exit code.
         || (leftover?.owned.length ?? 0) > 0
-        || leftoverDrafts.length > 0;
+        || Boolean(leftover?.unverified)
+        || leftoverDrafts.length > 0
+        || drafts.unverified.length > 0;
     return runnerFailed ? 1 : 0;
 }
 

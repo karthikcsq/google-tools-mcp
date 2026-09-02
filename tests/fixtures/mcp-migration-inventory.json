@@ -699,6 +699,9 @@
         "file": "tests/listHeadings.test.js"
       },
       {
+        "file": "tests/liveHarnessCleanupAudit.test.js"
+      },
+      {
         "file": "tests/liveHarnessCreatedResource.test.js"
       },
       {

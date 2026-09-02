@@ -18,9 +18,14 @@ import { StartupRefusal } from './bootstrap.mjs';
 
 const SILENT = { log: { debug() {}, info() {}, warn() {}, error() {} } };
 
-function isNotFound(error) {
+/** A 404 the API actually returned, not a message that happens to mention one. */
+function hasNotFoundStatus(error) {
     if (!error) return false;
-    if (error.code === 404 || error.status === 404 || error.response?.status === 404) return true;
+    return error.code === 404 || error.status === 404 || error.response?.status === 404;
+}
+
+function isNotFound(error) {
+    if (hasNotFoundStatus(error)) return true;
     return /not ?found|404/i.test(error?.message || String(error));
 }
 
@@ -93,6 +98,11 @@ export async function runCleanup({ registry, guard, tools, journal, keep }) {
     return { attempted: registry.length, cleaned, failures, skipped: false };
 }
 
+// The most a single recursive listFolderContents call will return. The sandbox
+// holds a handful of items between runs; a count anywhere near this means
+// something else is wrong, and the audit says so rather than guessing.
+const LEFTOVER_SCAN_MAX_ITEMS = 5000;
+
 /**
  * What is still in the sandbox after cleanup, split into what this run is
  * answerable for and what it is not. The sandbox is shared by concurrent runs,
@@ -100,37 +110,63 @@ export async function runCleanup({ registry, guard, tools, journal, keep }) {
  *
  * "Owned" means the id is in this run's registry or the name carries this run's
  * id (ctx.title() appends it). Anything owned that survives cleanup is a leak.
+ *
+ * This is the one check that does not trust the registry, so it must not fail
+ * open. A listing that could not be made, was cut short, or skipped a folder it
+ * could not read comes back with `unverified` set to the reason, `all` null,
+ * and both runners treat that as a failed run: an audit that did not happen is
+ * not a clean audit. The scan is recursive so a file inside a folder the run
+ * created is seen as itself, not hidden behind its parent.
  */
 export async function listLeftovers({ tools, folderId, registry, runId, journal }) {
     let listing;
     try {
         listing = JSON.parse(await tools.get('listFolderContents').execute(
-            { folderId, includeSubfolders: true, includeFiles: true, maxResults: 100 },
+            { folderId, includeSubfolders: true, includeFiles: true, depth: 'all', maxItems: LEFTOVER_SCAN_MAX_ITEMS },
             SILENT,
         ));
     } catch (error) {
-        journal.progress(`  could not list the test folder after cleanup: ${error.message}`);
-        return { all: null, owned: [], foreign: [] };
+        const unverified = `could not list the test folder after cleanup: ${error?.message || error}`;
+        journal.progress(`  ${unverified}`);
+        return { all: null, owned: [], foreign: [], unverified };
     }
-    const all = [...(listing.folders || []), ...(listing.files || [])];
+    if (listing.truncated) {
+        const unverified = `test folder listing was cut short (${listing.truncationReason || 'truncated'}); leftovers could not be verified`;
+        journal.progress(`  ${unverified}`);
+        return { all: null, owned: [], foreign: [], unverified };
+    }
+    if (Array.isArray(listing.unreadable) && listing.unreadable.length) {
+        const unverified = `${listing.unreadable.length} folder(s) inside the test folder could not be read (${listing.unreadable.map((u) => u.path || u.id).join(', ')}); leftovers could not be verified`;
+        journal.progress(`  ${unverified}`);
+        return { all: null, owned: [], foreign: [], unverified };
+    }
+    const all = (listing.entries || []).map((entry) => ({ id: entry.id, name: entry.path || entry.name, mimeType: entry.mimeType }));
     const registered = new Set(registry.map((item) => item.id));
     const owned = all.filter((f) => registered.has(f.id) || (runId && String(f.name ?? '').includes(runId)));
     const foreign = all.filter((f) => !owned.includes(f));
-    return { all, owned, foreign };
+    return { all, owned, foreign, unverified: null };
 }
 
-/** Which of this run's drafts still exist, checked by id rather than by search. */
+/**
+ * Which of this run's drafts still exist, checked by id rather than by search.
+ * Only a not-found answer counts as gone. Any other failure (auth, quota,
+ * network, a malformed response) is reported in `unverified`, because a draft
+ * that could not be looked up is not a draft that was deleted, and both runners
+ * fail on a non-empty `unverified` exactly as they do on a non-empty `left`.
+ */
 export async function listLeftoverDrafts({ tools, registry }) {
     const left = [];
+    const unverified = [];
     for (const id of registry.filter((item) => item.kind === 'draft').map((item) => item.id)) {
         try {
             await tools.get('getDraft').execute({ id }, SILENT);
             left.push(id);
-        } catch {
-            // Gone, which is what cleanup was supposed to achieve.
+        } catch (error) {
+            if (hasNotFoundStatus(error)) continue; // Gone, which is what cleanup was supposed to achieve.
+            unverified.push({ id, reason: error?.message || String(error) });
         }
     }
-    return left;
+    return { left, unverified };
 }
 
 /** The exact commands that dispose of a --keep run's artifacts. */
