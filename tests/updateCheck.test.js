@@ -435,3 +435,35 @@ describe('update check opt-out', () => {
         });
     });
 });
+
+// ---------------------------------------------------------------------------
+// The production call shape: dist/index.js passes only currentVersion and
+// configDir. Every test above injects readFile/writeFile/mkdir, which is how
+// the module shipped with NO defaults for them: readState() threw "readFile is
+// not a function" (swallowed as "no cache") and writeState() threw on mkdir
+// (swallowed as "best effort"), so the registry was fetched on every launch
+// and update-check.json was never written. This test uses the real filesystem
+// against a temp dir and the same argument shape index.js uses.
+// ---------------------------------------------------------------------------
+describe('checkForUpdate with the production argument shape', () => {
+    it('reads and writes the on-disk cache without any injected fs functions', async () => {
+        const { mkdtemp, readFile: realReadFile, rm } = await import('node:fs/promises');
+        const os = await import('node:os');
+        const configDir = path.join(await mkdtemp(path.join(os.tmpdir(), 'gtm-update-')), 'nested', 'config');
+        const fetchLatest = jest.fn().mockResolvedValue('9.9.9');
+        try {
+            const first = await checkForUpdate({ currentVersion: '1.0.0', configDir, fetchLatest, env: {} });
+            expect(first).toEqual({ checked: true, latestVersion: '9.9.9', updateAvailable: true });
+            const persisted = JSON.parse(await realReadFile(stateFilePath(configDir), 'utf8'));
+            expect(persisted.latestVersion).toBe('9.9.9');
+            expect(typeof persisted.lastCheckedAt).toBe('string');
+
+            // Second launch inside the interval: served from disk, no network.
+            const second = await checkForUpdate({ currentVersion: '1.0.0', configDir, fetchLatest, env: {} });
+            expect(second).toEqual({ checked: false, latestVersion: '9.9.9', updateAvailable: true });
+            expect(fetchLatest).toHaveBeenCalledTimes(1);
+        } finally {
+            await rm(path.dirname(path.dirname(configDir)), { recursive: true, force: true });
+        }
+    });
+});
