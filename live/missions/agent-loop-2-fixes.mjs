@@ -144,6 +144,21 @@ async function checkErrorMessagesAreActionable(ctx) {
     const sheet = await ctx.call('createSpreadsheet', { title: ctx.title('errors-sheet'), parentFolderId: ctx.folderId });
     const sheetId = JSON.parse(typeof sheet === 'string' ? sheet : JSON.stringify(sheet)).id;
 
+    // The #87/#135 contract, in the same process: a spreadsheet this session
+    // just created takes a write with no read in between, and the write is
+    // really there when read back. (live-call cannot prove this; the tracker
+    // dies with its process.)
+    const header = [['Decision', 'Owner', 'Rationale']];
+    const write = await ctx.tryCall('writeSpreadsheet', { spreadsheetId: sheetId, range: 'Sheet1!A1:C1', values: header });
+    if (!write.ok) {
+        ctx.friction('writeSpreadsheet', `#135 REGRESSION: a write straight after createSpreadsheet was rejected: ${write.error?.message}`);
+    } else {
+        const readBack = String(await ctx.call('readSpreadsheet', { spreadsheetId: sheetId, range: 'Sheet1!A1:C1' }));
+        const missing = header[0].filter((cell) => !readBack.includes(cell));
+        if (missing.length) ctx.friction('readSpreadsheet', `The header row written a moment ago is missing ${missing.join(', ')} on read-back: ${readBack.slice(0, 200)}`);
+        else ctx.note('sheets: create -> write -> read in one session, no redundant read required, header row round-trips.');
+    }
+
     // The natural mistake: the nested Google Sheets API CellFormat shape.
     const nested = await ctx.tryCall('formatCells', {
         spreadsheetId: sheetId,
@@ -168,8 +183,21 @@ async function checkErrorMessagesAreActionable(ctx) {
     });
     if (!flatFormat.ok) {
         ctx.friction('formatCells', `The shape the error message recommends was itself rejected: ${flatFormat.error?.message}`);
+        return;
+    }
+    // "Accepted" is not "applied". Read the format back and check the three
+    // options actually landed on the cells, the way an agent verifying its own
+    // work would.
+    const formats = JSON.parse(String(await ctx.call('readCellFormat', { spreadsheetId: sheetId, range: 'Sheet1!A1:C1' })));
+    const a1 = formats.cells?.find((c) => c.cell === 'A1')?.format ?? null;
+    const applied = a1
+        && String(a1.backgroundColor ?? '').toUpperCase() === '#D9EAD3'
+        && a1.textFormat?.bold === true
+        && a1.horizontalAlignment === 'CENTER';
+    if (!applied) {
+        ctx.friction('formatCells', `The recommended flat shape was accepted but readCellFormat shows it did not fully apply to A1: ${JSON.stringify(a1)}`);
     } else {
-        ctx.note('formatCells: the recommended flat shape works.');
+        ctx.note('formatCells: the recommended flat shape works, and readCellFormat confirms background, bold and alignment on A1.');
     }
 }
 

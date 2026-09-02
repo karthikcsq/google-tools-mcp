@@ -156,6 +156,11 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
 
     function track(id, kind = 'drive') {
         if (!id) throw new AssertionFailure('track() called with an empty id.');
+        // The mission runner auto-registers every creating call, and a mission
+        // written in the checked-in-scenario style then track()s the same id by
+        // hand. Two rows for one file made cleanup report "2/2" for a single
+        // trash, so the count stopped meaning anything.
+        if (registry.some((item) => item.id === id)) return id;
         registry.push({ id, kind, scenario: scenario.name });
         journal.write({ kind: 'track', scenario: scenario.name, id, resource: kind });
         return id;

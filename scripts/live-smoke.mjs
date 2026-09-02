@@ -22,6 +22,7 @@ import { pathToFileURL } from 'node:url';
 
 import { bootstrap, REPO_ROOT } from './live-smoke/bootstrap.mjs';
 import { createContext, AssertionFailure, ScenarioSkipped } from './live-smoke/context.mjs';
+import { runCleanup, listLeftovers, listLeftoverDrafts, keepCommands } from './live-smoke/cleanup.mjs';
 
 const CLUSTERS = ['docs', 'drive', 'gmail', 'checklist'];
 const LIVE_DIR = path.join(REPO_ROOT, 'live');
@@ -82,41 +83,6 @@ function pad(value, width) {
 function oneLine(text, max = 96) {
     const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
     return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
-
-async function runCleanup({ registry, guard, tools, journal, keep }) {
-    if (keep) {
-        journal.progress(`\n--keep: leaving ${registry.length} created item(s) in place.`);
-        return { attempted: 0, cleaned: 0, failures: [], skipped: true };
-    }
-    const failures = [];
-    let cleaned = 0;
-    const originals = await guard.rawDrive();
-    const silent = { log: { debug() {}, info() {}, warn() {}, error() {} } };
-    // Reverse creation order: files before the folders that hold them.
-    for (const item of registry.slice().reverse()) {
-        try {
-            if (item.kind === 'draft') {
-                await tools.get('deleteDraft').execute({ id: item.id }, silent);
-            } else {
-                // Re-verify containment at cleanup time. Boundary 4: this step
-                // trashes exactly what the run created and nothing else.
-                if (!(await guard.isInsideTestFolder(item.id))) {
-                    failures.push({ ...item, reason: 'no longer inside the test folder; refused to trash' });
-                    continue;
-                }
-                await originals['files.update']({ fileId: item.id, requestBody: { trashed: true }, supportsAllDrives: true });
-            }
-            cleaned += 1;
-            journal.write({ kind: 'cleanup', id: item.id, resource: item.kind, scenario: item.scenario, ok: true });
-        } catch (error) {
-            const reason = error?.message || String(error);
-            if (/not ?found|404/i.test(reason)) { cleaned += 1; continue; }
-            failures.push({ ...item, reason });
-            journal.write({ kind: 'cleanup', id: item.id, resource: item.kind, scenario: item.scenario, ok: false, error: reason });
-        }
-    }
-    return { attempted: registry.length, cleaned, failures, skipped: false };
 }
 
 async function main() {
@@ -191,37 +157,10 @@ async function main() {
         const cleanup = await runCleanup({ registry, guard, tools, journal, keep });
 
         // Boundary check, reported rather than assumed: what is left in the
-        // sandbox after cleanup.
-        let leftover = null;
-        if (!keep) {
-            try {
-                const raw = await tools.get('listFolderContents').execute(
-                    { folderId, includeSubfolders: true, includeFiles: true, maxResults: 100 },
-                    { log: { debug() {}, info() {}, warn() {}, error() {} } },
-                );
-                leftover = JSON.parse(raw);
-            } catch (error) {
-                journal.progress(`  could not list the test folder after cleanup: ${error.message}`);
-            }
-        }
-
-        // Same check for drafts, and done by id rather than by search: the
-        // Gmail drafts.list response carries no subject, so the only honest
-        // verification is to ask for each draft this run created and confirm it
-        // is gone.
-        let leftoverDrafts = null;
-        if (!keep) {
-            const draftIds = registry.filter((item) => item.kind === 'draft').map((item) => item.id);
-            leftoverDrafts = [];
-            for (const id of draftIds) {
-                try {
-                    await tools.get('getDraft').execute({ id }, { log: { debug() {}, info() {}, warn() {}, error() {} } });
-                    leftoverDrafts.push(id);
-                } catch {
-                    // Gone, which is what cleanup was supposed to achieve.
-                }
-            }
-        }
+        // sandbox after cleanup, and which of this run's drafts still exist.
+        // Both live in cleanup.mjs, shared with live-mission.
+        const leftover = keep ? null : await listLeftovers({ tools, folderId, registry, runId, journal });
+        const leftoverDrafts = keep ? null : await listLeftoverDrafts({ tools, registry });
 
         // --- summary (the only thing that goes to stdout) ------------------
         const nameWidth = Math.max(18, ...results.map((r) => r.slug.length));
@@ -244,19 +183,16 @@ async function main() {
         lines.push(`${unexpected.length} scenario(s) disagreed with expectedOnBase${unexpected.length ? `: ${unexpected.map((r) => r.slug).join(', ')}` : ''}.`);
         if (cleanup.skipped) {
             lines.push(`Cleanup skipped (--keep): ${registry.length} item(s) left in the test folder.`);
-            const driveIds = registry.filter((item) => item.kind === 'drive').map((item) => item.id);
-            const draftIds = registry.filter((item) => item.kind === 'draft').map((item) => item.id);
-            if (driveIds.length) lines.push(`  clean up with: npm run live-call -- --cleanup ${driveIds.join(' ')}`);
-            for (const id of draftIds) lines.push(`  delete draft with: npm run live-call -- deleteDraft id=${id}`);
+            for (const command of keepCommands(registry)) lines.push(`  ${command}`);
         } else {
             lines.push(`Cleanup: trashed ${cleanup.cleaned} of ${cleanup.attempted} created item(s).`);
             if (cleanup.failures.length) {
                 lines.push('Could NOT clean up:');
                 for (const f of cleanup.failures) lines.push(`  - ${f.kind} ${f.id} (${f.scenario}): ${f.reason}`);
             }
-            if (leftover) {
-                const remaining = (leftover.folders?.length ?? 0) + (leftover.files?.length ?? 0);
-                lines.push(`Test folder after cleanup: ${remaining} item(s)${remaining ? ` — ${[...(leftover.folders || []), ...(leftover.files || [])].map((f) => `${f.name} (${f.id})`).join(', ')}` : ''}.`);
+            if (leftover?.all) {
+                lines.push(`Test folder after cleanup: ${leftover.all.length} item(s)${leftover.all.length ? ` — ${leftover.all.map((f) => `${f.name} (${f.id})`).join(', ')}` : ''}.`);
+                for (const f of leftover.owned) lines.push(`  LEFT BEHIND by this run: ${f.name} (${f.id})`);
             }
             if (leftoverDrafts) {
                 lines.push(`Drafts this run created and did not delete: ${leftoverDrafts.length}${leftoverDrafts.length ? ` — ${leftoverDrafts.join(', ')}` : ''}.`);
@@ -272,7 +208,7 @@ async function main() {
         journal.write({ kind: 'run-end', passed, failed, skipped, cleanup: { cleaned: cleanup.cleaned, attempted: cleanup.attempted, failures: cleanup.failures }, stdoutLeaks: journal.stdoutLeaks });
         await journal.close();
 
-        process.exitCode = failed > 0 || cleanup.failures.length > 0 || (leftoverDrafts?.length ?? 0) > 0 ? 1 : 0;
+        process.exitCode = failed > 0 || cleanup.failures.length > 0 || (leftoverDrafts?.length ?? 0) > 0 || (leftover?.owned.length ?? 0) > 0 ? 1 : 0;
     }
     return process.exitCode ?? 0;
 }

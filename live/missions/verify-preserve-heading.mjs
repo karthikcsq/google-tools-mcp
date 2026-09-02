@@ -41,7 +41,11 @@ function findHeading(idx, text) {
     return idx.elements.find((e) => e.type === 'heading' && String(e.preview).trim() === text);
 }
 
-async function probe(ctx, label, buildArgs) {
+// expectHeadingGone flips the verdict for the one call whose documented job is
+// to remove the heading (preserveHeading: false). Without it, probe 3 reported
+// correct behaviour as "Real deletion", so the mission could never reach zero
+// frictions on a fixed build.
+async function probe(ctx, label, buildArgs, { expectHeadingGone = false } = {}) {
     const doc = await ctx.createDoc(ctx.title(label), DOC);
 
     const before = parseIndex(await ctx.call('readDocument', { documentId: doc.id, format: 'index' }));
@@ -73,7 +77,13 @@ async function probe(ctx, label, buildArgs) {
         + `; Context ${contextSurvived ? 'ok' : 'GONE'}; Risks ${risksSurvived ? 'ok' : 'GONE'}`
         + `; headings now: ${after.elements.filter((e) => e.type === 'heading').map((e) => e.preview).join(' | ')}`);
 
-    if (!stillThere) {
+    if (expectHeadingGone) {
+        if (stillThere) {
+            ctx.friction('replaceRangeWithMarkdown', `${label}: preserveHeading:false was ignored; the heading is still in the document (format=index).`);
+        } else {
+            ctx.note(`${label}: heading removed as requested, and the body was replaced.`);
+        }
+    } else if (!stillThere) {
         ctx.friction('replaceRangeWithMarkdown', `${label}: the heading is gone from the DOCUMENT (format=index), not just from the markdown rendering. Real deletion.`);
     } else if (!mdHasHeading) {
         ctx.friction('readDocument', `${label}: the heading survives in the document (format=index) but format='markdown' does not render it. The write is fine; the reader drops it.`);
@@ -104,11 +114,12 @@ export async function run(ctx) {
     }));
 
     // 3. preserveHeading: false is *supposed* to eat the heading. If probes 1
-    //    and 2 look like this one, the flag is being ignored.
+    //    and 2 look like this one, the flag is being ignored. Here the heading
+    //    surviving is the defect, so the verdict is inverted.
     await probe(ctx, 'afterHeading-preserve-false', (doc) => ({
         documentId: doc.id,
         target: { afterHeading: 'Next steps' },
         preserveHeading: false,
         markdown: NEW_BODY,
-    }));
+    }), { expectHeadingGone: true });
 }
