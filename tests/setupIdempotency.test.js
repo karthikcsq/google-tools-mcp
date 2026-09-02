@@ -49,6 +49,89 @@ function adapter(entry, failures = {}) {
     };
 }
 
+// The adapters' inspection step against what the real CLIs actually do. Every
+// other test in this file stubs `get` to 'missing'/'found' directly, which is
+// how setup shipped unable to finish on any machine that had Codex or Claude
+// Code installed: codex-cli 0.152 reports a missing server by EXITING 1 with
+// the message on stderr, and Claude Code 2.1.x `mcp get` has neither a scope
+// flag nor `--json`. Both probes therefore rejected, both were mapped to
+// `unknown`, and reconcileClientEntry treats `unknown` as "stop, setup is
+// incomplete". The strings below are copied from real runs of both CLIs.
+describe('client adapters inspect real client output', () => {
+    const rejectWith = (stderr) => async (argv) => {
+        if (argv[1] === 'mcp' && argv[2] === 'get') {
+            const error = new Error(stderr);
+            error.stderr = stderr;
+            error.code = 1;
+            throw error;
+        }
+        return '';
+    };
+
+    it('reads Codex\'s "No MCP server named" exit-1 stderr as a missing registration, not an unknown one', async () => {
+        const [codex] = createClientAdapters({ run: rejectWith("Error: No MCP server named 'google' found.\n") });
+        expect(await codex.get()).toMatchObject({ status: 'missing' });
+        // And reconciliation proceeds to the add step instead of refusing.
+        let added = null;
+        const withAdd = { ...codex, add: async (entry) => { added = entry; } };
+        const result = await reconcileClientEntry(withAdd, desired, { confirm: async () => true });
+        expect(result).toMatchObject({ ok: true, status: 'added' });
+        expect(added).toEqual(desired);
+    });
+
+    it('still reports unknown when the Codex probe fails for a reason it cannot read', async () => {
+        const [codex] = createClientAdapters({ run: rejectWith('spawn codex ENOENT') });
+        expect(await codex.get()).toMatchObject({ status: 'unknown', raw: expect.stringContaining('ENOENT') });
+    });
+
+    it('does not pass a scope flag or --json to `claude mcp get`, which rejects both', () => {
+        const [, claude] = createClientAdapters({ run: async () => '' });
+        expect(claude.getArgv).toEqual(['claude', 'mcp', 'get', 'google']);
+        expect(claude.getCommand).toBe('claude mcp get google');
+    });
+
+    it('inspects Claude Code through its user config file rather than the prose `mcp get` prints', async () => {
+        const home = '/home/someone';
+        const files = new Map();
+        const readFile = async (file) => {
+            const key = file.replace(/\\/g, '/');
+            if (!files.has(key)) { const e = new Error(`ENOENT: ${file}`); e.code = 'ENOENT'; throw e; }
+            return files.get(key);
+        };
+        const run = async (argv) => { throw new Error(`claude mcp get must not be executed for inspection, got ${argv.join(' ')}`); };
+        const [, claude] = createClientAdapters({ run, readFile, env: {}, homedir: () => home });
+
+        // No config file at all: a fresh machine.
+        expect(await claude.get()).toMatchObject({ status: 'missing' });
+
+        // A config file without our server.
+        files.set(`${home}/.claude.json`, JSON.stringify({ mcpServers: { other: { type: 'stdio', command: 'x', args: [] } } }));
+        expect(await claude.get()).toMatchObject({ status: 'missing' });
+
+        // Exactly what `claude mcp add -s user google -- node <path>` writes.
+        files.set(`${home}/.claude.json`, JSON.stringify({
+            mcpServers: { google: { type: 'stdio', command: desired.command, args: desired.args, env: {} } },
+        }));
+        const found = await claude.get();
+        expect(found.status).toBe('found');
+        expect(entriesEqual(found.entry, desired)).toBe(true);
+        expect(await reconcileClientEntry(claude, desired, { confirm: async () => { throw new Error('must not prompt'); } }))
+            .toMatchObject({ ok: true, status: 'unchanged' });
+
+        // Corrupt file: unknown, with the reason, rather than a crash or a false "missing".
+        files.set(`${home}/.claude.json`, '{ not json');
+        expect(await claude.get()).toMatchObject({ status: 'unknown', raw: expect.stringContaining('not valid JSON') });
+    });
+
+    it('honours CLAUDE_CONFIG_DIR when locating Claude Code\'s user config', async () => {
+        const seen = [];
+        const readFile = async (file) => { seen.push(file.replace(/\\/g, '/')); const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+        const [, claude] = createClientAdapters({ run: async () => '', readFile, env: { CLAUDE_CONFIG_DIR: '/custom/claude' }, homedir: () => '/home/x' });
+        await claude.get();
+        expect(seen).toEqual(['/custom/claude/.claude.json']);
+    });
+});
+
 describe('setup client reconciliation', () => {
     it('writes the modern protocol env block into generated Codex stdio registration', () => {
         const launch = { command: 'node', args: ['/installed/index.js'] };

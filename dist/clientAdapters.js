@@ -6,6 +6,9 @@
 // and URLs all come from config files, so a rendered command line would let a
 // legitimate value split into a second command. The `*Command` accessors exist
 // only to show or hand a human something to paste.
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { formatShellCommand, runArgv, shellQuote } from './shellSafe.js';
 
 export const CODEX_MCP_PROTOCOL_VERSION = '2026-07-28';
@@ -13,6 +16,19 @@ export const CODEX_HTTP_TOKEN_ENV_VAR = 'GOOGLE_MCP_HTTP_TOKEN';
 
 function defaultRun(argv) {
     return runArgv(argv);
+}
+
+/**
+ * Where Claude Code keeps its user-scope MCP registrations: the `mcpServers`
+ * map in `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json` when that
+ * variable relocates the whole config. This is the file `claude mcp add -s
+ * user` writes, so reading it is reading the registration itself.
+ */
+export function claudeUserConfigPath({ env = process.env, homedir = os.homedir } = {}) {
+    const configDir = typeof env.CLAUDE_CONFIG_DIR === 'string' && env.CLAUDE_CONFIG_DIR.trim()
+        ? env.CLAUDE_CONFIG_DIR.trim()
+        : homedir();
+    return path.join(configDir, '.claude.json');
 }
 
 export function launchDisplay(entry) {
@@ -49,6 +65,13 @@ export function normalizeClientEntry(entry) {
     const source = entry.config && typeof entry.config === 'object' ? entry.config : entry;
     const { name, serverName, token, ...rest } = flattenNestedTransport(source);
     if (!rest.command && !rest.url) return null;
+    // Claude Code's config file stores a stdio server as
+    // `{type:'stdio', command, args, env:{}}`: the discriminator and the empty
+    // env are its own bookkeeping, not part of what was registered. Left in,
+    // a correct entry never compares equal to the desired `{command, args}`,
+    // and setup offers to remove and re-add it on every run.
+    if (rest.type === 'stdio') delete rest.type;
+    if (rest.env && typeof rest.env === 'object' && !Array.isArray(rest.env) && Object.keys(rest.env).length === 0) delete rest.env;
     return rest;
 }
 
@@ -89,8 +112,23 @@ function adapter(name, commands, run = defaultRun) {
             try { await run(commands.version); return true; } catch { return false; }
         },
         async get() {
+            if (commands.inspect) return commands.inspect();
             try { return parseClientEntry(await run(commands.get)); }
-            catch (error) { return { status: 'unknown', raw: String(error?.message || error || 'Client inspection failed.') }; }
+            catch (error) {
+                // A missing registration is reported as a FAILED command by
+                // real clients: `codex mcp get google --json` exits 1 with
+                // "No MCP server named 'google' found." on stderr. Mapping every
+                // rejection to `unknown` without reading that text made setup
+                // stop at Step 5 ("was left unconfigured (unknown). Setup is
+                // incomplete.") and doctor report "unrecognized client entry"
+                // on any machine that had the client installed at all, i.e.
+                // the machines setup exists for. Read the text first; only a
+                // failure that says nothing recognizable is unknown.
+                const text = String(error?.stderr || error?.message || error || 'Client inspection failed.');
+                const parsed = parseClientEntry(text);
+                if (parsed.status === 'missing') return parsed;
+                return { status: 'unknown', raw: text };
+            }
         },
         add(entry) { return run(commands.add(entry, { redact: false })); },
         remove() { return run(commands.remove); },
@@ -104,7 +142,36 @@ function adapter(name, commands, run = defaultRun) {
     };
 }
 
-export function createClientAdapters({ run = defaultRun } = {}) {
+/**
+ * Claude Code has no machine-readable inspection command: `claude mcp get`
+ * (2.1.x) accepts no scope flag and no `--json`, prints prose for a found
+ * server, and exits 1 with `No MCP server named "google"` for a missing one.
+ * The old probe was `claude mcp get -s user google --json`, which every
+ * version answers with `error: unknown option '-s'`, so inspection was
+ * `unknown` on every machine and setup could never finish. Read the file the
+ * registration lives in instead; `claude mcp add -s user` / `remove` still go
+ * through the CLI so the client owns its own writes.
+ */
+async function inspectClaudeCodeUserEntry({ readFile, env, homedir }) {
+    const file = claudeUserConfigPath({ env, homedir });
+    let text;
+    try {
+        text = await readFile(file, 'utf8');
+    } catch (error) {
+        if (error?.code === 'ENOENT') return { status: 'missing', raw: `${file} does not exist` };
+        return { status: 'unknown', raw: `Could not read ${file}: ${error?.message || error}` };
+    }
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch (error) { return { status: 'unknown', raw: `${file} is not valid JSON: ${error?.message || error}` }; }
+    const entry = parsed?.mcpServers?.google;
+    if (!entry || typeof entry !== 'object') return { status: 'missing', raw: `no mcpServers.google in ${file}` };
+    const normalized = normalizeClientEntry(entry);
+    if (!normalized) return { status: 'unknown', raw: `mcpServers.google in ${file} has neither a command nor a url: ${JSON.stringify(entry)}` };
+    return { status: 'found', entry: normalized, raw: JSON.stringify(entry) };
+}
+
+export function createClientAdapters({ run = defaultRun, readFile = fs.readFile, env = process.env, homedir = os.homedir } = {}) {
     return [
         adapter('Codex', {
             version: ['codex', '--version'],
@@ -120,7 +187,10 @@ export function createClientAdapters({ run = defaultRun } = {}) {
         }, run),
         adapter('Claude Code', {
             version: ['claude', '--version'],
-            get: ['claude', 'mcp', 'get', '-s', 'user', 'google', '--json'],
+            // Display only: what a human runs to look. Inspection itself reads
+            // the config file (see inspectClaudeCodeUserEntry).
+            get: ['claude', 'mcp', 'get', 'google'],
+            inspect: () => inspectClaudeCodeUserEntry({ readFile, env, homedir }),
             remove: ['claude', 'mcp', 'remove', '-s', 'user', 'google'],
             add: (entry, { redact = false } = {}) => entry.url
                 ? ['claude', 'mcp', 'add', '-s', 'user', '--transport', 'http', 'google', entry.url,

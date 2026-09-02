@@ -5,7 +5,7 @@ import * as path from 'path';
 import { OAuth2Client } from 'google-auth-library';
 import { getConfigDir, getConfigFiles, getConfigWarnings } from './config.js';
 import { getTokenPath, loadClientSecrets, SCOPES } from './auth.js';
-import { entriesEqual } from './clientAdapters.js';
+import { CODEX_MCP_PROTOCOL_VERSION, entriesEqual } from './clientAdapters.js';
 import { getHttpServiceStatus } from './httpLifecycle.js';
 
 // dist/auth.js checks SERVICE_ACCOUNT_PATH before anything OAuth, so a
@@ -76,6 +76,65 @@ export function checkLaunchTarget(entry, { exists = (target) => fs.access(target
     return { healthy: true };
 }
 
+const PACKAGE_BIN = /^google-tools-mcp(?:\.(?:cmd|exe|ps1))?$/i;
+const NPX_BIN = /^npx(?:\.cmd|\.exe|\.ps1)?$/i;
+const NPX_PACKAGE_ARG = /^google-tools-mcp(?:@[^\s]+)?$/;
+const PACKAGE_INDEX = /[\\/]google-tools-mcp[\\/]dist[\\/]index\.js$/i;
+const ANY_DIST_INDEX = /[\\/]dist[\\/]index\.js$/i;
+
+/**
+ * Does this stdio entry start google-tools-mcp, by any of the ways the README
+ * documents? The recommended entry is `<node> <this install's dist/index.js>`,
+ * which is what setup writes, but the README also gives the bare
+ * `google-tools-mcp` bin, `npx -y google-tools-mcp`, a hand-resolved absolute
+ * path to either, and `<node> /path/to/a/clone/dist/index.js`. Every one of
+ * those runs this server. The clone case is recognised by the package.json
+ * two directories up naming this package, read with the injectable `readFile`.
+ */
+export async function launchesThisPackage(entry, { readFile = fs.readFile } = {}) {
+    if (!entry || typeof entry !== 'object' || entry.url || typeof entry.command !== 'string') return false;
+    const command = path.basename(entry.command);
+    const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+    if (PACKAGE_BIN.test(command)) return true;
+    if (NPX_BIN.test(command)) return args.some(arg => NPX_PACKAGE_ARG.test(arg));
+    for (const arg of args) {
+        if (PACKAGE_INDEX.test(arg)) return true;
+        if (!ANY_DIST_INDEX.test(arg) || !path.isAbsolute(arg)) continue;
+        try {
+            const manifest = JSON.parse(await readFile(path.join(path.dirname(path.dirname(arg)), 'package.json'), 'utf8'));
+            if (manifest?.name === 'google-tools-mcp') return true;
+        } catch {
+            // Not readable or not JSON: not a clone of this package that we can vouch for.
+        }
+    }
+    return false;
+}
+
+/**
+ * Why a found entry is not the recommended one, sorted into a `problem` (the
+ * registration will not work, or not the way the docs promise) or a `note`
+ * (it works, it is just not what setup would have written). Doctor used to
+ * call every difference a problem and exit 1, which made it report a
+ * README-documented registration as broken, and made `npx -y google-tools-mcp
+ * doctor` fail against the very entry `npx -y google-tools-mcp setup` had just
+ * written, because "recommended" is computed from whichever copy of the
+ * package happens to be running doctor.
+ */
+export async function describeEntryDifference(clientName, current, recommended, { readFile = fs.readFile } = {}) {
+    // HTTP registrations carry the URL and the token; a difference there is a
+    // difference in what the client talks to, so it stays a problem.
+    if (recommended?.url || current?.url) return { problem: 'entry differs from recommended configuration' };
+    if (!(await launchesThisPackage(current, { readFile }))) return { problem: 'entry differs from recommended configuration' };
+    if (clientName === 'Codex' && recommended?.env?.CODEX_MCP_PROTOCOL_VERSION
+        && current?.env?.CODEX_MCP_PROTOCOL_VERSION !== recommended.env.CODEX_MCP_PROTOCOL_VERSION) {
+        return { problem: `Codex stdio registration needs CODEX_MCP_PROTOCOL_VERSION=${CODEX_MCP_PROTOCOL_VERSION} in its env block` };
+    }
+    const viaNpx = NPX_BIN.test(path.basename(String(current.command)));
+    return { note: viaNpx
+        ? 'launches google-tools-mcp through npx, which re-resolves dependencies on every start; run setup to switch to a direct node launch'
+        : 'launches google-tools-mcp, but not through the entry setup would write; run setup to converge if you want that' };
+}
+
 export async function checkClientEntry(adapter, desired) {
     const current = await adapter.get();
     if (current.status === 'missing') return { adapter: adapter.name, status: desired ? 'problem' : 'missing', problem: desired ? 'missing client entry' : undefined, recommended: desired };
@@ -113,8 +172,9 @@ export async function inspectSetup({ adapters = [], desiredEntry = null, desired
         if (current.status === 'found') {
             const target = await checkLaunchTarget(current.entry);
             const matchesRecommended = recommended ? entriesEqual(current.entry, recommended) : undefined;
-            const healthy = target.healthy && matchesRecommended !== false && !desiredProblem;
-            clients.push({ client: adapter.name, status: healthy ? 'configured' : 'problem', problem: desiredProblem || target.problem || (matchesRecommended === false ? 'entry differs from recommended configuration' : undefined), entry: current.entry,
+            const difference = matchesRecommended === false ? await describeEntryDifference(adapter.name, current.entry, recommended) : {};
+            const problem = desiredProblem || target.problem || difference.problem;
+            clients.push({ client: adapter.name, status: problem ? 'problem' : 'configured', problem, note: difference.note, entry: current.entry,
                 matchesRecommended, recommended });
         } else {
             const problem = desiredProblem || (recommended ? (current.status === 'missing' ? 'missing client entry' : 'unrecognized client entry') : undefined);

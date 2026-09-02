@@ -122,6 +122,99 @@ describe('doctor report and setup inspection', () => {
             expect(report.clients[0].status).toBe(problem ? 'problem' : 'configured');
         }
     });
+    describe('README-documented registrations that are not the one setup writes', () => {
+        // doctor's "recommended" entry is `<process.execPath> <dist/index.js of
+        // the copy running doctor>`. setup writes `<node> <npm root -g>/google-
+        // tools-mcp/dist/index.js`. The README documents the bare bin, npx, and
+        // absolute paths to a clone. All of these launch this server, and doctor
+        // reported every one of them as "entry differs from recommended
+        // configuration" and exited 1 -- including the entry setup itself had
+        // written, whenever doctor ran from a different copy (npx cache, clone).
+        const inspect = (name, entry, recommended = desired) => inspectSetup({
+            adapters: [adapter(name, { status: 'found', entry })], desiredEntry: recommended,
+            inspectHttp: async () => ({ healthy: true }), credentialsCheck: async () => ({ configured: true }),
+            tokenCheck: async () => ({ status: 'valid' }), configWarnings: [],
+        });
+        const claudeDesired = { command: 'C:\\Program Files\\nodejs\\node.exe', args: ['C:\\npx-cache\\google-tools-mcp\\dist\\index.js'] };
+
+        // checkLaunchTarget verifies absolute paths against the real filesystem,
+        // so the shim and the global-install cases point at files that exist.
+        const withRealFiles = async (run) => {
+            const root = await fs.mkdtemp(path.join(os.tmpdir(), 'gt-mcp-doctor-launch-'));
+            try {
+                const shim = path.join(root, 'google-tools-mcp.cmd');
+                const globalIndex = path.join(root, 'node_modules', 'google-tools-mcp', 'dist', 'index.js');
+                await fs.mkdir(path.dirname(globalIndex), { recursive: true });
+                await Promise.all([fs.writeFile(shim, ''), fs.writeFile(globalIndex, '')]);
+                await run({ shim, globalIndex });
+            } finally { await fs.rm(root, { recursive: true, force: true }); }
+        };
+
+        it.each([
+            ['the bare bin', () => ({ command: 'google-tools-mcp', args: [] })],
+            ['the Windows bin shim', ({ shim }) => ({ command: shim, args: [] })],
+            ['npx -y google-tools-mcp', () => ({ command: 'npx', args: ['-y', 'google-tools-mcp'] })],
+            ['npx with a pinned version', () => ({ command: 'npx', args: ['-y', 'google-tools-mcp@3.0.0'] })],
+            ['the global install setup wrote, seen from another copy', ({ globalIndex }) => ({ command: process.execPath, args: [globalIndex] })],
+            ['a profile env block on top of the bin', () => ({ command: 'google-tools-mcp', args: [], env: { GOOGLE_MCP_PROFILE: 'work' } })],
+        ])('reports %s as configured with a note, not a problem', async (_label, makeEntry) => {
+            await withRealFiles(async (files) => {
+                const report = await inspect('Claude Code', makeEntry(files), claudeDesired);
+                expect(report.healthy).toBe(true);
+                expect(report.clients[0]).toMatchObject({ status: 'configured', matchesRecommended: false });
+                expect(report.clients[0].problem).toBeUndefined();
+                expect(report.clients[0].note).toMatch(/launches google-tools-mcp/);
+                expect(formatDoctorReport(report)).toContain(`- Claude Code: configured (${report.clients[0].note})`);
+            });
+        });
+
+        it('says npx specifically in the note, since it costs a dependency resolve per start', async () => {
+            const report = await inspect('Claude Code', { command: 'npx', args: ['-y', 'google-tools-mcp'] }, claudeDesired);
+            expect(report.clients[0].note).toMatch(/through npx/);
+        });
+
+        it('recognises a clone by the package.json two directories above dist/index.js', async () => {
+            const root = await fs.mkdtemp(path.join(os.tmpdir(), 'gt-mcp-clone-'));
+            try {
+                const indexPath = path.join(root, 'dist', 'index.js');
+                await fs.mkdir(path.dirname(indexPath), { recursive: true });
+                await fs.writeFile(indexPath, '');
+                await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'google-tools-mcp' }));
+                const report = await inspect('Claude Code', { command: process.execPath, args: [indexPath] }, claudeDesired);
+                expect(report.healthy).toBe(true);
+                expect(report.clients[0].note).toMatch(/launches google-tools-mcp/);
+
+                await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'some-other-server' }));
+                const other = await inspect('Claude Code', { command: process.execPath, args: [indexPath] }, claudeDesired);
+                expect(other.healthy).toBe(false);
+                expect(other.clients[0].problem).toBe('entry differs from recommended configuration');
+            } finally { await fs.rm(root, { recursive: true, force: true }); }
+        });
+
+        it('still calls a Codex bin registration a problem when the protocol version env is missing', async () => {
+            // README §Breaking change in 3.0.0: Codex pins stdio servers to the
+            // legacy lifecycle unless CODEX_MCP_PROTOCOL_VERSION is set.
+            const without = await inspect('Codex', { command: 'google-tools-mcp', args: [] });
+            expect(without.healthy).toBe(false);
+            expect(without.clients[0].problem).toMatch(/CODEX_MCP_PROTOCOL_VERSION=2026-07-28/);
+
+            const withEnv = await inspect('Codex', { command: 'google-tools-mcp', args: [], env: { CODEX_MCP_PROTOCOL_VERSION: '2026-07-28' } });
+            expect(withEnv.healthy).toBe(true);
+            expect(withEnv.clients[0].note).toMatch(/launches google-tools-mcp/);
+        });
+
+        it('still calls an entry that launches something else, or a moving @latest target, a problem', async () => {
+            const other = await inspect('Claude Code', { command: 'node', args: ['other-mcp/dist/index.js'] }, claudeDesired);
+            expect(other.clients[0].problem).toBe('entry differs from recommended configuration');
+            const otherBin = await inspect('Claude Code', { command: 'other-mcp', args: [] }, claudeDesired);
+            expect(otherBin.clients[0].problem).toBe('entry differs from recommended configuration');
+            const latest = await inspect('Claude Code', { command: 'npx', args: ['-y', 'google-tools-mcp@latest'] }, claudeDesired);
+            expect(latest.clients[0].problem).toBe('moving npm @latest target');
+            const http = await inspect('Claude Code', { type: 'http', url: 'http://127.0.0.1:9999/mcp' }, { type: 'http', url: 'http://127.0.0.1:3939/mcp' });
+            expect(http.clients[0].problem).toBe('entry differs from recommended configuration');
+        });
+    });
+
     it('reports a service-account-only installation as healthy with no OAuth files', async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-service-account-'));
         try {
