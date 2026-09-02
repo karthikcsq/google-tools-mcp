@@ -37,7 +37,7 @@ gh api repos/karthikcsq/google-tools-mcp/environments \
 You want `npm-publish` with `required_reviewers` in its rules. An empty list
 means the environment exists but does not gate anything.
 
-Since 3.0.0 the `validate` job checks this itself and fails the release if the
+Since 3.3.3 the `validate` job checks this itself and fails the release if the
 gate is missing, so a tag pushed before this step is done stops in seconds
 instead of publishing unapproved. The check runs in the ungated job, so it
 cannot be skipped by declining an approval that was never going to be requested.
@@ -85,18 +85,30 @@ one.
 
 ## Release a version
 
+`CHANGELOG.md` records one entry per merged pull request (or standalone direct
+commit), each with its own semantic version; the bump rules are at the top of
+that file. Every pull request adds its own entry and moves `package.json` to
+that version in the same change, so the version at the top of the changelog,
+the version in `package.json`, and the next tag are always the same number.
+Not every version gets tagged: patch versions accumulate on `main` and the tag
+goes on whichever commit is being published.
+
 The version bump lands through a pull request rather than a direct push. `npm
 version` would create a commit and a tag together; this flow separates them so
 the bump can be reviewed on its own and the tag is only created once the exact
 commit is on `main`.
 
-1. On a branch, bump the version without creating a git commit or tag:
+1. On a branch, add this pull request's `CHANGELOG.md` entry with the version
+   its bump rule gives it, then set `package.json` to that version without
+   creating a git commit or tag:
 
    ```powershell
-   npm.cmd --no-git-tag-version version patch   # or minor / major
+   npm.cmd --no-git-tag-version version X.Y.Z
    ```
 
-2. Add an entry to `CHANGELOG.md` for the new version.
+2. Check that every pull request merged since the last tag has an entry above
+   the previous release's section. A missing one gets its entry now, with the
+   version it should have had, so the chain stays one bump per PR.
 
 3. Run the same release checks the workflow will run:
 

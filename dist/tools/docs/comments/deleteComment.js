@@ -2,6 +2,7 @@ import { publicError, isPublicError, wrapOperationError } from '../../../errors.
 import { z } from 'zod';
 import { getDriveClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
+import { refreshTrackedRevisionAfterComment } from './trackedRevision.js';
 export function register(server) {
     server.addTool({
         name: 'deleteComment',
@@ -17,6 +18,7 @@ export function register(server) {
                     fileId: args.documentId,
                     commentId: args.commentId,
                 });
+                await refreshTrackedRevisionAfterComment(args.documentId, log);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nComment ${args.commentId} has been deleted.`;
             }

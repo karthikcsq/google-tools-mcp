@@ -2,6 +2,7 @@ import { publicError, isPublicError, wrapOperationError, getApiErrorDetail } fro
 import { z } from 'zod';
 import { getDriveClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
+import { refreshTrackedRevisionAfterComment } from './trackedRevision.js';
 export function register(server) {
     server.addTool({
         name: 'resolveComment',
@@ -33,6 +34,9 @@ export function register(server) {
                     fields: 'resolved',
                 });
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
+                // The resolve reply was created either way (verified or not),
+                // so the Docs revision has moved either way.
+                await refreshTrackedRevisionAfterComment(args.documentId, log);
                 if (verifyComment.data.resolved) {
                     return `${docUrl}\nComment ${args.commentId} has been marked as resolved.`;
                 }

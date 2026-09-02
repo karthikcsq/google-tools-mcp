@@ -2,6 +2,7 @@ import { publicError, isPublicError, wrapOperationError } from '../../../errors.
 import { z } from 'zod';
 import { getDocsClient, getDriveClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
+import { refreshTrackedRevisionAfterComment } from './trackedRevision.js';
 export function register(server) {
     server.addTool({
         name: 'addComment',
@@ -73,6 +74,10 @@ export function register(server) {
                         }),
                     },
                 });
+                // The comment moved the Docs revision without moving Drive's
+                // modifiedTime; re-arm the guard so the next body write is
+                // not refused as a conflict with our own comment.
+                await refreshTrackedRevisionAfterComment(args.documentId, log);
                 const docUrl = `https://docs.google.com/document/d/${args.documentId}/edit`;
                 return `${docUrl}\nComment added successfully. Comment ID: ${response.data.id}`;
             }
