@@ -1,40 +1,42 @@
 # Session state: pre-publish handoff for v3.0.0
 
-Written 2026-09-01, immediately before a context compaction. **The agent task list is the
+Rewritten 2026-09-02 at the end of the pre-publish review pass. **The agent task list is the
 first source of truth; this file is the durable backup of what would otherwise live only in
 chat context.**
 
-Everything in the 3.0.0 scope is done and on `main`. What remains is one action only Elliot
-can take, then a tag, then publish. Delete this file once 3.0.0 is published.
+Everything in the 3.0.0 scope is on `main` plus one review PR from branch
+`t3code/review-main-changes-npm-readiness`. What remains is landing that PR, one action only
+Elliot can take (#50), then a tag, then publish. Delete this file once 3.0.0 is published.
 
 ---
 
 ## Where things stand
 
-`main` = `73ca178`. **One PR is open and must land before the tag:**
-[#140](https://github.com/karthikcsq/google-tools-mcp/pull/140), six fixes from the pre-tag
-adversarial review (OAuth port hang, OAuth `state` + PKCE, `/healthz` after close, auth
-concurrency latch, the live-harness cleanup and coverage gaps, three code/doc contradictions).
-A seventh claim in that review — that `publish.yml` needs `actions: read` — was **disproven**:
-the repo is public and the environments endpoint reads unauthenticated, so the workflow is
-correct as written. Do not add that permission on the strength of the review.
+`main` = `a957677` (PR #140 merged). **One PR from this review pass must land before the
+tag**: branch `t3code/review-main-changes-npm-readiness`, worktree
+`C:\Users\2supe\.t3\worktrees\google-tools-mcp\t3code-55278c06`. It reviewed every change
+merged on 2026-09-01 (`06f4ef0..a957677`: PR #139, commit 73ca178, PR #140) and fixes what
+that review found. See "What the review pass fixed" below.
 
-| Gate | State |
+| Gate (at the head of the review branch) | State |
 | --- | --- |
-| `npm test` | 94 suites, 1350 passed, 2 skipped |
+| `npm run test:ci` | 94 suites, 1381 passed, 2 skipped |
 | `npm audit --omit=dev` | 0 vulnerabilities |
+| `npm pack --dry-run` | 184 files, 394.8 kB, no `tests/`, `live/`, `scripts/live-*`, `.husky`, `.planning` |
+| Every `dist/**/*.js` imports | 181 modules, 0 failures |
 | `package.json` version | 3.0.0 |
-| CHANGELOG 3.0.0 section | complete, incl. #129 dependency security work |
-| Live regression vs real API | `agent-loop-2-fixes` PASS, 0 frictions, all artifacts cleaned |
-| Open PRs | none |
-| Worktrees / branches / stashes | 1 / `main` only / none |
+| `npm run live-coverage` | 29 covered / 131 not covered / 2 blocked by design, exit 0 |
+| Live vs real API (2026-09-02) | `harness-selftest` PASS 3/3 cleaned; `verify-created-resource-tracking` PASS 2/2; `agent-loop-2-fixes` PASS 19 calls, 5/5 cleaned; `live-smoke` 22/22, 28/28 trashed, folder empty after, 0 drafts, 0 leaks, 0 refusals |
+| Open PRs on origin | none yet (the review PR is opened at the end of this pass) |
+| #50 protection rules | still `[]` as of 2026-09-02 |
 
 ## The one blocker
 
-**#50** — the `npm-publish` GitHub environment still has `rules: []`. No required reviewer,
-so a publish would proceed with no human approval. **Only Elliot can set this**; it is a
-repo-settings action, not code. `publish.yml` already has the `validate` job and the
-environment-protection guard on the workflow side (#59, done). Nothing else blocks the tag.
+**#50** — the `npm-publish` GitHub environment still has `protection_rules: []`. No required
+reviewer, so a publish would proceed with no human approval. **Only Elliot can set this**; it
+is a repo-settings action, not code. `publish.yml` already has the `validate` job and the
+environment-protection guard on the workflow side (#59, done). Nothing else blocks the tag
+once the review PR is merged.
 
 Verify with:
 ```bash
@@ -42,26 +44,49 @@ gh api repos/karthikcsq/google-tools-mcp/environments/npm-publish --jq '.protect
 ```
 Non-empty means Elliot has done it.
 
-## Final checks to run after compaction, before the tag
+## Final checks to run before the tag
 
-Run in this order. Do not tag until every one is green.
+Run in this order, on `main` after the review PR merges. Do not tag until every one is green.
 
 1. `git fetch origin && git status --short && git rev-list --left-right --count main...origin/main` → clean, `0 0`
-2. `npm ci` then `npm test` → 94 suites green. The `Test Suites:` line is authoritative, never `Tests:` alone.
+2. `npm ci` then `npm run test:ci` → 94 suites green. The `Test Suites:` line is authoritative, never `Tests:` alone.
 3. `npm audit --omit=dev` → 0 vulnerabilities
-4. `npm pack --dry-run` → confirm the tarball matches `files: ["dist", "!dist/**/*.test.js"]`; no
-   `.husky`, no `live/`, no `scripts/live-*`, no `.planning`, no `tests/`
+4. `npm pack --dry-run` → 184 files; no `.husky`, no `live/`, no `scripts/live-*`, no `.planning`, no `tests/`
 5. `node -p "require('./package.json').version"` → `3.0.0`
-6. `npm run live-mission -- live/missions/agent-loop-2-fixes.mjs` → PASS, 0 frictions, cleanup 5/5
-   and `npm run live-mission -- live/missions/verify-created-resource-tracking.mjs` → PASS,
-   cleanup 2/2, exit 0. Then confirm the sandbox folder is empty:
-   `npm run live-call -- listFolderContents folderId=15m5wq1pA8Mn0ETxIaLdN0kaUFwnrfzHN`
-7. `npm run live-coverage` → runs, exits 0 (non-zero means a scenario calls a tool that no
-   longer exists). Expect 28 covered / 132 not covered / 2 blocked by design.
-8. Confirm #50 is set (command above)
+6. Set the CHANGELOG heading `## 3.0.0 - 2026-08-31` to the actual publish date.
+7. `npm run live-mission -- live/missions/agent-loop-2-fixes.mjs` → PASS, 0 frictions, cleanup 5/5,
+   "sandbox 0 item(s) after cleanup". The runner takes a path; the bare mission name does not
+   work. Then `npm run live-mission -- live/missions/verify-created-resource-tracking.mjs` →
+   PASS, cleanup 2/2, exit 0.
+8. `npm run live-coverage` → exits 0. Expect 29 covered / 131 not covered / 2 blocked by design.
+9. Confirm #50 is set (command above).
 
 Then: tag `v3.0.0`, push the tag, Elliot approves the environment gate, publish runs, and the
-last step is verifying the published tarball actually contains what step 4 predicted.
+last step is verifying the published tarball actually contains what step 4 predicted, and that
+`npx -y google-tools-mcp@3.0.0 doctor` on a machine with Codex or Claude Code installed gets
+past client inspection (the #14 bug below never showed in CI because CI has neither client).
+
+## What the review pass fixed (branch `t3code/review-main-changes-npm-readiness`)
+
+Everything below shipped on `main` with a green suite. Each has a test now, and each test was
+checked by mutation (break the fix, watch exactly the new test fail).
+
+| Finding | Severity | Where |
+| --- | --- | --- |
+| `setup` and `doctor` could not finish on any machine with Codex or Claude Code installed: a "not found" CLI failure was mapped to `unknown`, and the Claude Code probe used `-s user --json`, which no `claude` version accepts. Claude Code user-scope inspection now reads `~/.claude.json`. | BLOCKER | `dist/clientAdapters.js`, `tests/setupIdempotency.test.js` |
+| `doctor` flagged every README-documented registration (bare bin, `npx -y google-tools-mcp`, clone path) as "entry differs from recommended configuration", exit 1. Now `configured` + note when the entry launches this package; Codex without `CODEX_MCP_PROTOCOL_VERSION` stays a named problem. | HIGH | `dist/setupInspect.js`, `dist/doctor.js`, `tests/doctorSetupInspection.test.js` |
+| Update check hit the npm registry on every launch (`readFile`/`writeFile`/`mkdir` had no defaults, so the cache never read or wrote). | HIGH | `dist/updateCheck.js`, `tests/updateCheck.test.js` |
+| `help tool=X` rendered the output-io JSON Schema: 50 of 160 tools showed `.default()` fields as required. Pinned to the SDK's `tools/list` rendering for every tool. | HIGH | `dist/tools/index.js`, `tests/toolRegistration.test.js` |
+| Auth: an abandoned flow could release a newer latch after logout; a flow running at logout could install its client afterwards; a cold request mid re-authorization opened a second consent screen. Identity guard + `authGeneration` + `ensureAuth` joins `reauthInFlight`. | MEDIUM | `dist/clients.js`, `tests/authConcurrency.test.js` (9 tests) |
+| `doctor --json` printed `"args": "[Circular]"` for any shared (non-cyclic) reference. Redactor now tracks ancestors only. | LOW | `dist/errors.js`, `tests/errorsAndLogger.test.js` |
+| Live harness: two copies of the cleanup loop, both reporting already-deleted files as left behind, both crashing on a null raw Drive handle after an `invalid_grant` rebuild; blocked outcomes uncounted; no post-cleanup listing; `--keep` printed no ids; `track()` double-counted. One shared `scripts/live-smoke/cleanup.mjs`, leftover listing fails the run, `--keep` prints the cleanup command. | MEDIUM | `scripts/live-smoke/cleanup.mjs`, `scripts/live-mission.mjs`, `scripts/live-smoke.mjs`, `scripts/live-smoke/context.mjs` |
+| Live harness: frozen loop-1/loop-2 missions hard-failed on fixed code (moved to `live/missions/archive/`); `verify-preserve-heading` probe 3 reported false friction; `live-coverage` missed `ctx.createDoc`/`createFolder` helpers and single-quoted names, and had a hand-maintained guard-denied list (now derived from `guard.mjs`, `MUTATING_VERB` exported); the created-resource pin test compared literals (now executes all 8 creating tools). | LOW | `live/missions/`, `scripts/live-coverage.mjs`, `scripts/live-smoke/guard.mjs` (export only), `tests/liveHarnessCreatedResource.test.js` |
+| `live-mission` report `account` was always null. | LOW | `scripts/live-mission.mjs` |
+| README Step 3 Codex commands omitted `--env CODEX_MCP_PROTOCOL_VERSION=2026-07-28`, which the same README's breaking-change section says Codex needs. | DOC | `README.md` |
+
+Evaluated and closed without change: `createSpreadsheet`/`copyFile` seed Sheets read state
+that is request-scoped on HTTP. Neither tool claims the Sheet is mutable afterwards and the
+guard's HTTP branch already says Sheets edits are stdio-only, so a warning would be noise.
 
 ## Open issues, all accounted for
 
@@ -73,23 +98,15 @@ last step is verifying the published tarball actually contains what step 4 predi
 | [#137](https://github.com/karthikcsq/google-tools-mcp/issues/137) | #87 criterion 5 follow-up. Scoped, not a blocker. |
 | [#138](https://github.com/karthikcsq/google-tools-mcp/issues/138) | #87 criterion 6 follow-up. Scoped, not a blocker. |
 
-## What landed in PR #139 (the last one)
+## What landed before this pass (PR #139, 73ca178, PR #140)
 
-The live agent loop, plus five defects it found. All five had shipped with a fully green
-suite, because each sits at a boundary a mock cannot reach.
-
-- `readDocument(format='index')` was rejected for **every** document. `Document.lists` is a
-  `map<string, List>` and Google's field-mask syntax forbids sub-selecting into map values.
-  Every Docs test mocks `documents.get`, and a mock cannot validate a field mask.
-- `readDocument(format='markdown')` wrapped every run in `<span style="color:#000001">`. That
-  is the #14 explicit-default-black sentinel, echoed back as author intent, which made
-  read-back verification impossible. **The write was always correct** — an agent chased a
-  phantom data-loss bug through three documents and seven calls because of it.
-- `modifyText` rejected a wrong-shaped `target` with an unreadable union dump.
-- `formatCells` said "at least one formatting option must be provided" to a caller who passed
-  a full nested `CellFormat`.
-- `help` returned the whole 39,279-character README on every call; now takes `tool=<name>`
-  and `listTools=true`.
+PR #139: the live agent loop, plus five defects it found, all of which had shipped with a
+fully green suite because each sits at a boundary a mock cannot reach (`format='index'` field
+mask rejected by Google; `#000001` colour sentinel echoed by the markdown reader; `modifyText`
+union error dump; `formatCells` empty-options message; `help` returning the whole README).
+PR #140: OAuth `state` + PKCE, `EADDRINUSE` on the callback port, `/healthz` after close,
+auth latch, shared `createdResource.mjs`. A claim that `publish.yml` needs `actions: read`
+was **disproven** (public repo, environments endpoint reads unauthenticated); do not add it.
 
 ## Standing rules that must survive compaction
 
@@ -101,12 +118,17 @@ suite, because each sits at a boundary a mock cannot reach.
   Never call any Gmail send or draft-send path. Never trash anything the run did not create.
   **Never disable, weaken, or work around any check in `scripts/live-smoke/guard.mjs`.**
 - A broader filesystem search for credentials was **denied by Elliot**. Do not retry it.
-- `dist/` is the source of truth. There is no `src/` tree.
+- `dist/` is the source of truth. There is no `src/` tree, no build, no lint/typecheck script (#130).
 - Never interpolate a caught error's message into `publicError()`.
-- Two Bash commands were blocked by the auto-mode classifier this session: `gh pr merge` and a
-  bulk `git worktree remove --force` loop. Individual non-force `git worktree remove` calls
-  were fine. If `gh pr merge` is needed again, hand Elliot the command rather than routing
-  around the denial.
+- Jest runs as ESM via `node --experimental-vm-modules node_modules/jest/bin/jest.js`;
+  `jest.unstable_mockModule` before a dynamic import is the mocking pattern.
+- `doctor`'s `checkLaunchTarget` stats absolute launch paths on the real filesystem; tests
+  that need an absolute path must create the file (see `withRealFiles` in
+  `tests/doctorSetupInspection.test.js`).
+- `.env.live-smoke` is gitignored; copy it from the main checkout into a new worktree.
+- Two Bash commands were blocked by the auto-mode classifier: `gh pr merge` and a bulk
+  `git worktree remove --force` loop. Hand Elliot the merge command rather than routing around
+  the denial.
 
 ## Recovery references
 
