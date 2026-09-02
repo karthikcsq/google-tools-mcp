@@ -294,7 +294,18 @@ export async function registerAllTools(server) {
                 }
                 let schema;
                 try {
-                    schema = found.parameters ? z.toJSONSchema(found.parameters) : null;
+                    // `io: 'input'` and this target are what the SDK uses when it
+                    // renders tools/list (Standard Schema `~standard.jsonSchema
+                    // .input({target})` in @modelcontextprotocol/server). Zod's
+                    // default is `io: 'output'`, which describes the value AFTER
+                    // parsing: every `.optional().default(x)` field is present
+                    // by then, so it is listed as `required`. That turned help
+                    // into a liar for 50 of the 160 tools; readDocument, for
+                    // one, claimed all seven of its optional fields were
+                    // mandatory while tools/list said only documentId was.
+                    schema = found.parameters
+                        ? z.toJSONSchema(found.parameters, { io: 'input', target: 'draft-2020-12' })
+                        : null;
                 } catch {
                     // A schema that cannot be serialized must not take help down;
                     // the description alone is still worth returning.

@@ -276,9 +276,23 @@ function visit(value, context, depth) {
     if (typeof value === 'bigint') return redactString(String(value), context.secrets);
     if (typeof value === 'symbol' || typeof value === 'function') return redactString(String(value), context.secrets);
 
+    // `seen` holds the ancestors of the node being visited, not every node
+    // ever visited: only a reference back to an ancestor is a cycle. Marking
+    // every visited object permanently turned any SHARED reference into
+    // "[Circular]", and `doctor --json` shares one `launch.args` array between
+    // every client's recommended entry, so the second client's recommended
+    // args printed as the string "[Circular]". The node budget above still
+    // bounds a heavily shared graph.
     if (context.seen.has(value)) return CIRCULAR;
     context.seen.add(value);
+    try {
+        return visitObject(value, context, depth);
+    } finally {
+        context.seen.delete(value);
+    }
+}
 
+function visitObject(value, context, depth) {
     if (safeTypeCheck(() => value instanceof URL)) {
         try {
             return redactString(value.href, context.secrets);

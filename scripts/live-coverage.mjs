@@ -30,6 +30,7 @@ import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { BLOCKED_TOOLS } from './live-smoke/context.mjs';
+import { MUTATING_VERB } from './live-smoke/guard.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -53,33 +54,52 @@ async function registeredToolNames() {
     return names;
 }
 
-function walk(dir, out = []) {
+// live/missions/archive holds frozen iteration transcripts that are kept as a
+// record and are not expected to pass; a call in one of them is not evidence
+// that the tool is exercised by anything that runs green today.
+const SKIP_DIRS = new Set(['archive', 'fixtures']);
+
+function walk(dir, out = [], ext = '.mjs') {
     if (!fs.existsSync(dir)) return out;
     for (const name of fs.readdirSync(dir)) {
         const full = path.join(dir, name);
-        if (fs.statSync(full).isDirectory()) walk(full, out);
-        else if (full.endsWith('.mjs')) out.push(full);
+        if (fs.statSync(full).isDirectory()) { if (!SKIP_DIRS.has(name)) walk(full, out, ext); }
+        else if (full.endsWith(ext)) out.push(full);
     }
     return out;
 }
 
 // ctx.call('x'), ctx.tryCall('x'), and the bare forms a destructured context
-// produces. Only single-quoted string literals count -- a computed tool name is
-// not evidence that any particular tool ran. (An `expectError` alternative used
-// to be matched here; no such helper exists on ctx, so it could only ever have
-// produced a false positive.)
-const CALL_RE = /\b(?:call|tryCall)\(\s*'([A-Za-z_][A-Za-z0-9_]*)'/g;
+// produces. Only string literals count -- a computed tool name is not evidence
+// that any particular tool ran. Any quote style is accepted, because the
+// planned repo-wide reformat (#130) may well switch to double quotes, and a
+// regex that only knew single quotes would then report 0 covered with exit 0.
+// (An `expectError` alternative used to be matched here; no such helper exists
+// on ctx, so it could only ever have produced a false positive.)
+const CALL_RE = /\b(?:call|tryCall)\(\s*(['"`])([A-Za-z_][A-Za-z0-9_]*)\1/g;
+
+// Context helpers that drive a tool without naming it: ctx.createDoc() calls
+// createDocument and ctx.createFolder() calls createFolder (context.mjs). Every
+// Docs scenario starts with createDoc, so without this the single most
+// exercised tool in the harness was credited to the one scenario that happened
+// to spell its name out, and createFolder was listed as "not live-covered".
+const HELPER_TOOLS = [
+    [/\bcreateDoc\(/, 'createDocument'],
+    [/\bcreateFolder\(/, 'createFolder'],
+];
 
 function coverageByFile() {
     const byTool = new Map();
+    const add = (tool, rel) => {
+        if (!byTool.has(tool)) byTool.set(tool, new Set());
+        byTool.get(tool).add(rel);
+    };
     for (const root of LIVE_DIRS) {
         for (const file of walk(path.join(REPO_ROOT, root))) {
             const rel = path.relative(REPO_ROOT, file).replace(/\\/g, '/');
             const src = fs.readFileSync(file, 'utf8');
-            for (const m of src.matchAll(CALL_RE)) {
-                if (!byTool.has(m[1])) byTool.set(m[1], new Set());
-                byTool.get(m[1]).add(rel);
-            }
+            for (const m of src.matchAll(CALL_RE)) add(m[2], rel);
+            for (const [re, tool] of HELPER_TOOLS) if (re.test(src)) add(tool, rel);
         }
     }
     return byTool;
@@ -98,12 +118,48 @@ const phantom = [...byTool.keys()].filter((t) => !registered.has(t)).sort();
 // the tool layer. Same conclusion for coverage -- they provably never reach
 // Google -- but BLOCKED_TOOLS does not list them, because the deny lives in
 // scripts/live-smoke/guard.mjs against an API path, not a tool name.
-const GUARD_DENIED_TOOLS = new Set([
-    // guard.mjs: 'presentations.create' is denied outright. The Slides API
-    // creates in Drive root regardless of any parent given, so it can never
-    // land in the sandbox.
-    'createPresentation',
-]);
+//
+// This used to be a hand-written set containing `createPresentation`, with
+// nothing checking it against guard.mjs. It is now derived: the deny table and
+// the read-only client list are read out of guard.mjs, and every tool module
+// is scanned for the first Google API call it makes. A tool whose first call
+// is one the guard refuses can never get past it, so it is reported as blocked
+// rather than covered. "First call" is a static heuristic: a tool that reads
+// before it writes stays in the covered set, which keeps the number an upper
+// bound, the same as everything else here.
+function guardDeniedTools(registered) {
+    const guardSrc = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'live-smoke', 'guard.mjs'), 'utf8');
+    // 'presentations.create': deny(...)   ->  presentations.create
+    const deniedPaths = new Set([...guardSrc.matchAll(/'([A-Za-z.]+)':\s*deny\(/g)].map((m) => m[1]));
+    // ['calendar', getCalendarClient, () => readOnlyDecider('calendar')]
+    const readOnlyClients = new Set([...guardSrc.matchAll(/readOnlyDecider\('(\w+)'\)/g)].map((m) => m[1]));
+    if (deniedPaths.size === 0 || readOnlyClients.size === 0) {
+        throw new Error('live-coverage: could not read the deny table or the read-only client list out of guard.mjs; the scan is out of date.');
+    }
+    const denied = (label, apiPath) => deniedPaths.has(apiPath)
+        || (readOnlyClients.has(label) && MUTATING_VERB.test(apiPath.split('.').pop()));
+
+    const out = new Set();
+    for (const file of walk(path.join(REPO_ROOT, 'dist', 'tools'), [], '.js')) {
+        const src = fs.readFileSync(file, 'utf8');
+        // One tool per module is the convention; a module registering several
+        // is skipped rather than guessed at.
+        const names = [...src.matchAll(/\bname:\s*'([A-Za-z_][A-Za-z0-9_]*)'/g)].map((m) => m[1]).filter((n) => registered.has(n));
+        if (names.length !== 1) continue;
+        // const slides = await getSlidesClient();  ->  slides: 'slides'
+        const vars = new Map([...src.matchAll(/\b(\w+)\s*=\s*await\s+get(\w+)Client\(\)/g)].map((m) => [m[1], m[2].toLowerCase()]));
+        if (vars.size === 0) continue;
+        const callRe = new RegExp(`\\b(${[...vars.keys()].join('|')})\\.((?:[A-Za-z]+\\.)+[A-Za-z]+)\\(`, 'g');
+        const first = callRe.exec(src);
+        if (first && denied(vars.get(first[1]), first[2])) out.add(names[0]);
+    }
+    if (out.size === 0) {
+        throw new Error('live-coverage: derived an empty guard-denied set, which cannot be right while guard.mjs denies presentations.create.');
+    }
+    return out;
+}
+
+const GUARD_DENIED_TOOLS = guardDeniedTools(registered);
 const cannotReachGoogle = (t) => BLOCKED_TOOLS.has(t) || GUARD_DENIED_TOOLS.has(t);
 
 const blocked = [...byTool.keys()].filter((t) => registered.has(t) && cannotReachGoogle(t)).sort();
@@ -148,4 +204,11 @@ if (process.argv.includes('--json')) {
     console.log('');
 }
 
+// Zero covered tools cannot be a true reading of this repository: it means the
+// scan stopped seeing calls (a moved directory, a changed helper name), and a
+// silent 0 is exactly the failure this script exists to prevent.
+if (covered.length === 0) {
+    console.error('live-coverage: found no covered tools at all, which means the scan is broken, not the coverage.');
+    process.exit(1);
+}
 process.exit(phantom.length ? 1 : 0);

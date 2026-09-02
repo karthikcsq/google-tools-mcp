@@ -34,22 +34,32 @@ API in one session.
 
 ```
   registered tools     160
-  live-covered          28  (17.5%)
-  not live-covered     132
+  live-covered         29  (18.1%)
+  not live-covered     131
+  blocked by design    2  (named by a scenario, never executed)
 ```
 
-That number is the honest one, and it should not be rounded up. 28 of 160 tools
-have been driven against the real Google API by checked-in code. The other 132
-have unit tests and nothing else.
+That number is the honest one, and it should not be rounded up. 29 of 160 tools
+have been driven against the real Google API by checked-in code. The other 131
+have unit tests and nothing else. "Checked-in code" means the scenarios and
+missions that run green today; `live/missions/archive/` holds frozen iteration
+transcripts that are not expected to pass, and the scan skips it. The scan also
+credits `ctx.createDoc()` and `ctx.createFolder()` to the tools they call
+(`createDocument`, `createFolder`), accepts any quote style around the tool
+name, and exits 1 if it finds zero covered tools, since a silent 0 would mean
+the scan is broken rather than the coverage. The two "blocked by design" are named by a
+scenario only to prove the refusal holds (`forwardMessage`, which the runner
+blocks before `execute()`, and `createPresentation`, which the guard denies at
+the API layer), so they count as uncovered rather than covered.
 
-The 28 are not a random sample. They are the tools whose behaviour changed in
+The 29 are not a random sample. They are the tools whose behaviour changed in
 3.0 in a way that could break at the API boundary: the whole Docs read/write
 path, Docs comments, the Drive listing and copy paths, the Gmail MIME path, and
 the Sheets create-then-write contract from #87/#135. The gap that matters is
-smaller than 132, because most of the uncovered tools were touched only by the
+smaller than 131, because most of the uncovered tools were touched only by the
 mechanical SDK v2 migration, and that migration *is* verified across all 160 --
-`registerAllTools` registers every one of them and `help --listTools` returns
-all 160 names through the real server.
+`registerAllTools` registers every one of them and `help` with `listTools=true`
+returns all 160 names through the real server.
 
 Four behavioural changes in 3.0 are deliberately not live-covered, and the
 reason is the safety envelope rather than an oversight:
@@ -131,8 +141,11 @@ by an agent chasing a goal. That is what a real MCP client session looks like.
 
 ## Writing a mission
 
-Missions live in `live/missions/`. Same shape as a `live/` scenario minus the
-assertions. Worked example: `live/missions/harness-selftest.mjs`.
+Missions live in `live/missions/`. Same shape as a `live/` scenario, with
+`ctx.friction()` and `ctx.note()` for recording what the agent ran into. The
+`ctx.assert*` helpers are still there; a mission that hits one just ends with a
+`fail` status instead of a friction entry. Worked example:
+`live/missions/harness-selftest.mjs`.
 
 ```js
 export const name = 'meeting-notes';
@@ -179,8 +192,16 @@ Forgetting it leaks real files into a real Drive.
 So `live-mission` wraps `ctx.call` and `ctx.tryCall` and auto-registers anything
 returned by a creating tool: `createDocument`, `createFolder`,
 `createDocumentFromTemplate`, `createSpreadsheet`, `createPresentation`,
-`copyFile`, `uploadFile`, `createDraft`. The map is kept in sync with the one in
-`scripts/live-smoke/call.mjs`.
+`copyFile`, `uploadFile`, `createDraft`. The map, and the id extraction that
+reads each tool's result shape (JSON keyed `id` or `presentationId`, or the
+prose `createDocumentFromTemplate` returns), live once in
+`scripts/live-smoke/createdResource.mjs` and are shared with `live-call`.
+`tests/liveHarnessCreatedResource.test.js` pins every listed tool to a result
+shape the extractor can read.
+
+A creating call that succeeds but names no id the extractor can find is
+reported as `UNTRACKED` next to the cleanup line and fails the run. Without
+that, the cleanup count only ever described the files the runner had noticed.
 
 This was itself found by running the loop on the harness: the first self-test
 created four files and cleaned up one.
@@ -209,9 +230,17 @@ error, and making it exit non-zero would train everyone to ignore the exit code.
 
 The runner exits non-zero only when it could not do its own job:
 
-- a safety refusal fired,
+- a safety refusal fired that the mission did not declare (see below),
 - the tool code path wrote to stdout,
-- cleanup left something behind.
+- cleanup left something behind,
+- a creating tool succeeded but its result named no id the runner could
+  register (`UNTRACKED`), which is a file in the sandbox nothing will trash.
+
+A mission may export `expectsSafetyRefusals = N` when its purpose is to prove a
+guard deny still holds (Slides creation, for instance, is denied outright
+because the Slides API creates in Drive root). Exactly `N` refusals are then
+forgiven; one more or one fewer is still a runner failure, so this cannot be
+used to wave refusals through.
 
 Read the status line. Never the exit code alone.
 

@@ -28,6 +28,7 @@
 //   - Results are cached to disk and reused for `intervalMs` (default 24h),
 //     so most launches skip the network call entirely.
 import * as path from 'path';
+import { readFile as fsReadFile, writeFile as fsWriteFile, mkdir as fsMkdir } from 'node:fs/promises';
 
 const REGISTRY_URL = 'https://registry.npmjs.org/google-tools-mcp/latest';
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -164,9 +165,15 @@ export async function checkForUpdate({
     intervalMs = DEFAULT_INTERVAL_MS,
     fetchLatest = fetchLatestVersion,
     fetchOptions = {},
-    readFile,
-    writeFile,
-    mkdir,
+    // These default to the real filesystem. They used to have no defaults at
+    // all, and index.js passes none, so in production readState() threw
+    // "readFile is not a function" (swallowed: "no cache") and writeState()
+    // threw on mkdir (swallowed: "best effort"). The check therefore hit the
+    // npm registry on every single launch and never wrote update-check.json,
+    // while every test injected fakes and passed.
+    readFile = fsReadFile,
+    writeFile = fsWriteFile,
+    mkdir = fsMkdir,
     env = process.env,
 } = {}) {
     // Opt-out check comes first, before any disk read or network call. See

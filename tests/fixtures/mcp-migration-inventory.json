@@ -699,6 +699,9 @@
         "file": "tests/listHeadings.test.js"
       },
       {
+        "file": "tests/liveHarnessCleanupAudit.test.js"
+      },
+      {
         "file": "tests/liveHarnessCreatedResource.test.js"
       },
       {
@@ -1325,17 +1328,17 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 326,
+        "line": 337,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 347,
+        "line": 358,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 495,
+        "line": 506,
         "match": ".addTool({"
       },
       {

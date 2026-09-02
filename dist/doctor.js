@@ -53,5 +53,5 @@ export function formatDoctorReport(report, json = false) {
     if (json) return `${JSON.stringify(safe, null, 2)}\n`;
     return [safe.healthy ? 'Setup is healthy.' : 'Setup problems found:',
         ...(safe.problems || []).map(problem => `- ${problem}`),
-        ...(safe.clients || []).map(client => `- ${client.client}: ${client.status}${client.raw ? ` (${client.raw})` : ''}`)].join('\n') + '\n';
+        ...(safe.clients || []).map(client => `- ${client.client}: ${client.status}${client.raw ? ` (${client.raw})` : ''}${client.note ? ` (${client.note})` : ''}`)].join('\n') + '\n';
 }

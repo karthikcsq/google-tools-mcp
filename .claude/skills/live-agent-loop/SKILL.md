@@ -105,9 +105,11 @@ failures and every distinct error message.
 
 **Exit code semantics:** a failed mission exits 0, because a mission that failed
 is a finding, not a runner error. The runner exits non-zero only when it could
-not do its own job: a safety refusal, a stdout leak from the tool code path, or
-cleanup leaving something behind. Read the status line, never the exit code
-alone.
+not do its own job: an undeclared safety refusal, a stdout leak from the tool
+code path, cleanup leaving something behind, or a creating call whose result
+named no id it could register (`UNTRACKED`). A mission whose purpose is to prove
+a guard deny still holds exports `expectsSafetyRefusals = N`; exactly `N` are
+forgiven, no more. Read the status line, never the exit code alone.
 
 ### 5. Triage the report
 
@@ -145,9 +147,10 @@ Anything short of that is another iteration.
 
 ## Writing a mission
 
-Missions live in `live/missions/` and are the same shape as a `live/` scenario
-minus the assertions. See `live/missions/harness-selftest.mjs` for a worked
-example.
+Missions live in `live/missions/` and are the same shape as a `live/` scenario,
+with `ctx.friction()` and `ctx.note()` added. The `ctx.assert*` helpers still
+work; a failed assertion ends the mission with status `fail` rather than a
+friction entry. See `live/missions/harness-selftest.mjs` for a worked example.
 
 ```js
 export const name = 'meeting-notes';
@@ -169,6 +172,8 @@ Context API:
 | `await ctx.call(tool, args)` | throws on failure |
 | `await ctx.tryCall(tool, args)` | returns `{ok, result, error}`, never throws |
 | `await ctx.createDoc(title, markdown)` | seeded doc in the sandbox |
+| `await ctx.createFolder(name, parent?)` | folder inside the sandbox |
+| `ctx.describe(name)` | the tool's description string, as a real MCP client sees it in `tools/list` |
 | `ctx.title(label)` | label + run id, so concurrent runs cannot collide |
 | `ctx.folderId` | the sandbox folder id |
 | `ctx.note(text)` | observation, lands in the report |

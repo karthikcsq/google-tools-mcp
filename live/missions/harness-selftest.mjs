@@ -37,10 +37,12 @@ export async function run(ctx) {
     if (copyWrite.ok) ctx.note('appendText straight after copyFile: allowed (#135 fix confirmed live)');
     else ctx.friction('appendText', `#135 REGRESSION, blocked after copyFile: ${copyWrite.error?.message}`);
 
-    // 4. The guard must still be effective for a file this session never read.
-    //    Uses the copy's id mutated into a plausible-but-unknown id so nothing
-    //    real is touched; a rejection here is the correct outcome.
+    // 4. The read tracker (dist/readTracker.js) must still refuse a write to a
+    //    file this session never read. The id is a literal that cannot exist,
+    //    so nothing real is touched, and the refusal happens before any API
+    //    call; the live-smoke guard never sees this one. A rejection is the
+    //    correct outcome.
     const unread = await ctx.tryCall('appendText', { documentId: 'unread-file-id-that-does-not-exist', text: 'should not work' });
-    if (unread.ok) ctx.friction('appendText', 'GUARD HOLE: wrote to a document this session never read.');
-    else ctx.note('guard still rejects an unread document (correct)');
+    if (unread.ok) ctx.friction('appendText', 'READ TRACKER HOLE: wrote to a document this session never read.');
+    else ctx.note('read tracker still rejects an unread document (correct)');
 }

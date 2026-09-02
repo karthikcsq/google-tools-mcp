@@ -150,14 +150,22 @@ npm install -g google-tools-mcp
 
 #### Codex
 
+Codex pins stdio servers to the legacy MCP lifecycle unless told otherwise, so
+its registration needs `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` in the env block
+(see [Breaking change in 3.0.0](#breaking-change-in-300-http-is-stateless)).
+The setup wizard writes it for you; by hand, pass it with `--env`:
+
 ```bash
-codex mcp add google -- google-tools-mcp
+codex mcp add google \
+  --env CODEX_MCP_PROTOCOL_VERSION=2026-07-28 \
+  -- google-tools-mcp
 ```
 
 With env vars (Option C):
 
 ```bash
 codex mcp add google \
+  --env CODEX_MCP_PROTOCOL_VERSION=2026-07-28 \
   --env GOOGLE_CLIENT_ID=your-client-id \
   --env GOOGLE_CLIENT_SECRET=your-client-secret \
   -- google-tools-mcp
@@ -420,6 +428,8 @@ Google Maps and Places tools for geocoding, reverse geocoding, nearby and text s
 These tools require `GOOGLE_MAPS_API_KEY`, a Google Maps Platform API key, separate from the Google OAuth credentials used everywhere else and not covered by the setup wizard or by [Step 1](#step-1-create-google-oauth-credentials) above. To get one: enable the **Geocoding API**, **Places API (New)**, and **Routes API** for your Google Cloud project, then go to **Credentials** → **Create Credentials** → **API key**, and set it as `GOOGLE_MAPS_API_KEY`. Without it, the `maps` tools are still listed, but calling any of them fails with a clear error telling you to set the key.
 
 The categories above contain 156 service-specific tools. Four general utilities — `help`, `logout`, `troubleshoot`, and `feedback` — bring the default server surface to 160 tools. See [Common Workflows](docs/workflows.md) for practical examples.
+
+`help` with no arguments returns this whole manual. `help` with `tool: "<name>"` returns just that tool's description and the JSON Schema for its arguments, exactly as `tools/list` publishes it, and `help` with `listTools: true` returns the registered tool names one per line. Reach for the per-tool form first: it is a few thousand characters instead of forty thousand, and it states the argument shape the tool actually takes.
 
 ## Finding Character Indices in a Doc
 

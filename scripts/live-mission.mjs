@@ -35,6 +35,7 @@ import { pathToFileURL } from 'node:url';
 import { bootstrap, REPO_ROOT, RESULTS_DIR } from './live-smoke/bootstrap.mjs';
 import { createContext, AssertionFailure, ScenarioSkipped } from './live-smoke/context.mjs';
 import { classifyCreation } from './live-smoke/createdResource.mjs';
+import { runCleanup, listLeftovers, listLeftoverDrafts, keepCommands } from './live-smoke/cleanup.mjs';
 
 const LIVE_DIR = path.join(REPO_ROOT, 'live');
 
@@ -100,6 +101,12 @@ function usage() {
         '  ctx.friction(tool, text)       record that a tool cost more than it should have',
         '',
         'Everything created inside the sandbox is trashed at the end unless --keep.',
+        '',
+        'Exit code: a FAILED MISSION EXITS 0 (it is a finding). The runner exits 1 only when it',
+        'could not do its own job: a safety refusal the mission did not declare via',
+        '`export const expectsSafetyRefusals = N`, a stdout write from the tool code path,',
+        'cleanup leaving something behind, a creating call whose result named no id it could',
+        'register (UNTRACKED), or an item of this run still in the sandbox after cleanup.',
     ].join('\n');
 }
 
@@ -138,39 +145,6 @@ function summarizeCalls(journalFile) {
         (a, b) => b.failures - a.failures || a.tool.localeCompare(b.tool),
     );
     return { perTool: sorted, calls };
-}
-
-async function runCleanup({ registry, guard, tools, journal, keep }) {
-    if (keep) {
-        journal.progress(`\n--keep: leaving ${registry.length} created item(s) in place.`);
-        return { attempted: registry.length, cleaned: 0, failures: [], skipped: true };
-    }
-    const failures = [];
-    let cleaned = 0;
-    const originals = await guard.rawDrive();
-    const silent = { log: { debug() {}, info() {}, warn() {}, error() {} } };
-    // Reverse creation order: files before the folders that hold them.
-    for (const item of registry.slice().reverse()) {
-        try {
-            if (item.kind === 'draft') {
-                await tools.get('deleteDraft').execute({ id: item.id }, silent);
-            } else {
-                // Re-verify containment at cleanup time: trash exactly what this
-                // run created inside the sandbox, and nothing else, ever.
-                if (!(await guard.isInsideTestFolder(item.id))) {
-                    failures.push({ ...item, reason: 'no longer inside the test folder; refused to trash' });
-                    continue;
-                }
-                await originals['files.update']({ fileId: item.id, requestBody: { trashed: true }, supportsAllDrives: true });
-            }
-            cleaned += 1;
-        } catch (error) {
-            const reason = error?.message || String(error);
-            if (/not ?found|404/i.test(reason)) { cleaned += 1; continue; }
-            failures.push({ ...item, reason });
-        }
-    }
-    return { attempted: registry.length, cleaned, failures, skipped: false };
 }
 
 async function main() {
@@ -253,6 +227,12 @@ async function main() {
     const durationMs = Date.now() - started;
 
     const cleanup = await runCleanup({ registry, guard, tools, journal, keep });
+    // Independent of the registry: what is actually still in the sandbox. The
+    // registry only ever describes what the runner noticed, so "cleanup N/N"
+    // on its own cannot tell a clean sandbox from a blind runner.
+    const leftover = keep ? null : await listLeftovers({ tools, folderId, registry, runId, journal });
+    const drafts = keep ? { left: [], unverified: [] } : await listLeftoverDrafts({ tools, registry });
+    const leftoverDrafts = drafts.left;
     await journal.close();
 
     const { perTool, calls } = summarizeCalls(journal.file);
@@ -263,19 +243,33 @@ async function main() {
         status,
         reason,
         durationMs,
-        account: self?.emailAddress ?? null,
+        // bootstrap() already unwrapped getProfile's JSON down to the address
+        // string; reading `.emailAddress` off a string made this null in every
+        // report the runner has ever written.
+        account: typeof self === 'string' ? self : null,
         sandboxFolderId: folderId,
         totals: {
             toolCalls: calls.length,
             failedCalls: calls.filter((c) => !c.ok).length,
             distinctTools: perTool.length,
-            safetyRefusals: calls.filter((c) => c.outcome === 'safety-refused').length,
+            // Both layers of the envelope: the guard refusing an API call
+            // ('safety-refused') and the runner refusing a tool by name before
+            // execute() ('blocked'). The block list is layer 1 of the envelope;
+            // a mission that reaches for sendMessage must show up here.
+            safetyRefusals: calls.filter((c) => c.outcome === 'safety-refused' || c.outcome === 'blocked').length,
+            expectedSafetyRefusals: Number(mission.expectsSafetyRefusals ?? 0),
             stdoutLeaks: journal.stdoutLeaks,
         },
         perTool,
         notes,
         frictions,
         cleanup,
+        // Every id the runner registered, so a --keep run (or a failed cleanup)
+        // names exactly what is sitting in the sandbox.
+        registry: registry.map(({ id, kind }) => ({ id, kind })),
+        leftover: leftover ? { owned: leftover.owned, foreign: leftover.foreign, unverified: leftover.unverified } : null,
+        leftoverDrafts,
+        unverifiedDrafts: drafts.unverified,
         untracked,
         journalFile: path.relative(REPO_ROOT, journal.file),
         calls,
@@ -313,7 +307,20 @@ async function main() {
     }
     line('');
     line(`  cleanup     ${cleanup.skipped ? 'skipped (--keep)' : `${cleanup.cleaned}/${cleanup.attempted} trashed`}`);
+    if (cleanup.skipped) {
+        for (const item of registry) line(`    KEPT ${item.kind} ${item.id}`);
+        for (const command of keepCommands(registry)) line(`    ${command}`);
+    }
     for (const f of cleanup.failures) line(`    LEFT BEHIND ${f.kind} ${f.id}: ${f.reason}`);
+    if (leftover?.all) {
+        line(`  sandbox     ${leftover.all.length} item(s) after cleanup`);
+        for (const f of leftover.owned) line(`    LEFT BEHIND by this run: ${f.name} (${f.id})`);
+        for (const f of leftover.foreign) line(`    not this run's: ${f.name} (${f.id})`);
+    } else if (leftover?.unverified) {
+        line(`  sandbox     UNVERIFIED: ${leftover.unverified}`);
+    }
+    for (const id of leftoverDrafts) line(`    LEFT BEHIND draft ${id}`);
+    for (const d of drafts.unverified) line(`    UNVERIFIED draft ${d.id}: ${d.reason}`);
     // Printed next to the cleanup count on purpose: without it, that count is a
     // ratio of the resources the runner happened to recognize, and reads as a
     // clean sandbox no matter how many it missed.
@@ -346,7 +353,14 @@ async function main() {
         // An untracked creation is the same class of failure as a cleanup
         // failure -- something real is still in the sandbox -- and it is worse,
         // because nothing else in the report would ever mention it.
-        || untracked.length > 0;
+        || untracked.length > 0
+        // And the check that does not trust the registry at all. An audit
+        // that could not be completed is a failure too: "nothing found"
+        // and "could not look" must never print the same exit code.
+        || (leftover?.owned.length ?? 0) > 0
+        || Boolean(leftover?.unverified)
+        || leftoverDrafts.length > 0
+        || drafts.unverified.length > 0;
     return runnerFailed ? 1 : 0;
 }
 

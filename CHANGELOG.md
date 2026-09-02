@@ -73,9 +73,16 @@ stdio client is unaffected. See
   [`.claude/skills/live-agent-loop/SKILL.md`](.claude/skills/live-agent-loop/SKILL.md),
   reference in [docs/live-agent-loop.md](docs/live-agent-loop.md).
 - `npm run live-coverage` reports which of the 160 registered tools are driven
-  against the real Google API by checked-in code (28) and which have unit tests
-  only (132), and exits non-zero if a scenario calls a tool that is no longer
-  registered. Tools that provably cannot reach Google are reported separately
+  against the real Google API by checked-in code (29) and which have unit tests
+  only (131), and exits non-zero if a scenario calls a tool that is no longer
+  registered, or if it finds no covered tools at all (a silent zero means the
+  scan broke, not the coverage). Calls through the `ctx.createDoc()` and
+  `ctx.createFolder()` helpers are credited to `createDocument` and
+  `createFolder`, any quote style around a tool name counts, and
+  `live/missions/archive/` is skipped: it holds the frozen iteration-1 and
+  iteration-2 transcripts, which record what the agent hit at the time and are
+  not expected to pass on fixed code (loop-2 sends the nested `formatCells`
+  shape that 3.0 rejects by design). Tools that provably cannot reach Google are reported separately
   rather than counted as covered, because a scenario names them only to assert
   the refusal holds: `forwardMessage`, which the runner blocks before
   `execute()`, and `createPresentation`, which `guard.mjs` denies outright
@@ -83,7 +90,7 @@ stdio client is unaffected. See
   runs offline, registering every category against a recording
   stub. The point is that "all suites pass" and "this tool works" are different
   claims, and the gap between them should be a number rather than a feeling.
-- Jest `testTimeout` raised to 30s. The four suites that call `registerAllTools`
+- Jest `testTimeout` raised to 30s. The seven suites that call `registerAllTools`
   dynamically import all 12 tool categories (~180 modules): about 750ms warm, but
   measured past Jest's 5s default against a cold filesystem cache. That is
   exactly the CI shape, since both workflows run `npm ci` and then the suite, and
@@ -101,6 +108,37 @@ stdio client is unaffected. See
   counted what the runner had noticed. One shared extractor now handles every
   shape including the prose form, and a creating call whose id cannot be found
   is reported as `UNTRACKED` and fails the run rather than passing quietly.
+  The cleanup loop itself is now one shared implementation
+  (`scripts/live-smoke/cleanup.mjs`) instead of two copies, because both copies
+  had the same holes: a file the run had already deleted was reported as left
+  behind (the containment check ran before the existence check, and an
+  unreadable file is "not proven inside"); an `invalid_grant` rebuild inside
+  the run's last call left the raw Drive handle null so every trash failed with
+  a `TypeError`; a guard refusal was counted as neither pass nor fail; and a
+  mission that `track()`ed an id the runner had already registered made
+  cleanup say `2/2` for one file. After cleanup both runners now list the test
+  folder and any leftover drafts and fail on anything this run left there, and
+  `--keep` prints each kept id with the `npm run live-call -- --cleanup <ids>`
+  command that trashes them later.
+- The set of tools `live-coverage` reports as "denied by `guard.mjs`" is derived
+  from the guard's own deny table and read-only deciders (`MUTATING_VERB` is now
+  exported for that) rather than a hand-maintained list beside it, so the two
+  cannot drift. The created-resource pin test executes all eight creating tools
+  against fake clients and feeds their real return values to the shared id
+  extractor, replacing a test that only compared two hand-written literals.
+- `verify-preserve-heading` probe 3 deletes a heading on purpose; its verdict
+  logic expected the heading to survive and reported false friction on every
+  run. The probe now states which outcome it expects.
+- The post-cleanup audit fails closed. It listed only the top level of the test
+  folder, so a file inside a folder the run created was hidden behind its
+  parent; a listing that threw came back as an empty array; a listing the tool
+  cut short was read as complete; and any `getDraft` error (auth, quota,
+  network) was taken as "the draft is gone". The scan is now recursive
+  (`depth: 'all'`, up to 5000 items), and a listing that could not be made, was
+  truncated, or skipped a folder it could not read is reported as `UNVERIFIED`
+  and fails the run. Only an error carrying a real 404 status counts as a
+  deleted draft; anything else is reported per draft and fails the run too.
+  Covered by `tests/liveHarnessCleanupAudit.test.js`.
 
 ### Security
 
@@ -238,12 +276,63 @@ stdio client is unaffected. See
   token fails every in-flight call at once, and each failure nulled the shared
   clients out from under the others mid-rebuild. Both now hold the in-flight
   Promise, and both release it when it settles, so a declined consent screen is
-  never replayed to the next caller.
+  never replayed to the next caller. Each flow releases only the latch it owns:
+  `logout` drops the latch mid-flow and the next request starts a fresh one,
+  and when the abandoned flow later fails it must not clear that newer latch,
+  or a third request would open a third browser window behind the one the
+  user is already looking at. Nor may the abandoned flow *succeed*: `logout`
+  bumps an authorization generation, and a flow that started under the old one
+  throws `Logged out while authorization was in progress` instead of installing
+  a client the user has just asked to discard, whichever flow finishes last.
+  A cold request that arrives while a re-authorization is running joins it
+  rather than opening a second consent screen beside it.
 - **`GET /healthz` reported a closed runtime as healthy.** The health branch sat
   above the `closed` check, so a drained handler answered `200 {"status":"ok"}`
   while `/mcp` already answered `503` — the one probe meant to notice a dead
   runtime was the only route that never did. It now answers
   `503 {"status":"closed"}`, still behind the same auth gate.
+- **`setup` and `doctor` could not finish on any machine that had Codex or
+  Claude Code installed.** Both clients report a missing registration as a
+  failed command (`codex mcp get google --json` exits 1 with "No MCP server
+  named 'google' found."), and every rejection was mapped to `unknown` without
+  reading it, so setup stopped at Step 5 with "was left unconfigured (unknown).
+  Setup is incomplete." and doctor said "unrecognized client entry". The Claude
+  Code probe was worse: `claude mcp get -s user google --json` is answered by
+  every version with `error: unknown option '-s'`, so inspection was `unknown`
+  on every machine. A rejection whose text says "missing" now means missing,
+  and Claude Code's user-scope entry is read from the file `claude mcp add -s
+  user` writes (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`), with
+  its `type: 'stdio'` discriminator and empty `env` stripped so a correct entry
+  compares equal to the desired one instead of being re-added on every run.
+- **`doctor` reported every README-documented registration as a problem.** Its
+  "recommended" stdio entry is the absolute path of the copy running doctor,
+  while setup writes `node <global npm root>/google-tools-mcp/dist/index.js`
+  and the README's own instructions register the bare `google-tools-mcp` bin
+  or `npx -y google-tools-mcp`. All three were "entry differs from recommended
+  configuration", exit 1, including `npx -y google-tools-mcp doctor` run right
+  after a successful setup. An entry that launches this package (its bin, a
+  Windows shim, `npx google-tools-mcp[@version]`, a `dist/index.js` next to a
+  `google-tools-mcp` package.json) is now `configured` with a note saying it is
+  not the entry setup would write, and the npx form additionally says why setup
+  prefers a direct launch. A Codex entry without `CODEX_MCP_PROTOCOL_VERSION`
+  in its env stays a problem, and now names the missing variable and value. An
+  entry that launches something else, a `@latest` target, or an HTTP URL that
+  differs is still a problem. So is an entry that launches this package with a
+  subcommand or flag after it (`google-tools-mcp doctor`, `npx google-tools-mcp
+  setup`, `dist/index.js auth`), because `dist/index.js` dispatches on
+  `argv[2]` and such an entry never starts the server, and one whose env sets
+  `GOOGLE_MCP_TRANSPORT` to an HTTP transport.
+- **`doctor --json` printed `"args": "[Circular]"` for the second client.** The
+  diagnostic redactor treated every object it had already seen as a cycle, so
+  the `args` array the two recommended entries share was replaced on its second
+  appearance. It now tracks ancestors only: a true cycle still prints
+  `[Circular]`, a shared reference prints its value.
+- **The update check hit the npm registry on every launch.** `checkForUpdate`
+  read and wrote its cache through injectable `readFile`/`writeFile`/`mkdir`
+  parameters whose defaults were never set, so outside the unit tests every
+  cache read threw, was swallowed, and the registry was asked again. The
+  defaults are the real `node:fs/promises` functions, and a test now proves a
+  second launch within the TTL makes no network request.
 - **`readDocument(format='markdown')` wrapped every run in a colour span nobody
   asked for, which made read-back verification impossible.** #14 requires every
   run this server writes to carry an explicit `foregroundColor`, and Google's
@@ -292,7 +381,14 @@ stdio client is unaffected. See
   agent into skipping discovery and guessing argument names. `help` now accepts
   `tool` (returns that tool's description and JSON Schema, ~3,000 characters)
   and `listTools` (just the registered names). Calling it with no arguments
-  still returns the full manual, so nothing that worked before changed.
+  still returns the full manual, so nothing that worked before changed. The
+  schema it returns is rendered the same way the SDK renders `tools/list`
+  (`io: 'input'`, draft 2020-12): the first cut used Zod's bare
+  `toJSONSchema()`, whose default is the *output* schema, so every
+  `.optional().default(x)` field came back as `required`. For 50 of the 160
+  tools that contradicted `tools/list`; `readDocument` alone claimed all seven
+  of its optional fields were mandatory. A test now pins `help`'s schema to the
+  SDK's conversion for every registered tool.
 - **`formatCells` now names its accepted arguments when none are supplied.**
   The tool takes flat options with hex-string colors, not the nested Google
   Sheets API `CellFormat` shape, which is what a caller who knows the underlying

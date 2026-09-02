@@ -39,8 +39,9 @@ const INSTRUMENTED = new WeakMap(); // client object -> { label, originals }
 
 // Method names that mutate state. Anything matching this and not covered by an
 // explicit rule is denied. Read verbs (get/list/export/download/...) fall
-// through to "allowed".
-const MUTATING_VERB = /^(create|insert|import|update|patch|delete|batchDelete|batchModify|modify|modifyLabels|batchUpdate|copy|move|send|trash|untrash|append|clear|batchClear|batchClearByDataFilter|batchUpdateByDataFilter|emptyTrash|watch|stop|generateIds|setIamPolicy|resolve|reply|add|remove|set|enable|disable|publish|unpublish|refresh|reset|cancel|close|complete|clone|duplicate|replace|revoke|upload|write|save|apply)$/;
+// through to "allowed". Exported so scripts/live-coverage.mjs can apply the
+// same verb test when it works out which tools the guard would refuse.
+export const MUTATING_VERB = /^(create|insert|import|update|patch|delete|batchDelete|batchModify|modify|modifyLabels|batchUpdate|copy|move|send|trash|untrash|append|clear|batchClear|batchClearByDataFilter|batchUpdateByDataFilter|emptyTrash|watch|stop|generateIds|setIamPolicy|resolve|reply|add|remove|set|enable|disable|publish|unpublish|refresh|reset|cancel|close|complete|clone|duplicate|replace|revoke|upload|write|save|apply)$/;
 
 // --- write quota -----------------------------------------------------------
 //
