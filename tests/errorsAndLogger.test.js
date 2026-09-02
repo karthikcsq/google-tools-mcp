@@ -164,6 +164,29 @@ describe('diagnostic redaction', () => {
         expect(redacted.error.cause.refresh_token).toBe('[REDACTED]');
     });
 
+    it('keeps a reference that is shared, not circular, instead of printing [Circular] for it', () => {
+        // doctor --json builds every client's recommended entry from the same
+        // launch object, so `args` is one array referenced from several places.
+        // A visited-set that never forgot a node reported the second reference
+        // as a cycle and the report printed `"args": "[Circular]"`.
+        const args = ['C:\\global\\google-tools-mcp\\dist\\index.js'];
+        const report = {
+            clients: [
+                { client: 'Codex', recommended: { command: 'node', args } },
+                { client: 'Claude Code', recommended: { command: 'node', args } },
+            ],
+        };
+        const redacted = redactDiagnostic(report);
+        expect(redacted.clients[0].recommended.args).toEqual(args);
+        expect(redacted.clients[1].recommended.args).toEqual(args);
+        expect(JSON.stringify(redacted)).not.toContain('[Circular]');
+
+        // A genuine cycle is still reported as one.
+        const loop = { args };
+        loop.self = loop;
+        expect(JSON.stringify(redactDiagnostic(loop))).toContain('[Circular]');
+    });
+
     it.each([
         'authorization',
         'proxyAuthorization',
