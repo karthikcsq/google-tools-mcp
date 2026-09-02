@@ -92,16 +92,29 @@ function classifyAuthFailure(error) {
 // awaits the same flow.
 let authInFlight = null;
 let reauthInFlight = null;
+// Bumped by resetClients(). A flow that was already running when the user
+// logged out must not install its client afterwards: that would put the
+// credentials just thrown away back into service, either on their own or on
+// top of whatever the fresh flow installs, depending on which one finishes
+// last. The stale flow fails its own callers instead and touches nothing.
+let authGeneration = 0;
+
+function loggedOutMidFlow(what) {
+    return publicError(`Logged out while ${what} was in progress. Retry the request to sign in again.`);
+}
 
 async function performAuth() {
+    const generation = authGeneration;
     try {
         logger.info('Attempting to authorize Google API client...');
-        authClient = await authorize();
+        const client = await authorize();
+        if (generation !== authGeneration) throw loggedOutMidFlow('authorization');
+        authClient = client;
         logger.info('Google API client authorized successfully.');
     } catch (error) {
         if (isPublicError(error)) throw error;
         logger.error('Failed to initialize Google API client:', error);
-        authClient = null;
+        if (generation === authGeneration) authClient = null;
         const guidance = AUTH_FAILURE_GUIDANCE[classifyAuthFailure(error)];
         throw publicError(
             'Google authentication required. A browser window should have opened automatically. '
@@ -113,17 +126,29 @@ async function performAuth() {
 
 async function ensureAuth() {
     if (authClient) return;
+    // A re-authorization nulls authClient and every API client for the length
+    // of its browser flow. A cold request arriving in that window (the first
+    // Gmail call, say) must join that flow, not open a second browser window
+    // racing it for the same loopback callback port.
+    if (reauthInFlight) return reauthInFlight;
     // The latch is cleared as the flow settles, either way, so a failed
     // authorization is never replayed to the next caller: the request after a
     // declined consent screen starts a fresh flow rather than inheriting the
     // stale rejection.
     if (!authInFlight) {
-        authInFlight = performAuth().finally(() => { authInFlight = null; });
+        // Release only the latch this flow owns. resetClients() (logout) drops
+        // the latch while a flow is still running, and the next request then
+        // starts a fresh one; when the abandoned flow finally settles it must
+        // not clear THAT latch, or a third caller would start yet another
+        // browser flow behind the one already in progress.
+        const flow = performAuth().finally(() => { if (authInFlight === flow) authInFlight = null; });
+        authInFlight = flow;
     }
     return authInFlight;
 }
 
 async function performReauthorize() {
+    const generation = authGeneration;
     logger.info('Re-authorizing after invalid_grant...');
     authClient = null;
     googleDocs = null;
@@ -135,7 +160,9 @@ async function performReauthorize() {
     formsClient = null;
     slidesClient = null;
     tasksClient = null;
-    authClient = await authorize();
+    const client = await authorize();
+    if (generation !== authGeneration) throw loggedOutMidFlow('re-authorization');
+    authClient = client;
     logger.info('Re-authorization successful.');
 }
 
@@ -149,7 +176,8 @@ async function performReauthorize() {
  */
 async function reauthorize() {
     if (!reauthInFlight) {
-        reauthInFlight = performReauthorize().finally(() => { reauthInFlight = null; });
+        const flow = performReauthorize().finally(() => { if (reauthInFlight === flow) reauthInFlight = null; });
+        reauthInFlight = flow;
     }
     return reauthInFlight;
 }
@@ -271,7 +299,9 @@ export function getAuthClientIfReady() {
 export function resetClients() {
     // Drop the latches too, so the first call after a logout starts a genuinely
     // new authorization instead of awaiting the one that was in flight when the
-    // credentials were thrown away.
+    // credentials were thrown away. Bumping the generation makes any flow that
+    // was in progress discard its result when it settles (see performAuth).
+    authGeneration += 1;
     authInFlight = null;
     reauthInFlight = null;
     authClient = null;
