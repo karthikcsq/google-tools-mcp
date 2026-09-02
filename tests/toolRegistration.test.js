@@ -344,6 +344,7 @@ describe('Total tool count', () => {
 // ---------------------------------------------------------------------------
 describe('help: per-tool discovery', () => {
     let help;
+    let registered;
     beforeAll(async () => {
         delete process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES;
         const server = createMockServer();
@@ -352,7 +353,35 @@ describe('help: per-tool discovery', () => {
         try {
             await registerAllTools(server);
         } finally { info.mockRestore(); }
-        help = server.getTools().get('help');
+        registered = server.getTools();
+        help = registered.get('help');
+    });
+
+    // The schema help hands back has to be the one the client already saw in
+    // tools/list, or help is a second, contradicting source of truth. The SDK
+    // renders tools/list through Standard Schema's `~standard.jsonSchema.input`
+    // (see standardSchemaToJsonSchema in @modelcontextprotocol/server), which is
+    // the INPUT schema: a field with `.optional().default(x)` is optional. Zod's
+    // bare `z.toJSONSchema()` defaults to the OUTPUT schema, where that same
+    // field is always present and therefore `required`. help shipped with the
+    // bare call and told callers that readDocument's seven optional fields were
+    // all mandatory, for 50 of the 160 tools in total.
+    it('returns the same JSON Schema the SDK publishes in tools/list, for every tool', async () => {
+        const mismatched = [];
+        for (const [name, def] of registered) {
+            if (!def.parameters?.['~standard']?.jsonSchema) continue;
+            const published = def.parameters['~standard'].jsonSchema.input({ target: 'draft-2020-12' });
+            const { inputSchema } = JSON.parse(await help.execute({ tool: name }));
+            if (JSON.stringify(inputSchema) !== JSON.stringify(published)) mismatched.push(name);
+        }
+        expect(mismatched).toEqual([]);
+    });
+
+    it('lists only the genuinely required fields of a tool whose optional fields carry defaults', async () => {
+        const { inputSchema } = JSON.parse(await help.execute({ tool: 'readDocument' }));
+        expect(inputSchema.required).toEqual(['documentId']);
+        // The optional fields are still described, just not required.
+        expect(Object.keys(inputSchema.properties)).toEqual(expect.arrayContaining(['format', 'fromIndex', 'plainMarkdown']));
     });
 
     it('returns a single tool description and JSON Schema, not the manual', async () => {
