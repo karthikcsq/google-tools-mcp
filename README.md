@@ -316,7 +316,7 @@ npm install -g google-tools-mcp@latest
 (or just re-run `npx -y google-tools-mcp setup`, which does the same install and re-points your MCP config). The server also helps you notice: on startup, after the MCP connection is already established, it makes a strictly time-boxed (2s), non-blocking, at-most-once-per-24-hours check against the npm registry for the latest published version, and logs a one-line warning if you're behind. This check runs after the connection handshake and is never awaited, so a slow or unreachable network can't delay or reintroduce the `npx` startup-timeout race this section is about; worst case, it just never gets to print the notice.
 ## Development / Contributing
 
-Contributor-facing deep dives live in [`docs/`](docs/README.md), indexed there.
+Contributor-facing deep dives live in [`docs/`](docs/README.md), indexed there. The rules a change has to follow (read-before-write guard, seeding after create/copy, working copies, the error boundary, how to read a test run, changelog and version) are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 `dist/` is the hand-edited source for this repository. It contains plain JavaScript; there is no TypeScript, bundler, or build step.
 

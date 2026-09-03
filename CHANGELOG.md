@@ -18,6 +18,29 @@ came from. Planning notes under `docs/plans/` and `.planning/` are not logged.
 The 2.0.0 entry predates this convention and collapses thirteen pull requests
 into one release.
 
+## [3.4.4] - 2026-09-03
+
+PR [#146](https://github.com/karthikcsq/google-tools-mcp/pull/146) by
+[@ElliotDrel](https://github.com/ElliotDrel): `CONTRIBUTING.md`; version 3.4.4.
+
+### Added
+
+- `CONTRIBUTING.md` (#138): the rules a change has to follow that no single
+  file in the repo stated. The read-before-write model (`guardMutation`, the
+  fifteen Docs tools that open a lease through `beginDocsMutation`, the three
+  Sheets tools and `deleteFile` that call the guard directly, and how a read
+  handle differs from the in-process tracker), the seeding rule for any tool
+  that creates or copies a file ("trustworthy or not at all", with the #135
+  `createSpreadsheet` / `copyFile` gap as the reason the rule is written down),
+  the working-copy lifecycle (which copy is canonical, rewrite, staleness,
+  cleanup and retention), the error boundary (caught error text never reaches
+  `publicError` or a persisted diagnostic), how to read a test run (`Test
+  Suites:` is the line that matters, since a suite that fails to link reports
+  zero failed tests), the inventory snapshot, the one-entry-per-PR changelog
+  and version bump, and the live-testing safety boundary. Every file, function,
+  anchor, and test named in it was checked against `main` before it landed.
+  `README.md` and `docs/README.md` link to it.
+
 ## [3.4.3] - 2026-09-02
 
 PR [#144](https://github.com/karthikcsq/google-tools-mcp/pull/144) by
