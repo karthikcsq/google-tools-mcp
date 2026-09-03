@@ -11,9 +11,16 @@ the `v*` tag. Merging is allowed. Only Elliot clears #50, and no tag is pushed b
 
 ## Where things stand
 
-`main` = `55d8c65` (PR #143 merged 2026-09-02). Work in flight is on branch
-`t3code/release-readiness` in worktree
-`C:\Users\2supe\.t3\worktrees\google-tools-mcp\t3code-55278c06`, going out as PR #144.
+`main` = `665a605` (PR #144 merged 2026-09-02; #143 before it). Work in flight is on branch
+`t3code/contributing-138` in worktree
+`C:\Users\2supe\.t3\worktrees\google-tools-mcp\t3code-55278c06`: CONTRIBUTING.md for #138,
+going out as PR #146 with changelog entry 3.4.4 and `package.json` 3.4.4. It changes no
+runtime code, so the live missions and `live-smoke` were re-run on `665a605` while it was
+being written and only the static gates need a re-run after it merges. The subagent that
+drafted it was cut off by a rate limit on 2026-09-02 before verifying anything; every file,
+function, anchor, test, and PR number in the draft was then checked by hand on 2026-09-03
+(all held), and the README / docs index pointers, changelog entry, and bump were added by hand.
+Gates on the branch: 96 suites / 1419 passed / 2 skipped, audit 0, pack 185 files 396.7 kB.
 
 Versioning changed on 2026-09-02: `CHANGELOG.md` now has one entry per merged PR with its own
 semantic version (Elliot's convention; "it's OK if we end up at a different version than 3").
@@ -28,10 +35,10 @@ entry and bumps `package.json` to it (RELEASING.md, "Release a version").
 | `npm pack --dry-run` | 185 files, 396.6 kB; no `tests/`, `live/`, `scripts/live-*`, `.husky`, `.planning` |
 | `package.json` version | 3.4.3 |
 | `npm run live-coverage` | 31 covered / 129 not covered / 2 blocked by design, exit 0 |
-| Live vs real API (2026-09-02) | `verify-comment-collateral` PASS 15 calls (1 intended block refusal), 1/1 cleaned, sandbox 0 after; earlier the same day on `main`: `harness-selftest` PASS, `verify-created-resource-tracking` PASS, `agent-loop-2-fixes` PASS, `live-smoke` 22/22 with 0 leftovers |
+| Live vs real API on `main` `665a605` (2026-09-02 20:13-20:20 UTC) | `harness-selftest` PASS (7 calls, 1 intended refusal, 3/3 trashed), `verify-created-resource-tracking` PASS (Slides deny holds, 2/2 trashed), `agent-loop-2-fixes` PASS (19 calls, 3 intended wrong-shape failures, 5/5 trashed), `verify-comment-collateral` PASS (15 calls, 1 intended block refusal, 1/1 trashed); sandbox 0 items after every run. `live-smoke` run `2026-09-02T20-15-21-994-96c4`: 22 passed / 0 failed / 0 skipped, cleanup 28/28 trashed with 0 failures, 0 drafts left, 0 stdout leaks |
 | #50 protection rules | still `[]` as of 2026-09-02 |
 
-## What PR #144 carries
+## What PR #144 carried (merged as `665a605`)
 
 1. **Fix: comment tools left the tracked Docs revision stale.** `addComment`, `replyToComment`,
    `resolveComment`, `updateComment`, `deleteComment` each advance the Docs `revisionId` while
@@ -48,10 +55,10 @@ entry and bumps `package.json` to it (RELEASING.md, "Release a version").
    the 5 the split deliberately re-wrapped; chain order matches `git log --first-parent`).
 3. `package.json`/lock 3.4.3, RELEASING.md per-PR convention, this file.
 
-Not fixed, filed as a follow-up (see "Open issues"): a **collaborator's** comment made in the
-Docs UI moves the revision the same way, and nothing in-process can see it, so the next write
-reports the same conflict and a re-read clears it. The message is correct; it is just one round
-trip more than necessary.
+Not fixed, filed as [#145](https://github.com/karthikcsq/google-tools-mcp/issues/145): a
+**collaborator's** comment made in the Docs UI moves the revision the same way, and nothing
+in-process can see it, so the next write reports the same conflict and a re-read clears it. The
+message is correct; it is just one round trip more than necessary.
 
 ## The one blocker
 
@@ -89,13 +96,13 @@ doctor` on a machine with Codex or Claude Code installed (CI has neither client)
 | Issue | Disposition |
 | --- | --- |
 | [#50](https://github.com/karthikcsq/google-tools-mcp/issues/50) | **The blocker.** Elliot's repo-settings action. |
-| [#141](https://github.com/karthikcsq/google-tools-mcp/issues/141) | Fixed on `main` since #86 (PR #110): `listComments` field mask includes `replies(...)` and `replyCount` is derived from it. Confirmed live 2026-09-02 by `issue-86-comment-reply-awareness` and `verify-comment-collateral`. Close with the evidence. |
-| [#142](https://github.com/karthikcsq/google-tools-mcp/issues/142) | Suggestion 2 (warn at push time) shipped in #88 (PR #110): `replaceDocumentWithMarkdown` names every unresolved comment anchor it removes, `onCollateral='block'` refuses, `dryRun` previews. Confirmed live 2026-09-02. Suggestion 1 (listComments flags orphaned threads) not built: Drive keeps the thread record and its `quotedFileContent` after the anchor is gone, so the only way to detect an orphan is to search the current body for the quoted text, which false-positives on any repeated sentence. Close: the push-time warning is the signal. |
-| [#136](https://github.com/karthikcsq/google-tools-mcp/issues/136) | Out of scope for this release, flagged. #119 already handles a backwards `modifiedTime` (keeps the newer baseline, warns, lets the WriteControl revision guard the write). New data point for whoever builds it: comment writes move `revisionId` with `modifiedTime` unchanged, so "revision moved, timestamp did not" is a coherent transition, not an incoherent one. |
-| [#137](https://github.com/karthikcsq/google-tools-mcp/issues/137) | Out of scope for this release, flagged: a workspace-path refactor of two tools with a concurrency test, not a bug in shipped behaviour. |
-| [#138](https://github.com/karthikcsq/google-tools-mcp/issues/138) | Relevant and cheap: CONTRIBUTING.md. Being written on its own branch/PR after #144 merges (entry 3.4.4). |
+| [#141](https://github.com/karthikcsq/google-tools-mcp/issues/141) | **CLOSED 2026-09-02** ([comment](https://github.com/karthikcsq/google-tools-mcp/issues/141#issuecomment-5515730313)). Fixed since #86 (PR #110): `listComments` field mask includes `replies(...)`, `replyCount` derived from it; `resolveComment` verifies and throws. Confirmed live by `verify-comment-collateral`. |
+| [#142](https://github.com/karthikcsq/google-tools-mcp/issues/142) | **CLOSED 2026-09-02** ([comment](https://github.com/karthikcsq/google-tools-mcp/issues/142#issuecomment-5515730779)). Suggestion 2 shipped in #88 (PR #110): collateral report, `onCollateral='block'`, `dryRun`. Suggestion 1 declined with reasoning (no anchor-validity field; quoted-text search false-positives on repeated sentences). |
+| [#136](https://github.com/karthikcsq/google-tools-mcp/issues/136) | **Flagged out of scope, labelled `enhancement`, stays open** ([comment](https://github.com/karthikcsq/google-tools-mcp/issues/136#issuecomment-5515741565)): #119's `modifiedTimeWentBackwards` already covers the backwards timestamp; noted that "revision moved, modifiedTime did not" is a coherent comment-write transition. |
+| [#137](https://github.com/karthikcsq/google-tools-mcp/issues/137) | **Flagged out of scope, labelled `enhancement`, stays open** ([comment](https://github.com/karthikcsq/google-tools-mcp/issues/137#issuecomment-5515742120)): gap re-checked on `main`, still as described; refactor + concurrency test, not a shipped defect. |
+| [#138](https://github.com/karthikcsq/google-tools-mcp/issues/138) | **In progress**: CONTRIBUTING.md on `t3code/contributing-138` (subagent writing, every claim to be verified against the repo before the PR opens). Entry 3.4.4. |
+| [#145](https://github.com/karthikcsq/google-tools-mcp/issues/145) | **Filed 2026-09-02** as the #144 follow-up: collaborator UI comment -> conflict until re-read; target-less handle writes stay pinned (`guardTargets` returns at `normalized.length === 0` without re-arming). Not a blocker. |
 | [#130](https://github.com/karthikcsq/google-tools-mcp/issues/130) | Elliot ruled it deferred on 2026-09-01. Flagged, untouched. |
-| follow-up (to file) | Collaborator UI comment -> next write reports a revision conflict until re-read. Also note the handle path: `docsHandles.guardTargets` re-arms on a revision-only change when targets are given, but a target-less write (`replaceDocumentWithMarkdown` over HTTP) still conflicts. |
 
 ## Standing rules that must survive compaction
 
@@ -136,5 +143,5 @@ verify/live-smoke-on-fixes 5e5d0e6ffcb51d84b573e7b605f8fbf5e584ec6f
 stash@{0} (WIP #71)        5579ea3f2a7e470047466ce067dade9c40ca042c
 ```
 
-Remote branch `t3code/review-main-changes-npm-readiness` (PR #143, merged) can be deleted once
-nothing checks it out.
+Remote branches `t3code/review-main-changes-npm-readiness` (#143) and `t3code/release-readiness`
+(#144) were deleted on 2026-09-02 after their merges; both are reachable from `main`.

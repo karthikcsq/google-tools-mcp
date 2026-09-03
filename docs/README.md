@@ -6,6 +6,7 @@ The main README is the user-facing guide: install, configure, tool reference, tr
 
 ## Index
 
+- [Contributing](../CONTRIBUTING.md) — the rules a change has to follow that no single file states: the read-before-write guard and which surfaces it covers, seeding read state after create/copy ("trustworthy or not at all"), working-copy lifecycle, the error boundary, reading the `Test Suites:` line, the inventory snapshot, and the one-entry-per-PR changelog and version bump.
 - [How this repo works](architecture.md) — why `dist/` is the source and there is no build step, the entry point and its subcommands, transports, how the 12 tool categories load and what the `addTool` wrapper does for free, auth and config layout, tests, and how to add a tool.
 - [Shared HTTP mode](http-mode.md) — running one long-lived server for many clients, the 3.0.0 stateless-HTTP breaking change (removed `/sse`, `/messages`, `/ping`, session routes, and `Mcp-Session-Id`), the `readHandle` contract for edits over HTTP, and exact Claude Code / Codex reconfiguration steps.
 - [Remote OAuth tunnel](remote-oauth-tunnel.md) — completing the OAuth flow when the server runs on a machine with no browser.
