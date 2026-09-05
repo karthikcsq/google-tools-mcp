@@ -196,18 +196,37 @@ npm view google-tools-mcp version                 # registry updated
 
 Then confirm the published tarball actually runs. There is no `--help` flag, so
 install it into a scratch directory and start it with stdin held open long
-enough to finish booting, then let the pipe close to shut it down:
+enough to finish booting, then let the pipe close to shut it down.
+
+Run this from **outside** the repository, and create the manifest before
+installing anything:
 
 ```bash
-mkdir verify && cd verify
+mkdir -p ../gtm-verify && cd ../gtm-verify
+npm init -y > /dev/null        # load-bearing: see the warning below
 npm install google-tools-mcp@X.Y.Z
-(sleep 30) | node node_modules/google-tools-mcp/dist/index.js
+node -e "setTimeout(() => {}, 40000)" | node node_modules/google-tools-mcp/dist/index.js
 ```
 
-Expect a line like `MCP Server running using stdio in 13970ms`, then
-`stdin ended — MCP client disconnected. Shutting down.` and exit 0. A hang, a
-module-resolution error, or a missing ready line means the tarball is broken
-even though the publish succeeded.
+> **Do not skip `npm init -y`, and do not put the scratch directory inside the
+> repository.** `npm install <pkg>` in a directory with no `package.json` does
+> not fail. npm walks up the tree looking for one, finds the repository's, and
+> installs there instead: `"google-tools-mcp": "^X.Y.Z"` is added to this
+> project's own `package.json` and `package-lock.json` as a dependency on
+> itself, and the tarball you meant to test lands in the repo's `node_modules`.
+> The install prints a perfectly normal `added 1 package` and says nothing about
+> which directory it chose. This is easy to commit by accident, since it happens
+> during the after-the-fact verification step when the release already looks
+> done. It bit the 3.4.5 release. If you hit it, `git checkout -- package.json
+> package-lock.json` and re-run `npm ci`.
+
+The timer is a `node` one-liner rather than `sleep` so the same block works from
+PowerShell, which is what the rest of this file uses. 40 seconds comfortably
+outlasts the 8-14 second startup measured on affected machines.
+
+Expect a line like `MCP Server running using stdio in 13970ms`, then a clean
+exit 0 once the pipe closes. A hang, a module-resolution error, or a missing
+ready line means the tarball is broken even though the publish succeeded.
 
 The install and the run are separate commands on purpose, and the wait has to
 outlast startup. Two ways to get this wrong, both of which report a broken build
@@ -217,8 +236,9 @@ for a package that is fine:
   `server.start()` logs, the shutdown handler wins, and you get
   `Loaded all 12 categories` followed straight by `stdin ended` with no ready
   line at all.
-- **Combining the install and the run**, as in `(sleep 30) | npx -y
-  google-tools-mcp@X.Y.Z`. Both sides of a pipe start at once, so the timer runs
+- **Combining the install and the run**, as in `node -e "setTimeout(() => {},
+  40000)" | npx -y google-tools-mcp@X.Y.Z`. Both sides of a pipe start at once,
+  so the timer runs
   during `npx`'s resolve and unpack rather than during startup. `npx` is measured
   at 23-34 seconds on affected machines (see the troubleshooting section in
   `README.md`) and startup at 8-14 seconds, so the server can be handed an
@@ -234,3 +254,8 @@ half-written directory under `npm-cache/_npx/<hash>`. Every later `npx` run for
 that package then fails with `ENOENT ... could not read package.json` and keeps
 failing until you delete that directory. The failure message says nothing about
 the cache, so it reads as a bad publish when it is purely local.
+
+When the check passes, delete `../gtm-verify`. Then run `git status` in the
+repository before you walk away: it should be clean. If `package.json` or
+`package-lock.json` come back modified, the install went to the wrong directory
+and the warning above tells you how to undo it.
