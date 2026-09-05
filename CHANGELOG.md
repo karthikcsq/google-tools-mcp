@@ -18,6 +18,37 @@ came from. Planning notes under `docs/plans/` and `.planning/` are not logged.
 The 2.0.0 entry predates this convention and collapses thirteen pull requests
 into one release.
 
+## [3.4.6] - 2026-09-05
+
+PR [#148](https://github.com/karthikcsq/google-tools-mcp/pull/148) by
+[@ElliotDrel](https://github.com/ElliotDrel): the post-release check no longer
+tells you to install this package into itself; version 3.4.6.
+
+### Fixed
+
+- **The documented post-release verification corrupted this repository's own
+  `package.json`.** `RELEASING.md` said to run `mkdir verify && cd verify` then
+  `npm install google-tools-mcp@X.Y.Z`. A directory with no `package.json` does
+  not make `npm install` fail: npm walks up the tree, finds this project's
+  manifest, and installs there instead. The result is
+  `"google-tools-mcp": "^X.Y.Z"` added to this package's own dependencies and
+  lockfile, a dependency on itself, with the tarball unpacked into the repo's
+  `node_modules` rather than the scratch directory. npm prints an ordinary
+  `added 1 package` and never mentions which directory it picked. This happened
+  for real while verifying 3.4.5; it was caught by `git status` and reverted
+  before it could be committed, and the published 3.4.5 tarball was checked and
+  is unaffected. The steps now create the scratch directory outside the
+  repository, run `npm init -y` before installing, and end with a `git status`
+  check, with the failure mode and its fix written out where the commands are.
+  Introduced in 066749b.
+
+### Changed
+
+- The verification snippet holds stdin open with a `node` timer instead of
+  `(sleep 30)`, so the block also works from PowerShell, which is what the rest
+  of `RELEASING.md` uses. The window is 40 seconds against a startup measured at
+  8-14 seconds.
+
 ## [3.4.5] - 2026-09-05
 
 PR [#147](https://github.com/karthikcsq/google-tools-mcp/pull/147) by
