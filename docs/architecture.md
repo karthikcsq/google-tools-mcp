@@ -147,4 +147,4 @@ Do **not** use `npx .` for this. Passing a path to npx creates a `file:` depende
 
 ## Releasing
 
-See [RELEASING.md](../RELEASING.md). Publishing runs through `.github/workflows/publish.yml` and is gated on the `npm-publish` GitHub environment.
+See [RELEASING.md](../RELEASING.md). Publishing runs through `.github/workflows/publish.yml`, triggered by pushing a `v*` tag whose commit is on `main`. Nothing else publishes, and there is no approval step.

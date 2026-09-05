@@ -1,48 +1,28 @@
 # Releasing
 
 Releases are deliberate, tag-triggered npm publishes. Pushing ordinary commits
-or opening a pull request never publishes a package.
+or opening a pull request never publishes a package. Once a `v*` tag lands on a
+commit that is on `main`, CI takes it from there with no further clicks.
+
+## The short version
+
+From an up-to-date `main`, where `X.Y.Z` is the version already sitting in
+`package.json` and at the top of `CHANGELOG.md`:
+
+```bash
+npm run release:check      # tag, package.json, and CHANGELOG must agree
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+The rest of this file explains what that runs, who is allowed to run it, and how
+to verify the result.
 
 ## One-time setup
 
-Two required steps, both for the repository owner. Do them in this order: the
-GitHub environment has to exist before the npm trusted publisher that names it.
+One step, for the repository owner.
 
-### 1. Create the `npm-publish` GitHub environment (required)
-
-<https://github.com/karthikcsq/google-tools-mcp/settings/environments/new>
-
-- Name it exactly `npm-publish`.
-- Under **Deployment protection rules**, tick **Required reviewers** and add
-  yourself.
-- Save. Nothing else on the page needs changing.
-
-**Do not skip this step, and do not rely on the workflow to create it.** The
-`publish` job declares `environment: npm-publish`, but GitHub does not treat a
-missing environment as an error: "Running a workflow that references an
-environment that does not exist will create an environment with the referenced
-name," and "the newly created environment will not have any protection rules or
-secrets configured"
-([GitHub docs](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)).
-So a tag pushed before this step publishes to npm with no approval at all, and
-the workflow still looks gated afterwards because the environment now exists.
-
-Verify it took effect:
-
-```bash
-gh api repos/karthikcsq/google-tools-mcp/environments \
-  --jq '.environments[] | {name, rules: [.protection_rules[].type]}'
-```
-
-You want `npm-publish` with `required_reviewers` in its rules. An empty list
-means the environment exists but does not gate anything.
-
-Since 3.3.3 the `validate` job checks this itself and fails the release if the
-gate is missing, so a tag pushed before this step is done stops in seconds
-instead of publishing unapproved. The check runs in the ungated job, so it
-cannot be skipped by declining an approval that was never going to be requested.
-
-### 2. Add the npm trusted publisher (required)
+### Add the npm trusted publisher (required)
 
 <https://www.npmjs.com/package/google-tools-mcp/access>
 
@@ -56,8 +36,10 @@ Add a GitHub Actions trusted publisher with exactly these values:
 | Environment name | `npm-publish` |
 | Allowed actions | `npm publish` |
 
-The environment name must match step 1 exactly, or the OIDC identity the job
-presents will not be the one npm expects and the publish fails.
+The environment name must match the `environment: npm-publish` line on the
+`publish` job, or the OIDC identity the job presents will not be the one npm
+expects and the publish fails. That is the only reason the workflow names an
+environment; see "Why tag-triggered" below.
 
 npm requires at least one allowed action for trusted publishers created after
 2026-05-20. Publishers created before that date default to `npm publish` only,
@@ -68,17 +50,16 @@ than a stored npm token, so there is no secret to add here or in the repository.
 npm verifies the trusted publisher and generates provenance for the published
 package. Reference: <https://docs.npmjs.com/trusted-publishers/>
 
-### 3. Optional hardening
+### Optional hardening
 
-Neither of these is needed for a release to work; both narrow who can trigger
-one.
+Not needed for a release to work; it narrows who can trigger one.
 
 - **Tag protection for `v*`**
   (<https://github.com/karthikcsq/google-tools-mcp/settings/rules>): a ruleset
-  targeting the `v*` tag pattern that restricts creation to maintainers. The
-  workflow already refuses to publish a commit that is not on `main`, so this
-  guards against a maintainer tagging the wrong commit rather than against an
-  outsider.
+  targeting the `v*` tag pattern that restricts creation to maintainers. On a
+  repository where more than one person has push access, this is what makes the
+  security argument below hold, since that argument rests on tag creation being
+  restricted.
 - **Branch protection on `main`**: `main` is currently unprotected. Protecting
   it does not change the release flow described below, which routes the version
   bump through a pull request either way.
@@ -90,8 +71,9 @@ commit), each with its own semantic version; the bump rules are at the top of
 that file. Every pull request adds its own entry and moves `package.json` to
 that version in the same change, so the version at the top of the changelog,
 the version in `package.json`, and the next tag are always the same number.
-Not every version gets tagged: patch versions accumulate on `main` and the tag
-goes on whichever commit is being published.
+`scripts/check-release.mjs` enforces exactly that, locally and in CI. Not every
+version gets tagged: patch versions accumulate on `main` and the tag goes on
+whichever commit is being published.
 
 The version bump lands through a pull request rather than a direct push. `npm
 version` would create a commit and a tag together; this flow separates them so
@@ -113,6 +95,7 @@ commit is on `main`.
 3. Run the same release checks the workflow will run:
 
    ```powershell
+   npm.cmd run release:check
    npm.cmd run test:ci
    npm.cmd pack --dry-run
    ```
@@ -125,41 +108,84 @@ commit is on `main`.
    ```powershell
    git checkout main
    git pull origin main
+   npm.cmd run release:check
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
 
-6. Approve the run at
-   <https://github.com/karthikcsq/google-tools-mcp/actions>.
+That is the whole release. Watch it at
+<https://github.com/karthikcsq/google-tools-mcp/actions>; there is nothing to
+approve.
 
 The tag push starts `.github/workflows/publish.yml`, which runs in two jobs:
 
-- **`validate`** is not gated on any environment. It checks that the tagged
-  commit is reachable from `main` and that the tag matches `package.json`. A bad
-  tag fails here, in seconds, without asking anyone to approve anything.
-- **`publish`** runs only if `validate` passed, and is gated on the
-  `npm-publish` environment. This is where the approval request appears, so by
-  the time you see it the tag is already known-good. After approval it installs
-  dependencies, runs the test suite, verifies the package tarball, and
+- **`validate`** holds no privileges. It checks that the tagged commit is
+  reachable from `main`, and runs `scripts/check-release.mjs --tag` to confirm
+  the tag, `package.json`, and the newest `CHANGELOG.md` entry are the same
+  version. A bad tag fails here, in seconds, before anything that can reach npm
+  has started.
+- **`publish`** runs only if `validate` passed. It installs dependencies, runs
+  the test suite, verifies the package tarball with `npm pack --dry-run`, and
   publishes.
-
-The split matters because `environment:` applies to an entire job. With the
-checks inside the gated job, GitHub would request approval first and run them
-afterwards, so a reviewer would be approving a tag without knowing whether it
-even pointed at `main`.
 
 `id-token: write` is granted to the `publish` job alone rather than to the
 workflow, so the ungated `validate` job cannot mint the OIDC token npm accepts.
-
-Tagging a commit that is not on `main` fails the run before anything is
-published, so a `v*` tag pushed from a local or unmerged branch cannot reach
-npm. Environment approval means an ancestry match alone is not enough to
-publish.
 
 Publishes are serialized, not superseded: pushing a second tag while a publish
 is already running queues the new run behind it instead of canceling the first
 one, since npm versions are immutable and a canceled-but-already-published run
 would leave git and npm inconsistent.
+
+## Why tag-triggered
+
+The barrier to publishing is who can create a `v*` tag on this repository, not a
+click inside a running workflow.
+
+- The workflow has **no write access** to the repository (`contents: read`), so
+  it cannot push anything back.
+- Both checkouts use `persist-credentials: false`, so even the read-only token
+  is not left in `.git/config` during the job.
+- Both actions are pinned to a **commit SHA** rather than a moving tag, so a
+  compromised upstream release cannot change what runs here.
+- The tagged commit must be **reachable from `main`**. A `v*` tag pushed from a
+  local or unmerged branch fails validation and cannot reach npm, so a release
+  can only contain code that already went through the normal review path.
+- Publishing requires a **deliberate second action** after the merge. It cannot
+  be smuggled into a pull request, because merging one does not create a tag.
+
+### The approval gate that used to be here
+
+Until 3.4.5 the `publish` job's `environment: npm-publish` was described as a
+human approval gate, and `validate` failed the release unless that environment
+had a required reviewer configured. It never had one, so the guard did what it
+was written to do and blocked every release: `v3.4.4` was tagged on 2026-09-04
+and the run failed ten seconds in, leaving npm on 2.0.0 while `main` sat at
+3.4.4. Issue [#50](https://github.com/karthikcsq/google-tools-mcp/issues/50)
+tracked that; the fix chosen was to drop the gate rather than to configure it.
+
+For a repository where tag creation is already restricted to maintainers, the
+approval adds a second click by the same person who pushed the tag, which is not
+a second pair of eyes. The `environment: npm-publish` line stays because npm's
+trusted publisher for this package names that environment and the OIDC claim has
+to match; it is not doing access control, and the workflow comment says so. If a
+real approval gate is ever wanted, adding a required reviewer to the environment
+turns it back on with no code change.
+
+## Re-running a failed release
+
+Re-enabling or fixing something does not replay a tag event that already
+happened, and a tag that already exists will not re-trigger the workflow on a
+second `git push`. Delete the tag and push it again:
+
+```bash
+git push origin :refs/tags/vX.Y.Z
+git push origin refs/tags/vX.Y.Z
+```
+
+If the tag needs to move to a different commit, delete it remotely first as
+above, then `git tag -f vX.Y.Z <sha>` locally before re-pushing. Only do this
+for a version that has not been published: npm versions are immutable, so once
+`npm publish` has succeeded the only way forward is a new version.
 
 ## After a release
 
