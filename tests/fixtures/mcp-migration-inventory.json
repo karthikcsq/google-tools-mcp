@@ -786,6 +786,9 @@
         "file": "tests/readTracker.test.js"
       },
       {
+        "file": "tests/releaseConsistency.test.js"
+      },
+      {
         "file": "tests/replaceDocumentCollateral.test.js"
       },
       {

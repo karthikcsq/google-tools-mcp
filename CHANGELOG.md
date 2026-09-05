@@ -18,6 +18,49 @@ came from. Planning notes under `docs/plans/` and `.planning/` are not logged.
 The 2.0.0 entry predates this convention and collapses thirteen pull requests
 into one release.
 
+## [3.4.5] - 2026-09-05
+
+PR [#147](https://github.com/karthikcsq/google-tools-mcp/pull/147) by
+[@ElliotDrel](https://github.com/ElliotDrel): a `v*` tag on `main` publishes on
+its own again; changelog and version can no longer drift apart; version 3.4.5.
+
+### Fixed
+
+- **Every release was blocked by a gate that was never configured** (#50). The
+  `publish` job declared `environment: npm-publish`, and since 3.3.3 the
+  ungated `validate` job refused to release unless that environment had a
+  required reviewer on it. It never got one. `v3.4.4` was tagged on 2026-09-04
+  and the run failed ten seconds in, which is why npm sat at 2.0.0 while `main`
+  was at 3.4.4. The gate is gone: publishing is now authorized by who can create
+  a `v*` tag, the way [e-stack](https://github.com/ElliotDrel/e-stack) does it,
+  and a tag push runs start to finish with nothing to approve. `environment:
+  npm-publish` stays on the job because npm's trusted publisher names that
+  environment and the OIDC claim has to match it, and both the workflow comment
+  and `RELEASING.md` now say that is all it is doing. Re-adding a required
+  reviewer to the environment turns a real approval step back on with no code
+  change.
+
+### Added
+
+- `scripts/check-release.mjs` and `npm run release:check`: the tag,
+  `package.json`, and the newest `CHANGELOG.md` entry have to be the same
+  version. `CONTRIBUTING.md` and `CHANGELOG.md` both stated that rule and
+  nothing enforced it; the workflow compared the tag against `package.json`
+  only, so a pull request that bumped the version but skipped its changelog
+  entry shipped green. It also catches an entry copied from the one below it
+  and never renumbered, an out-of-order entry, and a duplicated version. Runs
+  with no dependencies installed, so `validate` rejects a bad tag before
+  `npm ci` costs anything. Covered by `tests/releaseConsistency.test.js`.
+
+### Changed
+
+- `RELEASING.md` leads with the three commands a release actually takes, drops
+  the required-reviewer setup step, states the security argument that now
+  applies (no write access, SHA-pinned actions, tagged commit must be reachable
+  from `main`, tag creation is the authorization), and documents how to re-run
+  a release whose tag already exists. `docs/architecture.md` no longer describes
+  publishing as gated on an environment.
+
 ## [3.4.4] - 2026-09-03
 
 PR [#146](https://github.com/karthikcsq/google-tools-mcp/pull/146) by
