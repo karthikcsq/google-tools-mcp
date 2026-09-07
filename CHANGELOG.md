@@ -20,8 +20,9 @@ into one release.
 
 ## [3.4.7] - 2026-09-07
 
-By [@ElliotDrel](https://github.com/ElliotDrel), with Codex implementation and
-independent review. Pull request link is recorded with publication.
+PR [#171](https://github.com/karthikcsq/google-tools-mcp/pull/171) by
+[@ElliotDrel](https://github.com/ElliotDrel), with Codex implementation and
+independent review.
 
 ### Fixed
 
