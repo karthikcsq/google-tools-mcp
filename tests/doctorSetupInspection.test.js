@@ -111,16 +111,51 @@ describe('doctor report and setup inspection', () => {
     });
     it('reports missing, unknown, mismatched, and healthy entries', async () => {
         const cases = [
-            ['missing', { status: 'missing' }, 'missing client entry'],
-            ['unknown', { status: 'unknown', raw: 'garbage' }, 'unrecognized client entry'],
-            ['wrong', { status: 'found', entry: { command: 'other', args: [] } }, 'entry differs from recommended configuration'],
-            ['healthy', { status: 'found', entry: desired }, undefined],
+            ['missing', { status: 'missing' }, undefined, 'unconfigured'],
+            ['unknown', { status: 'unknown', raw: 'garbage' }, 'unrecognized client entry', 'problem'],
+            ['wrong', { status: 'found', entry: { command: 'other', args: [] } }, 'entry differs from recommended configuration', 'problem'],
+            ['healthy', { status: 'found', entry: desired }, undefined, 'configured'],
         ];
-        for (const [name, current, problem] of cases) {
+        for (const [name, current, problem, status] of cases) {
             const report = await inspectSetup({ adapters: [adapter(name, current)], desiredEntry: desired, inspectHttp: async () => ({ healthy: true }), credentialsCheck: async () => ({ configured: true }), tokenCheck: async () => ({ status: 'valid' }), configWarnings: [] });
             expect(report.clients[0].problem).toBe(problem);
-            expect(report.clients[0].status).toBe(problem ? 'problem' : 'configured');
+            expect(report.clients[0].status).toBe(status);
         }
+    });
+
+    it('fails doctor when a selected client has no registration', async () => {
+        const report = await inspectSetup({
+            adapters: [{ name: 'Codex', detect: async () => true, get: async () => ({ status: 'missing' }) }],
+            desiredEntry: desired,
+            requiredClients: ['Codex'],
+            credentialsCheck: async () => ({ configured: true }),
+            tokenCheck: async () => ({ status: 'valid' }),
+            configWarnings: [],
+        });
+        expect(report.healthy).toBe(false);
+        expect(report.clients).toEqual([expect.objectContaining({ client: 'Codex', status: 'problem', problem: 'missing client entry' })]);
+    });
+
+    it.each([
+        ['Codex', 'codex'],
+        ['Claude Code', 'claude'],
+        ['Claude Code', 'ClaudeCode'],
+    ])('fails doctor when selected %s is unavailable for inspection through %s', async (clientName, selectedName) => {
+        const get = jest.fn();
+        const report = await inspectSetup({
+            adapters: [{ name: clientName, detect: async () => false, get }],
+            requiredClients: [selectedName],
+            credentialsCheck: async () => ({ configured: true }),
+            tokenCheck: async () => ({ status: 'valid' }),
+            configWarnings: [],
+        });
+        expect(get).not.toHaveBeenCalled();
+        expect(report.healthy).toBe(false);
+        expect(report.clients).toEqual([expect.objectContaining({
+            client: clientName,
+            status: 'problem',
+            problem: 'selected client is not available for inspection',
+        })]);
     });
     describe('README-documented registrations that are not the one setup writes', () => {
         // doctor's "recommended" entry is `<process.execPath> <dist/index.js of

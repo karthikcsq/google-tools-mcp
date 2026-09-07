@@ -5,10 +5,10 @@ import { createRequire } from 'node:module';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { serveStdio, StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import { registerAllTools } from './tools/index.js';
+import { isRetrySafeReadTool, registerAllTools } from './tools/index.js';
 import { getArgumentShape, logger as defaultLogger, logToolCall } from './logger.js';
 import { checkHttpAuth, extractBearerToken, isOriginAllowed } from './httpAuth.js';
-import { getPublicErrorMessage, isPublicError, registerSecret, redactDiagnostic } from './errors.js';
+import { classifyUpstreamError, getPublicErrorMessage, isPublicError, registerSecret, redactDiagnostic } from './errors.js';
 import { createHttpRequestContext, createStdioConnectionContext, fingerprintCredential, runWithRequestContext, closeStdioConnection } from './requestContext.js';
 import { applyResultAnnotations, runWithResultAnnotations, shutdownReadHandleRuntime } from './handleRuntime.js';
 import { randomBytes } from 'node:crypto';
@@ -57,24 +57,54 @@ function normalizeResult(result) {
     return { content: [{ type: 'text', text: String(result) }] };
 }
 
-function toolFailure(error, toolName, logger) {
+function failureForTool(error, toolName, args) {
+    const failure = classifyUpstreamError(error) || {
+        code: 'INTERNAL_ERROR', status: 500, retryable: false, reason: 'internal-error', message: GENERIC_TOOL_FAILURE,
+    };
+    if (failure.retryable && !isRetrySafeReadTool(toolName, args)) {
+        return {
+            ...failure,
+            retryable: false,
+            reason: 'outcome-unknown',
+            message: 'Google did not confirm whether this change completed. Inspect the current state before deciding what to do next.',
+        };
+    }
+    return failure;
+}
+
+function toolFailure(error, toolName, logger, args) {
     const publicMessage = getPublicErrorMessage(error);
     if (publicMessage !== undefined) {
         return { content: [{ type: 'text', text: String(redactDiagnostic(publicMessage)) }], isError: true };
     }
     logger?.error?.(`MCP tool ${toolName} failed.`, redactDiagnostic(error));
-    return { content: [{ type: 'text', text: GENERIC_TOOL_FAILURE }], isError: true };
+    const failure = failureForTool(error, toolName, args);
+    // Keep the ordinary text content usable by clients that have not adopted
+    // structured outputs, while exposing a closed error contract to clients
+    // that can act on retryability.  Every field is fixed by errors.js; caught
+    // upstream messages, paths, request URLs, and stacks stay server-side.
+    return {
+        content: [{ type: 'text', text: failure.message }],
+        structuredContent: { error: {
+            code: failure.code,
+            status: failure.status,
+            retryable: failure.retryable,
+            reason: failure.reason,
+        } },
+        isError: true,
+    };
 }
 
-function classifyToolError(error) {
+function classifyToolError(error, toolName, args) {
     // Public errors can deliberately include caller-provided identifiers or
     // text. Keep the JSONL diagnostic useful without turning it into a copy of
     // the caller-visible response, which is persisted by default.
     if (isPublicError(error)) return { outcome: 'user_error', errCode: 'USER_ERROR', errMsg: 'caller-visible error' };
-    const status = Number.isInteger(error?.status) ? error.status : undefined;
-    const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_:-]{0,79}$/.test(error.code)
-        ? error.code : status ? `HTTP_${status}` : 'INTERNAL_ERROR';
-    return { outcome: 'error', errCode: code, errMsg: 'The tool could not complete safely.' };
+    const failure = failureForTool(error, toolName, args);
+    return {
+        outcome: 'error', errCode: failure.code, errMsg: failure.reason,
+        errStatus: failure.status, retryable: failure.retryable,
+    };
 }
 
 function makeServer(definitions, { logger = defaultLogger, serverInfo = DEFAULT_SERVER_INFO, requestContext = null } = {}) {
@@ -105,8 +135,8 @@ function makeServer(definitions, { logger = defaultLogger, serverInfo = DEFAULT_
                 return result;
             } catch (error) {
                 logToolCall({ ts: new Date().toISOString(), event: 'tool_call', tool: definition.name, reqId,
-                    durationMs: Date.now() - startedAt, ...classifyToolError(error), argShape: getArgumentShape(args) });
-                return toolFailure(error, definition.name, logger);
+                    durationMs: Date.now() - startedAt, ...classifyToolError(error, definition.name, args), argShape: getArgumentShape(args) });
+                return toolFailure(error, definition.name, logger, args);
             }
         });
     }

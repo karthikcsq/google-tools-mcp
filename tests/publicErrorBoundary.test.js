@@ -48,6 +48,7 @@ const { executeBatchUpdate } = await import('../dist/googleDocsApiHelpers.js');
 const { readRange, createTableHelper } = await import('../dist/googleSheetsApiHelpers.js');
 const { register: registerGetPresentation } = await import('../dist/tools/slides/getPresentation.js');
 const { register: registerAddPermission } = await import('../dist/tools/drive/addPermission.js');
+const { wrapOperationError } = await import('../dist/errors.js');
 
 const log = { info() {}, error() {}, warn() {}, debug() {} };
 
@@ -101,6 +102,17 @@ describe('auth failures surface a fixed template, never the caught text', () => 
         expect(error.message).not.toContain(LEAKY_PATH);
         expect(error.message).not.toContain('token revoked');
         expect(error.message).toContain('expired or been revoked');
+    });
+
+    it('classifies a known auth failure through an OperationError cause', async () => {
+        authorizeImpl = async () => {
+            throw wrapOperationError('authorize', new Error(`invalid_grant from ${LEAKY_PATH}`));
+        };
+
+        const error = await capture(initializeGoogleClient());
+
+        expect(error.message).toContain('expired or been revoked');
+        expect(error.message).not.toContain(LEAKY_PATH);
     });
 
     it('maps a callback-port collision by Node error code, not by message text', async () => {

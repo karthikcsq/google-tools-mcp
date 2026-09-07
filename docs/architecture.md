@@ -51,14 +51,16 @@ forms          slides         tasks          maps
 
 Each category maps to a directory under `dist/tools/`. The loaders are `await import()` rather than top-level imports, which keeps the module graph lazy at the category level.
 
-**Every tool is wrapped before registration.** `registerAllTools` monkey-patches the server's `addTool` (`dist/tools/index.js:100-112`) so each tool's `execute` gets two behaviors for free:
+**Every tool is wrapped before registration.** `registerAllTools` monkey-patches the server's `addTool` (`dist/tools/index.js:100-112`) so each tool's `execute` gets three behaviors for free:
 
 1. **Auth retry** — `withAuthRetry` transparently refreshes and retries once on an auth failure, so an expired access token does not surface as a tool error.
 2. **Error hints** — `appendHintToError(err, toolName)` attaches actionable guidance to the thrown error.
 
+3. **Transport retry** retries a retryable Google failure twice with bounded backoff, but only for an explicit read-only tool/action allowlist. Mutations never receive a transport retry because a lost response cannot prove whether the change landed.
+
 There used to be a third behavior here, session binding (`runWithSession(args[1]?.sessionId ?? null, ...)`), which namespaced the read-before-edit tracker per MCP session. It is gone with the sessions themselves: request scoping is now established once by the transport in `dist/mcpServer.js` and read ambiently through `dist/requestContext.js`, so this wrapper no longer touches it.
 
-If you are adding a tool, you get both by registering through the normal path. Do not call the underlying `addTool` directly.
+If you are adding a tool, you get all three by registering through the normal path. Do not call the underlying `addTool` directly.
 
 ## Read-before-edit guards
 

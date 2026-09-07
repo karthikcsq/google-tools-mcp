@@ -1,4 +1,4 @@
-import { publicError, isPublicError, wrapOperationError } from './errors.js';
+import { classifyUpstreamError, publicError, isPublicError, wrapOperationError } from './errors.js';
 import { hexToRgbColor, NotImplementedError } from './types.js';
 import { logger } from './logger.js';
 // --- Constants ---
@@ -18,6 +18,10 @@ function brandRevisionConflict(error) {
 /** True when `error` is the conflict `executeBatchUpdate` throws on a failed requiredRevisionId. */
 export function isRevisionConflictError(error) {
     return typeof error === 'object' && error !== null && revisionConflictErrors.has(error);
+}
+
+function isPermissionDenied(error) {
+    return classifyUpstreamError(error)?.code === 'PERMISSION_DENIED';
 }
 // --- Core Helper to Execute Batch Updates ---
 export async function executeBatchUpdate(docs, documentId, requests, writeControl) {
@@ -75,10 +79,11 @@ export async function executeBatchUpdate(docs, documentId, requests, writeContro
         }
         if (error.code === 404)
             throw publicError(`Document not found (ID: ${documentId}). Check the ID.`);
-        if (error.code === 403)
+        if (error.code === 403) {
+            if (!isPermissionDenied(error)) throw wrapOperationError('Google Docs batch update', error, { status: error.code });
             throw publicError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`);
-        // Generic internal error for others
-        throw new Error(`Google API Error (${error.code}): ${error.message}`);
+        }
+        throw wrapOperationError('Google Docs batch update', error, { status: error.code });
     }
 }
 /**
@@ -747,9 +752,11 @@ export async function findTextRange(docs, documentId, textToFind, instance, tabI
         logger.error(`Error finding text "${textToFind}" in doc ${documentId}: ${error.message || 'Unknown error'}`);
         if (error.code === 404)
             throw publicError(`Document not found while searching text (ID: ${documentId}).`);
-        if (error.code === 403)
+        if (error.code === 403) {
+            if (!isPermissionDenied(error)) throw wrapOperationError('find document text', error, { status: error.code });
             throw publicError(`Permission denied while searching text in doc ${documentId}.`);
-        throw new Error(`Failed to retrieve doc for text searching: ${error.message || 'Unknown error'}`);
+        }
+        throw wrapOperationError('find document text', error, { status: error.code });
     }
 }
 // --- Paragraph Boundary Helper ---
@@ -840,9 +847,11 @@ export async function getParagraphRange(docs, documentId, indexWithin, tabId) {
         logger.error(`Error getting paragraph range for index ${indexWithin} in doc ${documentId}: ${error.message || 'Unknown error'}`);
         if (error.code === 404)
             throw publicError(`Document not found while finding paragraph (ID: ${documentId}).`);
-        if (error.code === 403)
+        if (error.code === 403) {
+            if (!isPermissionDenied(error)) throw wrapOperationError('find document paragraph', error, { status: error.code });
             throw publicError(`Permission denied while accessing doc ${documentId}.`);
-        throw new Error(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
+        }
+        throw wrapOperationError('find document paragraph', error, { status: error.code });
     }
 }
 // --- Default text color (issue #14) ---

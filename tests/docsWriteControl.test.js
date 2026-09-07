@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from '@jest/globals';
-import { UserError } from '../dist/errors.js';
+import { getOperationCause, isOperationError, isPublicError, UserError } from '../dist/errors.js';
 import { executeBatchUpdate, executeBatchUpdateWithSplitting } from '../dist/googleDocsApiHelpers.js';
 import { getLastReadRevisionId, trackRead } from '../dist/readTracker.js';
 
@@ -52,9 +52,13 @@ describe('Google Docs optimistic concurrency', () => {
         const error = Object.assign(new Error('The document has been updated since the revision specified.'), { code: 400 });
         const docs = { documents: { batchUpdate: jest.fn().mockRejectedValue(error) } };
 
-        await expect(
-            executeBatchUpdate(docs, 'doc', [{ insertText: {} }])
-        ).rejects.toThrow(/Google API Error/);
+        const caught = await executeBatchUpdate(docs, 'doc', [{ insertText: {} }]).catch(error => error);
+
+        expect(isOperationError(caught)).toBe(true);
+        expect(isPublicError(caught)).toBe(false);
+        expect(caught.message).toBe('The Google Docs batch update operation failed.');
+        expect(caught.message).not.toContain('updated since');
+        expect(getOperationCause(caught)).toBe(error);
     });
 
     it('chains writeControl across split batches using each response revision', async () => {

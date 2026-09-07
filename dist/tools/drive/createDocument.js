@@ -86,7 +86,7 @@ export function register(server) {
                                 if (error) {
                                     contentWarnings = [
                                         ...(contentWarnings ?? []),
-                                        `Could not determine document default text color: ${error.message}`,
+                                        'Could not determine the document default text color. Initial content may use the inherited color.',
                                     ];
                                 }
                                 const colorRequest = buildDefaultColorStyleRequest(1, 1 + args.initialContent.length, color, undefined);
@@ -101,7 +101,7 @@ export function register(server) {
                                 log.warn(`Document created but failed to set default text color: ${colorError.message}`);
                                 contentWarnings = [
                                     ...(contentWarnings ?? []),
-                                    `Could not apply default text color to initial content: ${colorError.message}`,
+                                    'Could not apply the document default text color to initial content.',
                                 ];
                             }
                         }
@@ -203,7 +203,7 @@ export function register(server) {
                     log.warn(`Document ${document.id} created but read state could not be seeded: ${seedError.message}`);
                     contentWarnings = [
                         ...(contentWarnings ?? []),
-                        `Document ${document.id} was created, but its read state could not be seeded (${seedError.message}). ` +
+                        `Document ${document.id} was created, but its read state could not be seeded. ` +
                             'Call readDocument before the next mutation on this document.',
                     ];
                 }

@@ -222,7 +222,7 @@ describe('shared HTTP lifecycle operations', () => {
         const port = await freePort();
         const env = {
             ...process.env, CI: 'true', XDG_CONFIG_HOME: configDir,
-            GOOGLE_MCP_PORT: String(port), GOOGLE_MCP_TRANSPORT: undefined,
+            GOOGLE_MCP_PORT: String(port), GOOGLE_MCP_TRANSPORT: 'http',
             GOOGLE_MCP_HTTP_TOKEN: undefined,
         };
         const run = async (...args) => {
