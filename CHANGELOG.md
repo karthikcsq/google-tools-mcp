@@ -18,6 +18,19 @@ came from. Planning notes under `docs/plans/` and `.planning/` are not logged.
 The 2.0.0 entry predates this convention and collapses thirteen pull requests
 into one release.
 
+## [3.4.7] - 2026-09-07
+
+By [@ElliotDrel](https://github.com/ElliotDrel): agents can test this worktree's
+tools through persistent MCP sessions and report usability failures.
+
+### Added
+
+- `npm run agent-test` starts isolated stdio or HTTP test sessions with live
+  Google APIs or a limited, stateful offline backend. Reports retain tool
+  failures, tester friction, code identity, and cleanup results.
+- A repo-local `live-testing` skill owns the goal-driven tester workflow and
+  regression-runner instructions, with links from the former documentation.
+
 ## [3.4.6] - 2026-09-05
 
 PR [#148](https://github.com/karthikcsq/google-tools-mcp/pull/148) by

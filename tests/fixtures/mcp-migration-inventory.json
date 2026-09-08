@@ -555,6 +555,12 @@
     ],
     "tests": [
       {
+        "file": "tests/agentTestIntegration.test.js"
+      },
+      {
+        "file": "tests/agentTestRuntime.test.js"
+      },
+      {
         "file": "tests/appendMarkdownRevisionRefresh.test.js"
       },
       {
@@ -754,6 +760,9 @@
       },
       {
         "file": "tests/oauthCallbackPort.test.js"
+      },
+      {
+        "file": "tests/offlineAgentBackend.test.js"
       },
       {
         "file": "tests/packageContents.test.js"
