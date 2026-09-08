@@ -1,11 +1,13 @@
-import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
+import { UserError, wrapOperationError } from '../../errors.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { guardMutation } from '../../readTracker.js';
+import { beginSheetsCellStateMutation, prepareSheetRangeTargets, ResourceReadHandleParameter } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'formatCells',
-        description: "Applies formatting to a range of cells in a spreadsheet. Supports bold, italic, font size, text color, background color, alignment, and number format. Use range '1:1' to format an entire header row, 'A:A' for an entire column, or 'A1:D1' for specific cells. Use numberFormat to control how values are displayed (e.g. as numbers, text, dates) or to clear a format by setting type to 'TEXT'.",
+        description: "Applies formatting to a range of cells in a spreadsheet. Supports bold, italic, font size, text color, background color, alignment, and number format. Modern runtimes require a bounded readCellFormat handle for the exact overwritten range. Use range '1:1' to format an entire header row, 'A:A' for an entire column, or 'A1:D1' for specific cells. Use numberFormat to control how values are displayed (e.g. as numbers, text, dates) or to clear a format by setting type to 'TEXT'.",
         parameters: z
             .object({
             spreadsheetId: z
@@ -47,6 +49,7 @@ export function register(server) {
             })
                 .optional()
                 .describe('Controls how cell values are displayed. Useful for clearing date formatting (set type to "TEXT") or applying a custom number pattern.'),
+            readHandle: ResourceReadHandleParameter,
         })
             .refine((data) => data.bold !== undefined ||
             data.italic !== undefined ||
@@ -72,8 +75,16 @@ export function register(server) {
         }),
         execute: async (args, { log }) => {
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
+            let lease;
             log.info(`Formatting cells in range "${args.range}" of spreadsheet ${args.spreadsheetId}`);
             try {
+                const targets = await prepareSheetRangeTargets(sheets, args.spreadsheetId, [args.range]);
+                lease = await beginSheetsCellStateMutation({
+                    spreadsheetId: args.spreadsheetId, readHandle: args.readHandle, drive, sheets,
+                    targets,
+                    legacyGuard: () => guardMutation(args.spreadsheetId),
+                });
                 // Build the format object expected by the helper
                 const format = {};
                 if (args.backgroundColor) {
@@ -107,11 +118,12 @@ export function register(server) {
                 if (args.numberFormat) {
                     format.numberFormat = args.numberFormat;
                 }
-                await SheetsHelpers.formatCells(sheets, args.spreadsheetId, args.range, format);
+                await lease.write(() => SheetsHelpers.formatCells(sheets, args.spreadsheetId, args.range, format));
                 const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
                 return `${sheetUrl}\nSuccessfully applied formatting to range "${args.range}".`;
             }
             catch (error) {
+                await lease?.abort();
                 log.error(`Error formatting cells: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;

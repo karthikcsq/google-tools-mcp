@@ -3,6 +3,26 @@ import { z } from 'zod';
 import { getDriveClient, getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
 import { trackRead } from '../../readTracker.js';
+import {
+    mintSheetsReadHandle,
+    readNewSpreadsheetBlankGridBaseline,
+    readSheetsValueBaseline,
+} from '../../resourceHandles.js';
+import { setResultResourceState } from '../../handleRuntime.js';
+
+function initialDataRange(values) {
+    if (!Array.isArray(values) || values.length === 0) return 'A1';
+    const columns = Math.max(...values.map((row) => Array.isArray(row) ? row.length : 0));
+    if (columns === 0) return 'A1';
+    let value = columns;
+    let letters = '';
+    while (value > 0) {
+        value -= 1;
+        letters = String.fromCharCode(65 + (value % 26)) + letters;
+        value = Math.floor(value / 26);
+    }
+    return `A1:${letters}${values.length}`;
+}
 export function register(server) {
     server.addTool({
         name: 'createSpreadsheet',
@@ -52,25 +72,38 @@ export function register(server) {
                         initialDataStatus = 'failed';
                     }
                 }
-                // Match readSpreadsheet's deliberately metadata-only state.
-                // The Drive file exists even if its optional initial-data write
-                // failed, and the guard is about whether this tool just created
-                // the target, not whether every follow-up request succeeded.
-                // Tracking is best effort: a bookkeeping failure must never hide
-                // a successfully-created spreadsheet from the caller.
                 let readStateWarning;
-                try {
-                    trackRead(spreadsheetId);
-                }
-                catch (seedError) {
-                    log.warn(`Spreadsheet ${spreadsheetId} created but read state could not be seeded: ${seedError.message}`);
-                    readStateWarning = 'Spreadsheet was created, but its read state could not be seeded. Call readSpreadsheet before the next mutation.';
+                let readHandle;
+                let observedRanges;
+                // A failed optional write leaves the created file in an unknown
+                // state. Never turn that partial success into write authority.
+                if (initialDataStatus === 'failed') {
+                    readStateWarning = 'Spreadsheet was created, but its initial data was not confirmed. It was not seeded as read; call readSpreadsheet before another mutation.';
+                } else {
+                    try {
+                        const baseline = initialDataStatus === 'added'
+                            ? await readSheetsValueBaseline({
+                                drive, sheets, spreadsheetId, ranges: [initialDataRange(args.initialData)],
+                            })
+                            : await readNewSpreadsheetBlankGridBaseline({ drive, sheets, spreadsheetId });
+                        trackRead(spreadsheetId);
+                        const issued = await mintSheetsReadHandle(spreadsheetId, baseline);
+                        readHandle = issued?.readHandle;
+                        observedRanges = baseline.displayRanges;
+                        setResultResourceState({ kind: 'sheets-values-v1', ranges: observedRanges });
+                    }
+                    catch (seedError) {
+                        log.warn(`Spreadsheet ${spreadsheetId} created but a verified read baseline could not be captured.`, seedError);
+                        readStateWarning = 'Spreadsheet was created, but its read baseline could not be captured. Call readSpreadsheet before the next mutation.';
+                    }
                 }
                 return JSON.stringify({
                     id: spreadsheetId,
                     name: driveResponse.data.name,
                     url: driveResponse.data.webViewLink,
                     ...(initialDataStatus ? { initialData: initialDataStatus } : {}),
+                    ...(readHandle ? { readHandleNote: 'This spreadsheet was read after creation. The returned readHandle authorizes only its captured bounded range.' } : {}),
+                    ...(observedRanges ? { observedRanges } : {}),
                     ...(readStateWarning ? { warnings: [readStateWarning] } : {}),
                 }, null, 2);
             }

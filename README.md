@@ -574,9 +574,16 @@ The consequence for tools: **read state is never carried between HTTP
 requests.** Google Docs edits over HTTP take an explicit `readHandle` returned
 by `readDocument` — opaque, server-minted, single-use for a mutation, bound to
 the credential, profile, file, tab, revision, and structure, and expiring in
-under 24 hours. `writeSpreadsheet`, `batchWrite`, `clearSpreadsheetRange`, and
-`deleteFile` have no handle wiring yet and fail closed over HTTP; use stdio for
-those.
+under 24 hours. Sheets value writes (`writeSpreadsheet`, `batchWrite`, and
+`clearRange`) take a handle from a bounded `readSpreadsheet` range read; use
+`ranges` for a multi-range batch baseline. `getSpreadsheetInfo` returns a
+structure handle for sheet/table/chart deletion, while `readCellFormat`
+returns a bounded format/validation handle for `formatCells`,
+`copyFormatting`, and `setDropdownValidation`. `deleteTable(deleteData: true)`
+uses a value handle for its actual cleared cells. `getFileInfo` returns the
+metadata handle required by `deleteFile`. Sheets and Drive reread before
+mutating but have no Docs-style atomic conditional-write API; see
+[the HTTP resource-handle contract](docs/http-mode.md#the-readhandle-contract-on-http).
 
 Full reference, including exact Claude Code and Codex reconfiguration steps (and
 the `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` env entry Codex needs):
@@ -695,4 +702,3 @@ MIT
 
 Maintainers: see [RELEASING.md](RELEASING.md) for the tag-triggered npm
 publishing workflow and its one-time trusted-publisher setup.
-

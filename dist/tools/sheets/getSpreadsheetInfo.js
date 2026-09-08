@@ -1,8 +1,8 @@
 import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
-import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
 import { trackRead } from '../../readTracker.js';
+import { mintSheetsReadHandle, readSheetsStructureBaseline } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'getSpreadsheetInfo',
@@ -14,23 +14,26 @@ export function register(server) {
         }),
         execute: async (args, { log }) => {
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
             log.info(`Getting info for spreadsheet: ${args.spreadsheetId}`);
             try {
-                const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
+                const baseline = await readSheetsStructureBaseline({ drive, sheets, spreadsheetId: args.spreadsheetId });
                 trackRead(args.spreadsheetId);
-                const sheetList = metadata.sheets || [];
+                await mintSheetsReadHandle(args.spreadsheetId, baseline);
+                const sheetList = baseline.sheets || [];
                 return JSON.stringify({
-                    title: metadata.properties?.title || 'Untitled',
-                    id: metadata.spreadsheetId,
-                    url: `https://docs.google.com/spreadsheets/d/${metadata.spreadsheetId}`,
+                    title: baseline.title,
+                    id: args.spreadsheetId,
+                    url: `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}`,
                     sheets: sheetList.map((sheet) => {
-                        const props = sheet.properties;
                         return {
-                            title: props?.title || 'Untitled',
-                            sheetId: props?.sheetId,
-                            rows: props?.gridProperties?.rowCount || 0,
-                            columns: props?.gridProperties?.columnCount || 0,
-                            hidden: props?.hidden || false,
+                            title: sheet.title,
+                            sheetId: sheet.sheetId,
+                            rows: sheet.rowCount,
+                            columns: sheet.columnCount,
+                            hidden: sheet.hidden,
+                            charts: sheet.charts.map((chart) => ({ chartId: chart.chartId, position: chart.position })),
+                            tables: sheet.tables.map((table) => ({ tableId: table.tableId, name: table.name, range: table.range })),
                         };
                     }),
                 }, null, 2);

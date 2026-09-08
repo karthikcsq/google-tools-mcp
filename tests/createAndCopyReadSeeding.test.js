@@ -94,6 +94,20 @@ function setGoogleMocks(id, {
     fakeDocs = { documents: { get: documentsGet, batchUpdate } };
     fakeSheets = {
         spreadsheets: {
+            get: jest.fn(async () => ({
+                data: {
+                    properties: { title: 'Seeded spreadsheet' },
+                    sheets: [{
+                        properties: {
+                            sheetId: 0,
+                            title: 'Sheet1',
+                            hidden: false,
+                            gridProperties: { rowCount: 1000, columnCount: 26 },
+                        },
+                        data: [],
+                    }],
+                },
+            })),
             values: {
                 update: valuesUpdate,
                 batchUpdate: jest.fn(async () => ({
@@ -128,6 +142,7 @@ function setGoogleMocks(id, {
                 name: 'Copied file',
                 mimeType: copiedMimeType,
                 modifiedTime: MODIFIED_TIME,
+                version: '1',
             },
         };
     });
@@ -159,7 +174,7 @@ describe('create and copy read seeding (#87)', () => {
         expect(valuesUpdate).toHaveBeenCalledTimes(1);
     });
 
-    it('createSpreadsheet still seeds when optional initial data fails, so batchWrite succeeds', async () => {
+    it('createSpreadsheet with failed optional initial data stays explicitly unread', async () => {
         const id = freshId('created-sheet-batch');
         setGoogleMocks(id, { initialDataFails: true });
 
@@ -167,12 +182,10 @@ describe('create and copy read seeding (#87)', () => {
             title: 'Created sheet', initialData: [['this write fails']],
         }, { log });
         expect(JSON.parse(created)).toMatchObject({ id, initialData: 'failed' });
-        const written = await getTool(registerBatchWrite).execute({
+        await expect(getTool(registerBatchWrite).execute({
             spreadsheetId: id,
             data: [{ range: 'A1', values: [['batch write after create']] }],
-        }, { log });
-
-        expect(written).toMatch(/Successfully batch-wrote 1 cells/);
+        }, { log })).rejects.toThrow(/has not been read/i);
     });
 
     it('copyFile seeds a Google Doc from a fetched content and revision snapshot before appendText', async () => {

@@ -55,6 +55,7 @@ Pick the check that matches what you touched:
 |---|---|
 | a Docs read/write tool, the markdown transformer, `readTracker`, `docsHandles` | `npm run live-smoke -- docs` |
 | `copyFile`, `listFolderContents`, anything under `dist/tools/drive/` | `npm run live-smoke -- drive` |
+| Sheets/Drive HTTP resource handles | `npm run live-smoke -- resource-read-handles` |
 | draft or message construction, `dist/helpers.js` MIME assembly | `npm run live-smoke -- gmail` |
 | comment tools, section-scoped editing, list handling | `npm run live-smoke -- checklist` |
 | one specific issue's fix | `npm run live-smoke -- issue-118-bold-trailing-space` (or just `118`) |
@@ -178,6 +179,7 @@ What `ctx` gives you:
 | | |
 |---|---|
 | `call(tool, args)` | in-process, journalled, guarded. Parses arguments through the tool's own zod schema first, exactly as the MCP transport does — so an undeclared parameter gets stripped here the same way it did for the reporter |
+| `startLoopbackMcp()` | production v2 server on an ephemeral `127.0.0.1` port. Its `call()` makes real HTTP requests and journals them; use it for HTTP-only contracts such as read handles |
 | `tryCall(tool, args)` | same, returns `{ ok, result, error }` instead of throwing |
 | `folderId`, `runId`, `self` | the sandbox, this run's id, the authenticated address |
 | `fixture(name)` | read `live/fixtures/<name>` |

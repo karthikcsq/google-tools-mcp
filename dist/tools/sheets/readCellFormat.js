@@ -1,7 +1,10 @@
 import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
 import { rowColToA1 } from '../../googleSheetsApiHelpers.js';
+import { mintSheetsReadHandle, readSheetsCellStateBaseline } from '../../resourceHandles.js';
+import { trackRead } from '../../readTracker.js';
+import { setResultWarning } from '../../handleRuntime.js';
 /**
  * Converts a Google Sheets RGBA color object (0-1 range) to a hex string.
  * Returns null if the color is undefined or has no meaningful channels.
@@ -91,7 +94,7 @@ function simplifyFormat(fmt) {
 export function register(server) {
     server.addTool({
         name: 'readCellFormat',
-        description: 'Reads the formatting/style of cells in a given range. Returns formatting details like bold, italic, fontSize, fontFamily, colors, alignment, borders, and number format per cell.',
+        description: 'Reads the formatting/style and dropdown validation of cells in a given bounded range. On modern runtimes its readHandle authorizes a later formatCells, setDropdownValidation, or copyFormatting destination overwrite in that same range.',
         parameters: z.object({
             spreadsheetId: z
                 .string()
@@ -102,8 +105,30 @@ export function register(server) {
         }),
         execute: async (args, { log }) => {
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
             log.info(`Reading cell format for range "${args.range}" in spreadsheet ${args.spreadsheetId}`);
             try {
+                try {
+                    const baseline = await readSheetsCellStateBaseline({
+                        drive, sheets, spreadsheetId: args.spreadsheetId, ranges: [args.range],
+                    });
+                    trackRead(args.spreadsheetId);
+                    await mintSheetsReadHandle(args.spreadsheetId, baseline);
+                    const observed = baseline.displayRanges[0];
+                    const cells = observed.cells.map((cell) => ({
+                        cell: rowColToA1(cell.row - 1, cell.column - 1),
+                        // Keep the friendly summary, but expose the complete
+                        // API format projection that the handle fingerprints.
+                        // A caller must not receive authority over properties
+                        // that simplifyFormat intentionally omits.
+                        ...(cell.userEnteredFormat ? { userEnteredFormat: cell.userEnteredFormat } : {}),
+                        ...(cell.userEnteredFormat ? { format: simplifyFormat(cell.userEnteredFormat) } : {}),
+                        ...(cell.dataValidation ? { dataValidation: cell.dataValidation } : {}),
+                    })).filter((cell) => cell.format || cell.userEnteredFormat || cell.dataValidation);
+                    return JSON.stringify({ range: observed.range, cells }, null, 2);
+                } catch (baselineError) {
+                    if (!/bounded A1|read-handle range|resource read may cover|A1 column/i.test(baselineError?.message ?? '')) throw baselineError;
+                }
                 const response = await sheets.spreadsheets.get({
                     spreadsheetId: args.spreadsheetId,
                     ranges: [args.range],
@@ -124,13 +149,19 @@ export function register(server) {
                     for (let colIdx = 0; colIdx < row.values.length; colIdx++) {
                         const cellData = row.values[colIdx];
                         const fmt = simplifyFormat(cellData?.userEnteredFormat);
-                        if (fmt) {
+                        if (fmt || cellData?.userEnteredFormat) {
                             const cellRef = rowColToA1(startRow + rowIdx, startCol + colIdx);
-                            cells.push({ cell: cellRef, format: fmt });
+                            cells.push({
+                                cell: cellRef,
+                                ...(cellData?.userEnteredFormat ? { userEnteredFormat: cellData.userEnteredFormat } : {}),
+                                ...(fmt ? { format: fmt } : {}),
+                            });
                         }
                     }
                 }
-                return JSON.stringify({ range: args.range, cells }, null, 2);
+                const warning = 'This read uses an unbounded or named range and does not mint a readHandle. Read an explicit bounded A1 range before a formatting mutation.';
+                setResultWarning(warning);
+                return JSON.stringify({ range: args.range, cells, warnings: [warning] }, null, 2);
             }
             catch (error) {
                 log.error(`Error reading cell format for spreadsheet ${args.spreadsheetId}: ${error.message || error}`);

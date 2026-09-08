@@ -2,6 +2,7 @@ import { publicError, isPublicError, wrapOperationError } from '../../errors.js'
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
 import { guardMutation } from '../../readTracker.js';
+import { beginDriveDeletion, ResourceReadHandleParameter } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'deleteFile',
@@ -15,25 +16,26 @@ export function register(server) {
                 .optional()
                 .default(false)
                 .describe('If true, permanently deletes the file instead of moving it to trash.'),
+            readHandle: ResourceReadHandleParameter,
         }),
         execute: async (args, { log }) => {
-            await guardMutation(args.fileId, { skipExternalCheck: true });
             const drive = await getDriveClient();
             log.info(`Deleting file ${args.fileId} ${args.permanent ? '(permanent)' : '(to trash)'}`);
             try {
-                // Get file info before deletion
-                const fileInfo = await drive.files.get({
-                    fileId: args.fileId,
-                    fields: 'name,mimeType',
-                    supportsAllDrives: true,
+                const lease = await beginDriveDeletion({
+                    fileId: args.fileId, readHandle: args.readHandle, drive,
+                    legacyGuard: () => guardMutation(args.fileId, { skipExternalCheck: true }),
                 });
-                const fileName = fileInfo.data.name;
-                const isFolder = fileInfo.data.mimeType === 'application/vnd.google-apps.folder';
+                const fileInfo = lease.file ?? (await drive.files.get({
+                    fileId: args.fileId, fields: 'name,mimeType', supportsAllDrives: true,
+                })).data;
+                const fileName = fileInfo.name;
+                const isFolder = fileInfo.mimeType === 'application/vnd.google-apps.folder';
                 if (args.permanent) {
-                    await drive.files.delete({
+                    await lease.remove(() => drive.files.delete({
                         fileId: args.fileId,
                         supportsAllDrives: true,
-                    });
+                    }));
                     return JSON.stringify({
                         success: true,
                         action: 'permanently_deleted',
@@ -44,13 +46,13 @@ export function register(server) {
                     }, null, 2);
                 }
                 else {
-                    await drive.files.update({
+                    await lease.remove(() => drive.files.update({
                         fileId: args.fileId,
                         requestBody: {
                             trashed: true,
                         },
                         supportsAllDrives: true,
-                    });
+                    }));
                     return JSON.stringify({
                         success: true,
                         action: 'trashed',

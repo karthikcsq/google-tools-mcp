@@ -1,7 +1,8 @@
 import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
+import { beginSheetsMutation, prepareSheetValueTargets, ResourceReadHandleParameter } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'batchWrite',
@@ -24,20 +25,26 @@ export function register(server) {
                 .optional()
                 .default('USER_ENTERED')
                 .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
+            readHandle: ResourceReadHandleParameter,
         }),
         execute: async (args, { log }) => {
-            await guardMutation(args.spreadsheetId);
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
             const rangeNames = args.data.map((d) => d.range).join(', ');
             log.info(`Batch writing to ${args.data.length} range(s) in spreadsheet ${args.spreadsheetId}: ${rangeNames}`);
             try {
-                const response = await sheets.spreadsheets.values.batchUpdate({
+                const targets = await prepareSheetValueTargets(sheets, args.spreadsheetId, args.data);
+                const lease = await beginSheetsMutation({
+                    spreadsheetId: args.spreadsheetId, readHandle: args.readHandle, drive, sheets, targets,
+                    legacyGuard: () => guardMutation(args.spreadsheetId),
+                });
+                const response = await lease.write(() => sheets.spreadsheets.values.batchUpdate({
                     spreadsheetId: args.spreadsheetId,
                     requestBody: {
                         valueInputOption: args.valueInputOption,
                         data: args.data.map((d) => ({ range: d.range, values: d.values })),
                     },
-                });
+                }));
                 const totalCells = response.data.totalUpdatedCells || 0;
                 const totalRows = response.data.totalUpdatedRows || 0;
                 const totalColumns = response.data.totalUpdatedColumns || 0;

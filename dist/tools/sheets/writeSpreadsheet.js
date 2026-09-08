@@ -1,8 +1,9 @@
 import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
 import { guardMutation, trackMutation } from '../../readTracker.js';
+import { beginSheetsMutation, prepareSheetValueTargets, ResourceReadHandleParameter } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'writeSpreadsheet',
@@ -22,13 +23,21 @@ export function register(server) {
                 .optional()
                 .default('USER_ENTERED')
                 .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
+            readHandle: ResourceReadHandleParameter,
         }),
         execute: async (args, { log }) => {
-            await guardMutation(args.spreadsheetId);
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
             log.info(`Writing to spreadsheet ${args.spreadsheetId}, range: ${args.range}`);
             try {
-                const response = await SheetsHelpers.writeRange(sheets, args.spreadsheetId, args.range, args.values, args.valueInputOption);
+                const targets = await prepareSheetValueTargets(sheets, args.spreadsheetId, [{ range: args.range, values: args.values }]);
+                const lease = await beginSheetsMutation({
+                    spreadsheetId: args.spreadsheetId, readHandle: args.readHandle, drive, sheets, targets,
+                    legacyGuard: () => guardMutation(args.spreadsheetId),
+                });
+                const response = await lease.write(() => SheetsHelpers.writeRange(
+                    sheets, args.spreadsheetId, args.range, args.values, args.valueInputOption,
+                ));
                 const updatedCells = response.updatedCells || 0;
                 const updatedRows = response.updatedRows || 0;
                 const updatedColumns = response.updatedColumns || 0;

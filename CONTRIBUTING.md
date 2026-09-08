@@ -28,10 +28,10 @@ After the write, settle the tracker:
 ### Which surfaces are guarded
 
 - **Google Docs mutations** open a lease with `beginDocsMutation` in `dist/docsHandles.js` and pass their `guardMutation` call as `legacyGuard`. This is every body-writing Docs tool: `modifyText`, `batchModifyText`, `deleteRange`, `findAndReplace`, `appendText`, `appendMarkdown`, `replaceDocumentWithMarkdown`, `replaceRangeWithMarkdown`, `insertTable`, `insertTableWithData`, `insertPageBreak`, `insertImage`, `addTab`, `renameTab`, and `applyParagraphStyle`. `insertImage` takes its lease before the Drive upload, so a rejected call uploads nothing (`tests/insertImageGuardBeforeUpload.test.js`).
-- **Sheets**: `writeSpreadsheet`, `batchWrite`, and `clearSpreadsheetRange` call `guardMutation` directly.
-- **Drive**: `deleteFile` calls `guardMutation` with `skipExternalCheck`.
+- **Sheets**: value writes (`writeSpreadsheet`, `batchWrite`, `clearRange`) use `dist/resourceHandles.js` to validate an explicit bounded value/formula baseline before their first API write. Structure-changing/destructive tools use a separate `getSpreadsheetInfo` structure baseline that includes chart/table identity and range. `formatCells`, `copyFormatting`, and `setDropdownValidation` use a bounded `readCellFormat` format/validation baseline; a `deleteTable(deleteData: true)` call uses the bounded value baseline for the table's actual cleared cells. Direct no-context callers retain the tracker fallback.
+- **Drive**: `deleteFile` validates the `getFileInfo` metadata baseline before its first delete/trash API call. Direct no-context callers retain `guardMutation` with `skipExternalCheck`.
 
-Sheets and Drive have no handle wiring, so over HTTP they fail closed with the message in `guardMutation`. A new mutating tool on any of these surfaces is guarded before its first side effect, and the guard is not optional for "small" writes.
+Modern Sheets and Drive calls require explicit resource handles. A resource mutation is guarded before its first side effect, including batches and destructive operations; no metadata-only handle can authorize a spreadsheet value write.
 
 ### How read handles differ from the tracker
 
@@ -56,7 +56,7 @@ Any tool that creates or copies a file the guard covers must seed read state on 
 The rule is **trustworthy or not at all**: seed exactly what a real read of that file would have recorded, and nothing when you cannot.
 
 - **Docs** (`dist/tools/drive/createDocument.js`, `createFromTemplate.js`, and the Docs branch of `copyFile.js`): fetch the document back with `documents.get`, then `trackRead` with the rendered markdown and the fetched `revisionId`, and `mintDocsReadHandle` with the same content. Fetch rather than trusting your own inputs, so the seeded snapshot matches what `readDocument` would have returned, including any partial state a warned-but-continued content step left behind.
-- **Sheets** (`createSpreadsheet.js`, the Sheets branch of `copyFile.js`): `trackRead(spreadsheetId)` with no content and no revision, which is exactly the metadata-only baseline `readSpreadsheet` records.
+- **Sheets** (`createSpreadsheet.js`, the Sheets branch of `copyFile.js`): fetch a real bounded Sheets baseline after creation/copy. It includes Drive version, sheet identity, values, and formulas, then seeds the legacy tracker and mints a value handle only when that fetch succeeds. An empty new spreadsheet verifies its actual default grid and seeds up to 100,000 blank cells, so a normal multi-cell first write is in scope. A copy remains limited to the observed range. A failed `initialData` write is always unseeded, even if the file itself was created successfully.
 - **Binary and other Drive copies**: not seeded. `copyFile` has no content snapshot for a binary destination, and `deleteFile` is guarded, so claiming a read there would weaken that guard.
 - **A partial result**: not seeded. `createFromTemplate` seeds only when every replacement applied; a failed replacement leaves the document unseeded and says so in the result.
 - **A failed seed**: warn and leave the file unseeded. The file already exists, so the tool must not throw and hide it. The next mutation fails closed with "read it first", which is the correct outcome.

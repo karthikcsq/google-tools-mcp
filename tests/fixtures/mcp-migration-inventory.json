@@ -94,6 +94,9 @@
         "file": "dist/requestContext.js"
       },
       {
+        "file": "dist/resourceHandles.js"
+      },
+      {
         "file": "dist/setup.js"
       },
       {
@@ -810,6 +813,9 @@
         "file": "tests/requestScopedTrackerIsolation.test.js"
       },
       {
+        "file": "tests/resourceHandleProjection.test.js"
+      },
+      {
         "file": "tests/setup.js"
       },
       {
@@ -823,6 +829,9 @@
       },
       {
         "file": "tests/setupUpdateCommand.test.js"
+      },
+      {
+        "file": "tests/sheetsLegacyLeaseCompatibility.test.js"
       },
       {
         "file": "tests/shellSafeExecution.test.js"
@@ -1027,7 +1036,7 @@
       },
       {
         "file": "dist/tools/drive/copyFile.js",
-        "line": 11,
+        "line": 13,
         "match": ".addTool({"
       },
       {
@@ -1047,7 +1056,7 @@
       },
       {
         "file": "dist/tools/drive/deleteFile.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
@@ -1057,7 +1066,7 @@
       },
       {
         "file": "dist/tools/drive/getFileInfo.js",
-        "line": 5,
+        "line": 7,
         "match": ".addTool({"
       },
       {
@@ -1417,22 +1426,22 @@
       },
       {
         "file": "dist/tools/sheets/batchWrite.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/clearSpreadsheetRange.js",
-        "line": 7,
+        "line": 8,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/copyFormatting.js",
-        "line": 6,
+        "line": 23,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/createSpreadsheet.js",
-        "line": 7,
+        "line": 27,
         "match": ".addTool({"
       },
       {
@@ -1442,22 +1451,22 @@
       },
       {
         "file": "dist/tools/sheets/deleteChart.js",
-        "line": 5,
+        "line": 7,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/deleteColumns.js",
-        "line": 6,
+        "line": 7,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/deleteSheet.js",
-        "line": 5,
+        "line": 7,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/deleteTable.js",
-        "line": 6,
+        "line": 13,
         "match": ".addTool({"
       },
       {
@@ -1467,7 +1476,7 @@
       },
       {
         "file": "dist/tools/sheets/formatCells.js",
-        "line": 6,
+        "line": 8,
         "match": ".addTool({"
       },
       {
@@ -1502,12 +1511,12 @@
       },
       {
         "file": "dist/tools/sheets/readCellFormat.js",
-        "line": 92,
+        "line": 95,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/readSpreadsheet.js",
-        "line": 7,
+        "line": 9,
         "match": ".addTool({"
       },
       {
@@ -1522,7 +1531,7 @@
       },
       {
         "file": "dist/tools/sheets/setDropdownValidation.js",
-        "line": 6,
+        "line": 8,
         "match": ".addTool({"
       },
       {
@@ -1537,7 +1546,7 @@
       },
       {
         "file": "dist/tools/sheets/writeSpreadsheet.js",
-        "line": 7,
+        "line": 8,
         "match": ".addTool({"
       },
       {

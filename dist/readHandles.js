@@ -30,10 +30,10 @@ const WORKSPACE_KEYS = new Set([
 ]);
 const HANDLE_INPUT_KEYS = new Set([
     'resourceKind', 'resourceId', 'scope', 'tabId', 'revisionId',
-    'structuralFingerprint', 'version', 'workspace', 'ttlMs',
+    'structuralFingerprint', 'version', 'metadata', 'workspace', 'ttlMs',
 ]);
 const SUCCESSOR_INPUT_KEYS = new Set([
-    'revisionId', 'structuralFingerprint', 'version', 'workspace', 'ttlMs',
+    'revisionId', 'structuralFingerprint', 'version', 'metadata', 'workspace', 'ttlMs',
 ]);
 const BINDING_KEYS = new Set(['principalFingerprint', 'profile', 'epoch']);
 
@@ -245,6 +245,17 @@ function normalizeResource(input) {
         revisionId: requireOptionalString(input.revisionId, 'revisionId', 2048),
         structuralFingerprint: requireOptionalString(input.structuralFingerprint, 'structuralFingerprint', 4096),
         version,
+        // Resource adapters retain only bounded, non-secret hashes and scope
+        // descriptors here. This is deliberately internal: caller-facing handle
+        // records never expose a read's values, formulas, or other baseline.
+        metadata: input.metadata === undefined || input.metadata === null
+            ? null
+            : cloneBoundedMetadata(input.metadata, {
+                maxMetadataDepth: 6,
+                maxMetadataNodes: 64,
+                maxMetadataStringBytes: 4096,
+                maxMetadataTotalBytes: 16384,
+            }, 'read handle metadata'),
     });
 }
 
@@ -599,6 +610,11 @@ export function createReadHandleStore({
                     ? predecessor.structuralFingerprint
                     : requireOptionalString(input.structuralFingerprint, 'structuralFingerprint', 4096),
                 version: input.version === undefined ? predecessor.version : input.version,
+                metadata: input.metadata === undefined
+                    ? predecessor.metadata
+                    : (input.metadata === null
+                        ? null
+                        : cloneBoundedMetadata(input.metadata, limits, 'read handle metadata')),
             }
             : normalizeResource(input);
         if (predecessor && resource.version !== null && typeof resource.version !== 'string' &&
@@ -694,6 +710,15 @@ export function createReadHandleStore({
     function getInternalWorkspace(capability, options = {}) {
         const workspace = findRecord(capability, options, { allowReserved: true }).record.workspace;
         return workspace ? cloneBoundedMetadata(workspace, limits, 'workspace') : null;
+    }
+
+    /**
+     * Return the bounded adapter metadata for a validated handle. It is an
+     * internal integration seam, never part of the client record.
+     */
+    function getInternalMetadata(capability, options = {}) {
+        const metadata = findRecord(capability, options, { allowReserved: true }).record.metadata;
+        return metadata === null ? null : cloneBoundedMetadata(metadata, limits, 'read handle metadata');
     }
 
     function resolveImplicit(options = {}) {
@@ -836,6 +861,17 @@ export function createReadHandleStore({
         terminalize(record, 'READ_HANDLE_INVALID', now, {
             retainDirty: true,
             reason: 'post-write-failure',
+        });
+        return clientRecord;
+    }
+
+    /** Terminal success for a mutation that intentionally has no successor. */
+    function completeConsumed(operationId, options = {}) {
+        const { record, now } = findLease(operationId, options);
+        const clientRecord = makeClientRecord(record);
+        terminalize(record, 'READ_HANDLE_CONSUMED', now, {
+            retainDirty: false,
+            reason: 'mutation-success-no-successor',
         });
         return clientRecord;
     }
@@ -992,6 +1028,7 @@ export function createReadHandleStore({
         issue,
         validate,
         getInternalWorkspace,
+        getInternalMetadata,
         resolveImplicit,
         resolveImplicitCapability,
         setImplicit,
@@ -1001,6 +1038,7 @@ export function createReadHandleStore({
         abortBeforeWrite,
         completeSuccess,
         completeAfterWriteFailure,
+        completeConsumed,
         transitionToSuccessor,
         consume,
         revoke,

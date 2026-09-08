@@ -68,11 +68,44 @@ HTTP has no session, so **read state is never carried between HTTP requests**.
   mutation handle is single-use: a successful write consumes it and returns a
   successor bound to the new revision. A revision string on its own cannot
   authorize a write.
-- **The field is optional in the schema and required at runtime on HTTP.** stdio
-  callers, which have implicit connection-pinned read state, do not pass it.
-- **`writeSpreadsheet`, `batchWrite`, `clearSpreadsheetRange`, and `deleteFile`
-  have no handle wiring yet and fail closed over HTTP.** Use stdio for those in
-  this release.
+- **Sheets value writes require an explicit `readHandle` on every modern
+  transport, including modern stdio.** `readSpreadsheet` returns one after it
+  reads Drive version, sheet identity, values, and formulas for an explicit
+  bounded A1 range. Pass `ranges: [...]` to read several bounded areas for one
+  later `batchWrite`. Named ranges, whole rows, and whole columns remain
+  read-only compatible, but intentionally return no write authority.
+- **`writeSpreadsheet`, `batchWrite`, and `clearRange` may change only cells
+  inside the captured ranges.** The actual output rectangle comes from the
+  values array, so an `A1` anchor with a 2x2 payload needs a handle that covers
+  `A1:B2`. Batch output rectangles may not overlap. A successful mutation
+  returns a single-use successor and its bounded observed post-write ranges in
+  both text output and `structuredContent.observedResourceState`.
+- **`getSpreadsheetInfo` returns a separate structure handle.** It observes
+  sheet identity, grid, hidden state, chart identity/specification, and table
+  identity/range. It authorizes `deleteSheet`, `deleteColumns`, `deleteChart`,
+  and `deleteTable` when table data is preserved; it never authorizes a value
+  write. `deleteTable(deleteData: true)` requires a bounded `readSpreadsheet`
+  value handle that contains the table's actual data range.
+- **`readCellFormat` returns a cell-state handle for bounded ranges.** It
+  captures existing user-entered format and dropdown validation. Use it for
+  `formatCells`, `setDropdownValidation`, or the destination range of
+  `copyFormatting`, because each replaces that current state. Whole rows,
+  whole columns, and named ranges remain readable without a handle but cannot
+  authorize one of these mutations.
+- **Creation/copy seeding remains bounded.** An empty newly-created spreadsheet
+  verifies and seeds its actual default grid (up to 100,000 cells), so an
+  ordinary multi-cell first write is covered. A copied spreadsheet remains
+  limited to its observed bounded range. A failed `initialData` write mints no
+  handle and requires a fresh read.
+- `getFileInfo` returns a Drive metadata handle for `deleteFile`. A successful
+  trash or permanent deletion consumes that handle and returns no successor.
+- **Sheets and Drive do not offer a documented conditional write control like
+  Docs `WriteControl`.** The server serializes its own same-resource writes,
+  rereads the relevant baseline immediately before each write/delete, and
+  rejects a changed version, sheet identity, values/formulas, or Drive file
+  metadata. A different writer can still change the resource after that
+  comparison and before Google's API call, so this is compare-then-write
+  protection, not an external atomic compare-and-swap guarantee.
 - Restarting the process mints a fresh epoch, which invalidates every
   outstanding handle. Rotating the bearer token or `GOOGLE_MCP_PROFILE` means
   restarting, so rotation genuinely invalidates handles.

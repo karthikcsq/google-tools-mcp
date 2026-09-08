@@ -413,7 +413,7 @@ export async function cleanupHandleWorkspaces({ all = false, now = Date.now() } 
  * handle to another. This slot is per execution.
  */
 export function runWithResultAnnotations(fn) {
-    return resultAnnotationStorage.run({ readHandle: null, expiresAt: null, warnings: [] }, fn);
+    return resultAnnotationStorage.run({ readHandle: null, expiresAt: null, warnings: [], resourceState: null }, fn);
 }
 
 /** Ask the facade to surface `readHandle` as a top-level result field. */
@@ -445,6 +445,18 @@ export function setResultWarning(message) {
 }
 
 /**
+ * Attach a bounded, tool-produced resource observation to the result. Sheets
+ * uses this after a successful write so a successor handle is never minted
+ * from a post-write state the caller cannot inspect.
+ */
+export function setResultResourceState(resourceState) {
+    const slot = resultAnnotationStorage.getStore();
+    if (!slot || !resourceState || typeof resourceState !== 'object') return false;
+    slot.resourceState = resourceState;
+    return true;
+}
+
+/**
  * Merge any annotation into a normalized tool result. `readHandle` is a named
  * top-level field (plan §2) and is mirrored into `structuredContent` for clients
  * that only read structured output. `warnings` (if any were recorded) are both
@@ -454,11 +466,18 @@ export function setResultWarning(message) {
 export function applyResultAnnotations(result) {
     const slot = resultAnnotationStorage.getStore();
     const warnings = slot?.warnings ?? [];
-    if (!slot?.readHandle && warnings.length === 0) return result;
-    const content = warnings.length > 0
+    if (!slot?.readHandle && warnings.length === 0 && !slot?.resourceState) return result;
+    const annotationText = [
+        ...(slot?.resourceState ? [{
+            type: 'text',
+            text: `Observed post-write state:\n${JSON.stringify(slot.resourceState)}`,
+        }] : []),
+        ...warnings.map((message) => ({ type: 'text', text: `Warning: ${message}` })),
+    ];
+    const content = annotationText.length > 0
         ? [
             ...(Array.isArray(result.content) ? result.content : []),
-            ...warnings.map((message) => ({ type: 'text', text: `Warning: ${message}` })),
+            ...annotationText,
         ]
         : result.content;
     return {
@@ -470,6 +489,7 @@ export function applyResultAnnotations(result) {
             ...(slot?.readHandle ? { readHandle: slot.readHandle } : {}),
             ...(slot?.readHandle && slot.expiresAt !== null ? { readHandleExpiresAt: slot.expiresAt } : {}),
             ...(warnings.length > 0 ? { warnings } : {}),
+            ...(slot?.resourceState ? { observedResourceState: slot.resourceState } : {}),
         },
     };
 }

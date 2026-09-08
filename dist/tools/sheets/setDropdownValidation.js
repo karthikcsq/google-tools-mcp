@@ -1,11 +1,13 @@
 import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { guardMutation } from '../../readTracker.js';
+import { beginSheetsCellStateMutation, prepareSheetRangeTargets, ResourceReadHandleParameter } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'setDropdownValidation',
-        description: 'Adds or removes a dropdown list on a range of cells. Provide values to create a dropdown restricting input to those options. Omit values to remove dropdown validation from the range.',
+        description: 'Adds or removes a dropdown list on a range of cells. Provide values to create a dropdown restricting input to those options. Omit values to remove dropdown validation from the range. On modern runtimes, first call readCellFormat for the exact bounded range.',
         parameters: z.object({
             spreadsheetId: z
                 .string()
@@ -26,15 +28,25 @@ export function register(server) {
                 .string()
                 .optional()
                 .describe('Help text shown when a cell with the dropdown is selected.'),
+            readHandle: ResourceReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
             const isClearing = !args.values || args.values.length === 0;
             log.info(isClearing
                 ? `Clearing dropdown validation on "${args.range}" in spreadsheet ${args.spreadsheetId}`
                 : `Setting dropdown validation on "${args.range}" with ${args.values.length} options in spreadsheet ${args.spreadsheetId}`);
             try {
-                await SheetsHelpers.setDropdownValidation(sheets, args.spreadsheetId, args.range, args.values, args.strict, args.inputMessage);
+                const targets = await prepareSheetRangeTargets(sheets, args.spreadsheetId, [args.range]);
+                const lease = await beginSheetsCellStateMutation({
+                    spreadsheetId: args.spreadsheetId, readHandle: args.readHandle, drive, sheets,
+                    targets,
+                    legacyGuard: () => guardMutation(args.spreadsheetId),
+                });
+                await lease.write(() => SheetsHelpers.setDropdownValidation(
+                    sheets, args.spreadsheetId, args.range, args.values, args.strict, args.inputMessage,
+                ));
                 const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
                 if (isClearing) {
                     return `${sheetUrl}\nSuccessfully removed dropdown validation from range "${args.range}".`;
