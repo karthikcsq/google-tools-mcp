@@ -49,6 +49,8 @@ const {
 const { register: registerReadDocument } = await import('../dist/tools/docs/readGoogleDoc.js');
 const { register: registerAppendText } = await import('../dist/tools/docs/appendToGoogleDoc.js');
 const { register: registerReadSpreadsheet } = await import('../dist/tools/sheets/readSpreadsheet.js');
+const { register: registerGetSpreadsheetInfo } = await import('../dist/tools/sheets/getSpreadsheetInfo.js');
+const { register: registerDeleteChart } = await import('../dist/tools/sheets/deleteChart.js');
 const { register: registerWriteSpreadsheet } = await import('../dist/tools/sheets/writeSpreadsheet.js');
 const { register: registerBatchWrite } = await import('../dist/tools/sheets/batchWrite.js');
 const { register: registerCreateSpreadsheet } = await import('../dist/tools/sheets/createSpreadsheet.js');
@@ -125,6 +127,8 @@ async function buildFactory() {
             registerReadDocument(server);
             registerAppendText(server);
             registerReadSpreadsheet(server);
+            registerGetSpreadsheetInfo(server);
+            registerDeleteChart(server);
             registerWriteSpreadsheet(server);
             registerBatchWrite(server);
             registerCreateSpreadsheet(server);
@@ -611,6 +615,10 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
         const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
         try {
             const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'formula-sheet', range: 'A1' });
+            const observedRead = JSON.parse(textOf(read));
+            expect(observedRead.values).toEqual([['1']]);
+            expect(observedRead.enteredValues).toEqual([['=1']]);
+            expect(observedRead.formulas).toEqual([['=1']]);
             formula = '=2';
             const write = await call(handler, 'writeSpreadsheet', {
                 spreadsheetId: 'formula-sheet', range: 'A1', values: [['replacement']], readHandle: read.readHandle,
@@ -618,6 +626,94 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
             expect(write.isError).toBe(true);
             expect(textOf(write)).toMatch(/does not authorize|spreadsheet changed/i);
             expect(valuesUpdate).not.toHaveBeenCalled();
+        } finally { await handler.close(); }
+    });
+
+    it('mints and advances a handle for all 32 documented bounded ranges', async () => {
+        const valuesUpdate = jest.fn(async () => ({ data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Maximum range sheet' },
+                    sheets: [{
+                        properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                        data: [],
+                    }],
+                } })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const ranges = Array.from({ length: 32 }, (_, index) => `Sheet1!A${index + 1}`);
+            const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'max-ranges', ranges });
+            expect(read.isError).toBeFalsy();
+            expect(read.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(JSON.parse(textOf(read)).ranges).toHaveLength(32);
+
+            const write = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'max-ranges', range: 'Sheet1!A1', values: [['written']], readHandle: read.readHandle,
+            });
+            expect(write.isError).toBeFalsy();
+            expect(valuesUpdate).toHaveBeenCalledTimes(1);
+            expect(write.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(write.readHandle).not.toBe(read.readHandle);
+        } finally { await handler.close(); }
+    });
+
+    it('returns the chart spec from the registered getSpreadsheetInfo tool', async () => {
+        const spec = { title: 'Revenue', basicChart: { chartType: 'COLUMN', legendPosition: 'BOTTOM_LEGEND' } };
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Observed chart sheet' },
+                    sheets: Array.from({ length: 8 }, (_, index) => ({
+                        properties: { sheetId: 7 + index, title: index === 0 ? 'Dashboard' : `Data ${index}`, hidden: false, gridProperties: { rowCount: 100, columnCount: 12 } },
+                        charts: index === 0 ? [{ chartId: 55, position: { newSheet: true }, spec }] : [], tables: [],
+                    })),
+                } })),
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const result = await call(handler, 'getSpreadsheetInfo', { spreadsheetId: 'chart-info' });
+            expect(result.isError).toBeFalsy();
+            const payload = JSON.parse(textOf(result));
+            expect(payload.sheets).toHaveLength(8);
+            expect(result.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(payload.sheets[0].charts[0]).toEqual({ chartId: 55, position: { newSheet: true }, spec });
+        } finally { await handler.close(); }
+    });
+
+    it('carries a 100-sheet structure read through deleteChart without persisting the full structure metadata', async () => {
+        const batchUpdate = jest.fn(async () => ({ data: {} }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Large workbook' },
+                    sheets: Array.from({ length: 100 }, (_, index) => ({
+                        properties: { sheetId: index, title: `Sheet ${index + 1}`, hidden: false, gridProperties: { rowCount: 100, columnCount: 26 } },
+                        charts: index === 99 ? [{ chartId: 9001, position: { newSheet: true }, spec: { title: 'Last chart' } }] : [], tables: [],
+                    })),
+                } })),
+                batchUpdate,
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'getSpreadsheetInfo', { spreadsheetId: 'large-structure' });
+            expect(read.isError).toBeFalsy();
+            const deleted = await call(handler, 'deleteChart', {
+                spreadsheetId: 'large-structure', chartId: 9001, readHandle: read.readHandle,
+            });
+            expect(deleted.isError).toBeFalsy();
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
         } finally { await handler.close(); }
     });
 

@@ -32,7 +32,7 @@ export function register(server) {
                             rows: sheet.rowCount,
                             columns: sheet.columnCount,
                             hidden: sheet.hidden,
-                            charts: sheet.charts.map((chart) => ({ chartId: chart.chartId, position: chart.position })),
+                            charts: sheet.charts.map((chart) => ({ chartId: chart.chartId, position: chart.position, spec: chart.spec })),
                             tables: sheet.tables.map((table) => ({ tableId: table.tableId, name: table.name, range: table.range })),
                         };
                     }),

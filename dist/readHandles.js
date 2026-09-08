@@ -208,9 +208,18 @@ function normalizeBinding(input) {
     });
 }
 
-function normalizeResource(input) {
+function normalizeResource(input, limits) {
     assertAllowedKeys(input, HANDLE_INPUT_KEYS, 'read handle input');
-    assertNoRawCredentialMaterial(input, 'read handle input');
+    // The resource adapter has already bounded its documented maximum ranges
+    // and structural objects. Apply the store's one budget consistently here,
+    // rather than a smaller hidden preflight ceiling that rejects valid
+    // credentials before `cloneBoundedMetadata` receives the configured limit.
+    assertNoRawCredentialMaterial(input, 'read handle input', {
+        maxDepth: limits.maxMetadataDepth,
+        maxNodes: limits.maxMetadataNodes,
+        maxStringBytes: limits.maxMetadataStringBytes,
+        maxTotalBytes: limits.maxMetadataTotalBytes,
+    });
     const resourceKind = requireBoundedString(input.resourceKind, 'resourceKind', 16);
     if (!RESOURCE_KINDS.has(resourceKind)) {
         throw new TypeError('resourceKind must be docs, sheets, or drive.');
@@ -251,10 +260,10 @@ function normalizeResource(input) {
         metadata: input.metadata === undefined || input.metadata === null
             ? null
             : cloneBoundedMetadata(input.metadata, {
-                maxMetadataDepth: 6,
-                maxMetadataNodes: 64,
-                maxMetadataStringBytes: 4096,
-                maxMetadataTotalBytes: 16384,
+                maxMetadataDepth: limits.maxMetadataDepth,
+                maxMetadataNodes: limits.maxMetadataNodes,
+                maxMetadataStringBytes: limits.maxMetadataStringBytes,
+                maxMetadataTotalBytes: limits.maxMetadataTotalBytes,
             }, 'read handle metadata'),
     });
 }
@@ -409,10 +418,13 @@ export function createReadHandleStore({
     maxActiveHandles = DEFAULT_MAX_ACTIVE_HANDLES,
     maxTerminalTombstones = DEFAULT_MAX_TERMINAL_TOMBSTONES,
     maxRetainedDirtyWorkspaces = DEFAULT_MAX_RETAINED_DIRTY_WORKSPACES,
-    maxMetadataDepth = 6,
-    maxMetadataNodes = 64,
+    maxMetadataDepth = 10,
+    // 32 bounded Sheets ranges contain roughly 225 primitive/object nodes;
+    // eight structural sheets with complete chart/table descriptors also need
+    // more than the old accidental 64-node ceiling. 512 remains finite.
+    maxMetadataNodes = 512,
     maxMetadataStringBytes = 4096,
-    maxMetadataTotalBytes = 16384,
+    maxMetadataTotalBytes = 65536,
     binding = null,
 } = {}) {
     if (typeof clock !== 'function') throw new TypeError('clock must be a function.');
@@ -616,7 +628,7 @@ export function createReadHandleStore({
                         ? null
                         : cloneBoundedMetadata(input.metadata, limits, 'read handle metadata')),
             }
-            : normalizeResource(input);
+            : normalizeResource(input, limits);
         if (predecessor && resource.version !== null && typeof resource.version !== 'string' &&
             (!Number.isSafeInteger(resource.version) || resource.version < 0)) {
             throw new TypeError('version must be a non-empty string or non-negative safe integer when provided.');
