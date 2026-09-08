@@ -14,6 +14,7 @@ import { checkCredentials, inspectToken } from './setupInspect.js';
 import { HTTP_OPERATIONS_DOC_URL, resolveHttpServiceConfig, startHttpService } from './httpLifecycle.js';
 import { ensureHttpToken } from './httpState.js';
 import { openBrowser } from './shellSafe.js';
+import { readSetupManifest, writeSetupManifest } from './service/setupManifest.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -544,7 +545,7 @@ export async function runFirstInstallSetup() {
     }
 
     const transport = await configureTransport(launch);
-    const registered = await registerClients(launch, transport);
+    const registered = await registerClients(launch, transport, { configDir: getConfigDir() });
 
     if (!registered.detected) {
         const jsonSnippet = transport.transport === 'stdio'
@@ -736,8 +737,21 @@ export async function configureTransport(launch, {
 export async function registerClients(launch, transport = { transport: 'stdio' }, {
     adapters = createClientAdapters(),
     ui = p,
+    // The reusable registration helper is also exercised directly by unit
+    // tests. Keep its default side-effect free; the two production setup
+    // flows explicitly supply the selected profile directory below.
+    configDir = null,
+    profile = (process.env.GOOGLE_MCP_PROFILE || 'default').trim() || 'default',
+    readManifest = readSetupManifest,
+    writeManifest = writeSetupManifest,
+    supervisor = null,
 } = {}) {
     let detected = false;
+    const previousManifest = configDir ? await readManifest({ configDir }) : null;
+    const selectedClients = new Set(previousManifest?.selectedClients || []);
+    const manifestSupervisor = transport.transport === 'http'
+        ? (supervisor ?? previousManifest?.supervisor ?? null)
+        : null;
     for (const adapter of adapters) {
         if (!await adapter.detect()) continue;
         detected = true;
@@ -764,6 +778,23 @@ export async function registerClients(launch, transport = { transport: 'stdio' }
         }
         const message = { added: 'Added', replaced: 'Repaired', unchanged: 'Already correct, skipped', declined: 'Left unchanged' }[result.status];
         ui.log.success(`${adapter.name}: ${message}.`);
+        // Persist every completed registration before considering the next
+        // client. If a later adapter is declined or fails, doctor still knows
+        // that this successfully configured client was selected. Existing
+        // selections are retained so a temporarily unavailable client cannot
+        // disappear from doctor merely because setup was rerun elsewhere.
+        if (['added', 'replaced', 'unchanged'].includes(result.status)) {
+            selectedClients.add(adapter.name);
+            if (configDir) {
+                await writeManifest({
+                    configDir,
+                    profile,
+                    transport: transport.transport,
+                    selectedClients: [...selectedClients],
+                    supervisor: manifestSupervisor,
+                });
+            }
+        }
     }
     return { detected };
 }
@@ -823,6 +854,6 @@ export async function runSetup({
         ui.log.success('Existing global launch target is valid. Skipping npm install.');
     }
     const transport = await configureTransportImpl(launch);
-    await registerClientsImpl(launch, transport, { ui });
+    await registerClientsImpl(launch, transport, { ui, configDir: getConfigDir() });
     ui.outro(chalk.green.bold('Setup complete!') + chalk.dim(' Existing configuration was preserved or repaired.'));
 }

@@ -50,7 +50,7 @@ export function register(server) {
                 if (error.code === 404)
                     throw publicError(`File or revision not found (fileId: ${args.fileId}, revisionId: ${args.revisionId}).`);
                 if (error.code === 403)
-                    throw publicError('Permission denied. Make sure you have access to this file.');
+                    throw publicError('Permission denied. Make sure you have access to this file.', error);
 throw wrapOperationError('get Drive revision', error, { status: error?.code });
             }
         },

@@ -257,7 +257,8 @@ export function register(server) {
                     );
                 if (error.code === 403)
                     throw publicError(
-                        'Permission denied. Make sure you have access to this file.'
+                        'Permission denied. Make sure you have access to this file.',
+                        error
                     );
                 throw wrapOperationError('download Drive file', error, { status: error?.code });
             }

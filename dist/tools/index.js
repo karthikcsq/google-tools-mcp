@@ -12,7 +12,7 @@ import { getTokenPath, SCOPES } from '../auth.js';
 import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { getLogFilePath, getStructuredLogFilePath, logger, readRecentToolCalls } from '../logger.js';
-import { classifyUpstreamError, findErrorCause, getPublicErrorMessage, publicError } from '../errors.js';
+import { classifyUpstreamError, findErrorCause, getPublicErrorCause, getPublicErrorMessage, publicError } from '../errors.js';
 import { drive as driveApi } from '@googleapis/drive';
 import { gmail as gmailApi } from '@googleapis/gmail';
 import { calendar as calendarApi } from '@googleapis/calendar';
@@ -188,7 +188,7 @@ function appendHintToError(error, toolName) {
     if (existingMsg.includes('`troubleshoot` tool')) return error;
     // Public errors are immutable by design. Preserve their explicit caller-safe
     // status while adding the established troubleshooting guidance.
-    if (publicMessage !== undefined) return publicError(existingMsg + ERROR_HINT);
+    if (publicMessage !== undefined) return publicError(existingMsg + ERROR_HINT, getPublicErrorCause(error));
     try {
         error.message = existingMsg + ERROR_HINT;
     } catch {

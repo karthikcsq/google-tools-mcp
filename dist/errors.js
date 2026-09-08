@@ -2,6 +2,7 @@
 import * as os from 'os';
 
 const publicMessages = new WeakMap();
+const publicCauses = new WeakMap();
 const operationErrorBrand = new WeakSet();
 const operationCauses = new WeakMap();
 const registeredSecrets = new Map();
@@ -34,17 +35,18 @@ function optionalStatus(value) {
 
 /** An error whose immutable message is explicitly safe for an MCP caller. */
 export class PublicToolError extends Error {
-    constructor(safeMessage) {
+    constructor(safeMessage, cause) {
         const snapshot = String(safeMessage);
         super(snapshot);
         this.name = 'PublicToolError';
         publicMessages.set(this, snapshot);
+        if (cause !== undefined) publicCauses.set(this, cause);
         Object.freeze(this);
     }
 }
 
-export function publicError(safeMessage) {
-    return new PublicToolError(safeMessage);
+export function publicError(safeMessage, cause) {
+    return new PublicToolError(safeMessage, cause);
 }
 
 export function isPublicError(error) {
@@ -54,6 +56,11 @@ export function isPublicError(error) {
 /** Return the immutable, construction-time message only for a branded error. */
 export function getPublicErrorMessage(error) {
     return isPublicError(error) ? publicMessages.get(error) : undefined;
+}
+
+/** Return a private upstream cause stored on a branded public error. */
+export function getPublicErrorCause(error) {
+    return isPublicError(error) ? publicCauses.get(error) : undefined;
 }
 
 // Temporary migration compatibility. New boundary code should use the public
@@ -110,7 +117,9 @@ export function findErrorCause(error, predicate) {
         }
         let next;
         try {
-            next = isOperationError(current) ? getOperationCause(current) : current.cause;
+            next = isOperationError(current)
+                ? getOperationCause(current)
+                : (isPublicError(current) ? getPublicErrorCause(current) : current.cause);
         } catch {
             return undefined;
         }
@@ -165,6 +174,23 @@ const NOT_FOUND_REASONS = new Set(['notFound', 'NOT_FOUND']);
 const CONFLICT_REASONS = new Set(['conflict', 'ABORTED', 'ALREADY_EXISTS']);
 const PRECONDITION_REASONS = new Set(['failedPrecondition', 'conditionNotMet', 'FAILED_PRECONDITION']);
 const UNAVAILABLE_REASONS = new Set(['backendError', 'internalError', 'SERVICE_UNAVAILABLE', 'UNAVAILABLE']);
+// Node and undici transport errors contain no caller-safe detail.  Treat only
+// this closed list as a transient upstream outage so arbitrary `error.code`
+// values never become a public reason or retry policy.
+const TRANSIENT_TRANSPORT_CODES = new Set([
+    'ECONNABORTED',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EAI_AGAIN',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'EPIPE',
+    'ETIMEDOUT',
+    'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_SOCKET',
+]);
 
 function classifySafeUpstreamFailure({ code, status, retryable, reason, message }) {
     return Object.freeze({ code, status, retryable, reason, message });
@@ -208,14 +234,21 @@ function upstreamReasons(error) {
 export function classifyUpstreamError(error) {
     let status;
     const reasons = new Set();
+    const transportCodes = new Set();
     findErrorCause(error, (candidate) => {
         status ??= upstreamStatus(candidate);
         for (const reason of upstreamReasons(candidate)) reasons.add(reason);
+        try {
+            if (typeof candidate?.code === 'string') transportCodes.add(candidate.code);
+        } catch {
+            // A hostile error object has no caller-visible transport code.
+        }
         return false;
     });
-    if (status === undefined && reasons.size === 0) return null;
+    if (status === undefined && reasons.size === 0 && transportCodes.size === 0) return null;
 
     const hasReason = (known) => [...reasons].some((reason) => known.has(reason));
+    const hasTransportCode = [...transportCodes].some((code) => TRANSIENT_TRANSPORT_CODES.has(code));
     if (hasReason(RATE_LIMIT_REASONS) || status === 429) {
         return classifySafeUpstreamFailure({
             code: 'RATE_LIMITED', status: status ?? 429, retryable: true, reason: 'rate-limit',
@@ -258,7 +291,7 @@ export function classifyUpstreamError(error) {
             message: 'Google rejected a required precondition. Read the latest state before retrying.',
         });
     }
-    if (hasReason(UNAVAILABLE_REASONS) || (status !== undefined && status >= 500)) {
+    if (hasTransportCode || hasReason(UNAVAILABLE_REASONS) || (status !== undefined && status >= 500)) {
         return classifySafeUpstreamFailure({
             code: 'SERVICE_UNAVAILABLE', status: status ?? 503, retryable: true, reason: 'service-unavailable',
             message: 'Google API is temporarily unavailable. Retry this read after a short delay.',

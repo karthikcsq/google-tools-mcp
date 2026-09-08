@@ -11,6 +11,7 @@ import { shellQuote } from '../dist/shellSafe.js';
 import { checkLaunchTarget, inspectSetup, inspectToken } from '../dist/setupInspect.js';
 import { persistTokenCredentials, SCOPES } from '../dist/auth.js';
 import { backupClientEntry, backupEnvFile, configureTransport, mergeCredentialEnv, persistTransportSelection, registerClients, runSetup } from '../dist/setup.js';
+import { readSetupManifest, writeSetupManifest } from '../dist/service/setupManifest.js';
 
 jest.setTimeout(60_000);
 
@@ -216,6 +217,54 @@ describe('setup client reconciliation', () => {
         const client = adapter();
         await expect(reconcileClientEntry(client, desired)).resolves.toMatchObject({ ok: true, status: 'added' });
         expect(client.calls).toEqual([['add', desired]]);
+    });
+
+    it('keeps direct registration helper calls side-effect free until a profile directory is supplied', async () => {
+        const writeManifest = jest.fn();
+        const client = { ...adapter(), name: 'Codex', detect: async () => true };
+        const ui = { confirm: async () => true, isCancel: () => false,
+            log: { error: jest.fn(), message: jest.fn(), success: jest.fn() } };
+        await expect(registerClients(desired, { transport: 'stdio' }, { adapters: [client], ui, writeManifest }))
+            .resolves.toEqual({ detected: true });
+        expect(writeManifest).not.toHaveBeenCalled();
+    });
+
+    it('persists each completed selection before a later new client registration is declined', async () => {
+        const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-selected-clients-'));
+        try {
+            const codex = { ...adapter(), name: 'Codex', detect: async () => true };
+            const declinedClaude = { ...adapter({ command: 'old-node', args: [] }), name: 'Claude Code', detect: async () => true };
+            const ui = { confirm: async ({ message }) => !message.includes('Claude Code'), isCancel: () => false,
+                log: { error: jest.fn(), message: jest.fn(), success: jest.fn() } };
+            await expect(registerClients(desired, { transport: 'stdio' }, {
+                adapters: [codex, declinedClaude], configDir, profile: 'work', ui,
+            })).rejects.toThrow(/Claude Code MCP registration declined/);
+            expect(await readSetupManifest({ configDir })).toEqual(expect.objectContaining({
+                profile: 'work', transport: 'stdio', selectedClients: ['codex'], supervisor: null,
+            }));
+            expect(declinedClaude.calls).toEqual([]);
+        } finally {
+            await fs.rm(configDir, { recursive: true, force: true });
+        }
+    });
+
+    it('retains a previously selected client when it is declined after another registration succeeds', async () => {
+        const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-selected-clients-'));
+        try {
+            await writeSetupManifest({ configDir, profile: 'work', transport: 'stdio', selectedClients: ['ClaudeCode'] });
+            const codex = { ...adapter(), name: 'Codex', detect: async () => true };
+            const declinedClaude = { ...adapter({ command: 'old-node', args: [] }), name: 'Claude Code', detect: async () => true };
+            const ui = { confirm: async ({ message }) => !message.includes('Claude Code'), isCancel: () => false,
+                log: { error: jest.fn(), message: jest.fn(), success: jest.fn() } };
+            await expect(registerClients(desired, { transport: 'stdio' }, {
+                adapters: [codex, declinedClaude], configDir, profile: 'work', ui,
+            })).rejects.toThrow(/Claude Code MCP registration declined/);
+            expect(await readSetupManifest({ configDir })).toEqual(expect.objectContaining({
+                selectedClients: ['claude', 'codex'], supervisor: null,
+            }));
+        } finally {
+            await fs.rm(configDir, { recursive: true, force: true });
+        }
     });
 
     it('leaves an identical full entry alone', async () => {

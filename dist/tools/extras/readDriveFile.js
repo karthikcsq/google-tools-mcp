@@ -78,7 +78,7 @@ export function register(server) {
                 fileMeta = res.data;
             } catch (error) {
                 if (error.code === 404) throw new UserError(`File not found: ${args.fileId}`);
-                if (error.code === 403) throw new UserError('Permission denied. Check that the file is shared with this account.');
+                if (error.code === 403) throw new UserError('Permission denied. Check that the file is shared with this account.', error);
                 throw wrapOperationError('get file info', error, { status: error?.code });
             }
 

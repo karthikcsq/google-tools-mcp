@@ -53,6 +53,15 @@ describe('Phase 1 diagnostic contracts', () => {
         expect(classifyUpstreamError(wrapOperationError('read file', raw))).toMatchObject(expected);
     });
 
+    it.each(['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'])('classifies nested Node transport code %s without returning it', (code) => {
+        const raw = Object.assign(new Error(`unsafe transport details C:/private/${code}/token.json`), { code });
+        const classified = classifyUpstreamError(wrapOperationError('read file', raw));
+        expect(classified).toMatchObject({
+            code: 'SERVICE_UNAVAILABLE', status: 503, retryable: true, reason: 'service-unavailable',
+        });
+        expect(JSON.stringify(classified)).not.toContain(code);
+    });
+
     it('returns a safe structured API failure without exposing upstream text', async () => {
         const raw = apiError(403, 'userRateLimitExceeded', 'Bearer hidden-token from C:/private/token.json');
         const factory = await prepareMcpServerFactory({ registerTools: async (server) => {

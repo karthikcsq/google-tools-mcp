@@ -209,6 +209,7 @@ if (process.argv[2] === 'doctor') {
     const json = process.argv.slice(3).includes('--json');
     const { createClientAdapters } = await import('./clientAdapters.js');
     const { inspectSetup } = await import('./setupInspect.js');
+    const { readSetupManifest } = await import('./service/setupManifest.js');
     try {
         const launch = { command: process.execPath, args: [entrypointPath] };
         const doctorTransport = await resolveDoctorTransport({ env: process.env, getHttpStatus: getHttpServiceStatus });
@@ -217,7 +218,13 @@ if (process.argv[2] === 'doctor') {
             ? { transport: 'http', url: httpConfigForDoctor.url, noAuth: httpConfigForDoctor.noAuth }
             : { transport: 'stdio' };
         const desiredEntries = await createDoctorDesiredEntryResolver({ launch, transport, env: process.env });
-        const report = await inspectSetup({ adapters: createClientAdapters(), desiredEntries, httpExpected: doctorTransport === 'http' });
+        const manifest = await readSetupManifest({ configDir: getConfigDir() });
+        const report = await inspectSetup({
+            adapters: createClientAdapters(),
+            desiredEntries,
+            requiredClients: manifest?.selectedClients || [],
+            httpExpected: doctorTransport === 'http',
+        });
         if (json) process.stdout.write(formatDoctorReport(report, true));
         else {
             process.stdout.write(formatDoctorReport(report));

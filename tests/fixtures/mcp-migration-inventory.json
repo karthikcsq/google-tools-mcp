@@ -94,6 +94,9 @@
         "file": "dist/requestContext.js"
       },
       {
+        "file": "dist/service/setupManifest.js"
+      },
+      {
         "file": "dist/setup.js"
       },
       {
@@ -766,6 +769,9 @@
       },
       {
         "file": "tests/phase1Diagnostics.test.js"
+      },
+      {
+        "file": "tests/productionToolDiagnostics.test.js"
       },
       {
         "file": "tests/publicErrorBoundary.test.js"

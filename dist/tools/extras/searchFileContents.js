@@ -77,7 +77,7 @@ export function register(server) {
             } catch (error) {
                 log.error(`Error searching files: ${error.message}`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Check Drive access.');
+                    throw new UserError('Permission denied. Check Drive access.', error);
                 throw wrapOperationError('search files', error, { status: error?.code });
             }
         },

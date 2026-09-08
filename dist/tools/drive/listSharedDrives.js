@@ -45,7 +45,7 @@ export function register(server) {
                 if (isPublicError(error)) throw error;
                 log.error(`Error listing shared drives: ${error.message || error}`);
                 if (error.code === 403)
-                    throw publicError('Permission denied. Make sure the Drive API scope includes shared drives.');
+                    throw publicError('Permission denied. Make sure the Drive API scope includes shared drives.', error);
 throw wrapOperationError('list shared drives', error, { status: error?.code });
             }
         },

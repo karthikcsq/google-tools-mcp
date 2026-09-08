@@ -74,7 +74,8 @@ function failureForTool(error, toolName, args) {
 
 function toolFailure(error, toolName, logger, args) {
     const publicMessage = getPublicErrorMessage(error);
-    if (publicMessage !== undefined) {
+    const classifiedFailure = classifyUpstreamError(error);
+    if (publicMessage !== undefined && !classifiedFailure) {
         return { content: [{ type: 'text', text: String(redactDiagnostic(publicMessage)) }], isError: true };
     }
     logger?.error?.(`MCP tool ${toolName} failed.`, redactDiagnostic(error));
@@ -99,7 +100,9 @@ function classifyToolError(error, toolName, args) {
     // Public errors can deliberately include caller-provided identifiers or
     // text. Keep the JSONL diagnostic useful without turning it into a copy of
     // the caller-visible response, which is persisted by default.
-    if (isPublicError(error)) return { outcome: 'user_error', errCode: 'USER_ERROR', errMsg: 'caller-visible error' };
+    if (isPublicError(error) && !classifyUpstreamError(error)) {
+        return { outcome: 'user_error', errCode: 'USER_ERROR', errMsg: 'caller-visible error' };
+    }
     const failure = failureForTool(error, toolName, args);
     return {
         outcome: 'error', errCode: failure.code, errMsg: failure.reason,
