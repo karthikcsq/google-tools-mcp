@@ -20,7 +20,8 @@ into one release.
 
 ## [3.4.7] - 2026-09-07
 
-By [@ElliotDrel](https://github.com/ElliotDrel): agents can test this worktree's
+PR [#173](https://github.com/karthikcsq/google-tools-mcp/pull/173) by
+[@ElliotDrel](https://github.com/ElliotDrel): agents can test this worktree's
 tools through persistent MCP sessions and report usability failures.
 
 ### Added
