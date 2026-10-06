@@ -41,7 +41,7 @@ export function register(server) {
                 if (error.code === 404)
                     throw publicError(`Folder not found (ID: ${args.folderId}).`);
                 if (error.code === 403)
-                    throw publicError('Permission denied. Make sure you have access to this folder.');
+                    throw publicError('Permission denied. Make sure you have access to this folder.', error);
 throw wrapOperationError('get folder info', error, { status: error?.code });
             }
         },

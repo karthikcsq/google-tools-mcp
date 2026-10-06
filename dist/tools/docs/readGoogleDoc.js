@@ -512,7 +512,7 @@ export function register(server) {
                             log.error(`Drive export fallback also failed: ${exportError.message}`);
                         }
                     }
-                    throw publicError(`Permission denied for doc (ID: ${args.documentId}). The Google Docs API may be restricted by your Workspace admin.`);
+                    throw publicError(`Permission denied for doc (ID: ${args.documentId}). The Google Docs API may be restricted by your Workspace admin.`, error);
                 }
                 // The Docs API's own description of the failure, plus its
                 // structured numeric code. Both are validated upstream fields;

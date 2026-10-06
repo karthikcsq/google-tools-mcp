@@ -99,6 +99,9 @@ recorded instance is already healthy. `serve` runs the same service in the
 foreground for a login item or service manager. `restart` waits for the old PID
 to stop before starting and authenticating the replacement. `stop` terminates
 only the PID in the state file, verifies it exited, and removes stale state.
+`status` follows the effective transport: with stdio it reports that a shared
+service is not applicable and leaves OAuth inspection to `doctor`; with HTTP it
+performs the authenticated shared-service checks described below.
 
 The config directory contains two private operations files:
 

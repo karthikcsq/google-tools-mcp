@@ -91,7 +91,7 @@ export function register(server) {
                 if (isPublicError(error)) throw error;
                 log.error(`Error searching Google Docs: ${error.message || error}`);
                 if (error.code === 403)
-                    throw publicError('Permission denied. Make sure you have granted Google Drive access to the application.');
+                    throw publicError('Permission denied. Make sure you have granted Google Drive access to the application.', error);
 throw wrapOperationError('search Google documents', error, { status: error?.code });
             }
         },

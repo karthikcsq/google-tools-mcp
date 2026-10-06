@@ -43,7 +43,7 @@ export function register(server) {
                 if (error.code === 404)
                     throw publicError(`File not found (ID: ${args.fileId}).`);
                 if (error.code === 403)
-                    throw publicError('Permission denied. Make sure you have access to this file.');
+                    throw publicError('Permission denied. Make sure you have access to this file.', error);
 throw wrapOperationError('list Drive revisions', error, { status: error?.code });
             }
         },

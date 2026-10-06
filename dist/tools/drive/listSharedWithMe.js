@@ -90,7 +90,7 @@ export function register(server) {
                 if (isPublicError(error)) throw error;
                 log.error(`Error listing shared items: ${error.message || error}`);
                 if (error.code === 403)
-                    throw publicError('Permission denied. Make sure you have the correct Drive API scopes.');
+                    throw publicError('Permission denied. Make sure you have the correct Drive API scopes.', error);
 throw wrapOperationError('list shared items', error, { status: error?.code });
             }
         },

@@ -27,11 +27,12 @@ let fakeDrive;
 // already created — the exact ordering that used to orphan the file when
 // getDocsClient() was hoisted to the top of createDocument's execute().
 let docsClientShouldFail = false;
+let docsClientFailure = new Error('simulated Docs client failure');
 
 const unusedClient = async () => { throw new Error('client not used in this suite'); };
 jest.unstable_mockModule('../dist/clients.js', () => ({
     getDocsClient: async () => {
-        if (docsClientShouldFail) throw new Error('simulated Docs client failure');
+        if (docsClientShouldFail) throw docsClientFailure;
         return fakeDocs;
     },
     getDriveClient: async () => fakeDrive,
@@ -197,6 +198,7 @@ async function stdioClient(factory, epoch) {
 afterEach(() => {
     resetHandleRuntimeState();
     docsClientShouldFail = false;
+    docsClientFailure = new Error('simulated Docs client failure');
 });
 
 afterAll(async () => {
@@ -298,6 +300,22 @@ describe('createDocument seeds post-create read state (#87 gap 2)', () => {
         expect(body.readHandleNote).toBeUndefined();
         expect(body.warnings).toBeDefined();
         expect(body.warnings.some((w) => w.includes(docId))).toBe(true);
+    });
+
+    it('does not expose a seed failure message in the caller-visible warning', async () => {
+        const docId = freshDocId('createdoc-seed-warning-redaction');
+        setUpGoogleMocks(docId);
+        docsClientShouldFail = true;
+        docsClientFailure = new Error('seed error from C:/private/google-tools-mcp/token.json bearer hidden-token');
+        const server = { addTool(def) { this._def = def; }, getTool() { return this._def; } };
+        registerCreateDocument(server);
+
+        const result = await server.getTool().execute({ title: 'New Doc' }, { log: { info() {}, warn() {}, error() {} } });
+        const body = JSON.parse(result);
+
+        expect(body.warnings.join('\n')).toContain(docId);
+        expect(body.warnings.join('\n')).not.toContain('C:/private');
+        expect(body.warnings.join('\n')).not.toContain('hidden-token');
     });
 
     it('Docs client failure with initialContent also warns, naming the file, and still returns success', async () => {

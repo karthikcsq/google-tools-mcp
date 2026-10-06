@@ -9,30 +9,94 @@
 //   google-tools-mcp auth     Run the interactive OAuth flow
 //   google-tools-mcp setup    Guided setup: enable APIs, create credentials, authenticate
 //   google-tools-mcp doctor   Inspect setup without changing files or tokens
-import './config.js';
-import { createRequire } from 'module';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { logger } from './logger.js';
-import { getConfigDir } from './config.js';
-import { checkForUpdate } from './updateCheck.js';
-import { assertSafeHttpBinding } from './httpAuth.js';
-import { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntimeLifecycle } from './mcpServer.js';
-import {
-    assertHttpServiceConfigurationMatch, createPublishedState, getHttpServiceStatus, resolveHttpServiceConfig, restartHttpService,
-    startHttpService, stopHttpService,
-} from './httpLifecycle.js';
-import { ensureHttpToken, publishHttpState, removeHttpState, removeHttpStateSync } from './httpState.js';
-import { createDoctorDesiredEntryResolver, formatDoctorReport, resolveDoctorTransport } from './doctor.js';
 
-// Read our own published version straight from package.json rather than
-// hardcoding it. `files: ["dist"]` in package.json only restricts what npm
-// packs; package.json itself always ships at the package root (npm
-// includes it unconditionally), so this resolves the same way both in this
-// checkout and once installed globally.
 const require = createRequire(import.meta.url);
 const { version: packageVersion } = require('../package.json');
 const entrypointPath = fileURLToPath(import.meta.url);
 const subcommand = process.argv[2];
+
+const HELP_TEXT = [
+    `google-tools-mcp ${packageVersion}`,
+    '',
+    'Usage: google-tools-mcp [command]',
+    '',
+    '  (no command)     Start the stdio MCP server',
+    '  auth             Run Google OAuth authorization',
+    '  setup [--reauth] Configure credentials and MCP clients',
+    '  doctor [--json]  Inspect credentials, clients, and shared HTTP health',
+    '  serve            Run the managed shared HTTP service in the foreground',
+    '  start [--json]   Start or attach to the shared HTTP service',
+    '  status [--json]  Report the effective transport and shared-service status',
+    '  restart [--json] Stop, start, and authenticate a replacement service',
+    '  stop [--json]    Stop the managed shared HTTP service',
+    '',
+].join('\n');
+const KNOWN_COMMANDS = new Set(['auth', 'setup', 'update', 'doctor', 'serve', 'start', 'status', 'restart', 'stop']);
+const EARLY_OPTION_SETS = Object.freeze({
+    auth: new Set(),
+    setup: new Set(['--reauth']),
+    update: new Set(),
+    doctor: new Set(['--json']),
+    serve: new Set(),
+    start: new Set(['--json']),
+    status: new Set(['--json']),
+    restart: new Set(['--json']),
+    stop: new Set(['--json']),
+});
+
+function exitUnknown(argument) {
+    process.stderr.write(`Unknown command or option: ${argument}\n\n${HELP_TEXT}`);
+    process.exit(1);
+}
+
+// Keep introspection completely ahead of configuration, client, server, and
+// category imports. Package managers, setup scripts, and diagnostics routinely
+// call these with stdin held open, so falling through to stdio would hang.
+if (subcommand === '--version' || subcommand === '-v') {
+    process.stdout.write(`${packageVersion}\n`);
+    process.exit(0);
+}
+if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
+    process.stdout.write(HELP_TEXT);
+    process.exit(0);
+}
+if (subcommand && !KNOWN_COMMANDS.has(subcommand)) {
+    exitUnknown(subcommand);
+}
+const allowedOptions = EARLY_OPTION_SETS[subcommand];
+if (allowedOptions) {
+    const unknownOption = process.argv.slice(3).find((argument) => !allowedOptions.has(argument));
+    if (unknownOption) exitUnknown(unknownOption);
+}
+
+// All non-introspection commands retain the established runtime imports. They
+// deliberately happen only after the early exits above, so --version, help,
+// and an unknown top-level argument never load credentials or the tool catalog.
+const [
+    { logger },
+    { getConfigDir },
+    { checkForUpdate },
+    { assertSafeHttpBinding },
+    { prepareMcpServerFactory, startV2HttpServer, startV2Stdio, installRuntimeLifecycle },
+    httpLifecycle,
+    { ensureHttpToken, publishHttpState, removeHttpState, removeHttpStateSync },
+    { createDoctorDesiredEntryResolver, formatDoctorReport, resolveDoctorTransport },
+] = await Promise.all([
+    import('./logger.js'),
+    import('./config.js'),
+    import('./updateCheck.js'),
+    import('./httpAuth.js'),
+    import('./mcpServer.js'),
+    import('./httpLifecycle.js'),
+    import('./httpState.js'),
+    import('./doctor.js'),
+]);
+const {
+    assertHttpServiceConfigurationMatch, createPublishedState, getHttpServiceStatus, resolveHttpServiceConfig, restartHttpService,
+    startHttpService, stopHttpService,
+} = httpLifecycle;
 
 // The only `stop` outcomes where the requested action actually completed (or
 // there was nothing to stop). Everything else -- including any future status
@@ -41,9 +105,35 @@ const STOP_SUCCESS_STATUSES = new Set(['stopped', 'stale-state-removed', 'not-ru
 
 function statusOutput(report, json) {
     if (json) return `${JSON.stringify(report, null, 2)}\n`;
-    if (!report.healthy) return `Shared HTTP service is not healthy (${report.diagnostic}).\n`;
+    if (report.transport === 'stdio') {
+        return 'Configured transport: stdio. Shared HTTP service: not applicable. Run doctor to inspect credentials and client registrations.\n';
+    }
+    if (!report.healthy) return `Shared HTTP service is not healthy (${report.service.status}).\n`;
     return `Shared HTTP service is healthy at ${report.state.url} (pid ${report.state.pid}, ` +
         `${report.identity.name} ${report.identity.version}, profile ${report.state.profile}, token source ${report.tokenSource}).\n`;
+}
+
+function effectiveTransport() {
+    const configured = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').trim().toLowerCase();
+    return configured === 'http' || configured === 'httpstream' ? 'http' : 'stdio';
+}
+
+function stdioStatusReport() {
+    return {
+        healthy: true,
+        transport: 'stdio',
+        service: { status: 'not-applicable', reason: 'stdio-transport' },
+        oauth: { status: 'not-inspected', reason: 'run-doctor' },
+    };
+}
+
+function httpStatusReport(report) {
+    return {
+        ...report,
+        transport: 'http',
+        service: { status: report.healthy ? 'healthy' : report.diagnostic || 'not-running' },
+        oauth: { status: 'not-inspected', reason: 'run-doctor' },
+    };
 }
 
 
@@ -63,7 +153,9 @@ if (['start', 'status', 'restart', 'stop'].includes(subcommand)) {
     const launch = { command: process.execPath, args: [entrypointPath] };
     try {
         if (subcommand === 'status') {
-            const report = await getHttpServiceStatus();
+            const report = effectiveTransport() === 'stdio'
+                ? stdioStatusReport()
+                : httpStatusReport(await getHttpServiceStatus());
             process.stdout.write(statusOutput(report, json));
             await exitOperationsCli(report.healthy ? 0 : 1);
         }
@@ -100,24 +192,6 @@ if (['start', 'status', 'restart', 'stop'].includes(subcommand)) {
     }
 }
 
-if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
-    process.stdout.write([
-        'Usage: google-tools-mcp [command]',
-        '',
-        '  (no command)     Start the stdio MCP server',
-        '  auth             Run Google OAuth authorization',
-        '  setup [--reauth] Configure credentials and MCP clients',
-        '  doctor [--json]  Inspect credentials, clients, and shared HTTP health',
-        '  serve            Run the managed shared HTTP service in the foreground',
-        '  start [--json]   Start or attach to the shared HTTP service',
-        '  status [--json]  Authenticated health and MCP identity check',
-        '  restart [--json] Stop, start, and authenticate a replacement service',
-        '  stop [--json]    Stop the managed shared HTTP service',
-        '',
-    ].join('\n'));
-    process.exit(0);
-}
-
 // --- Setup subcommand ---
 if (process.argv[2] === 'setup') {
     const { runSetup } = await import('./setup.js');
@@ -135,6 +209,7 @@ if (process.argv[2] === 'doctor') {
     const json = process.argv.slice(3).includes('--json');
     const { createClientAdapters } = await import('./clientAdapters.js');
     const { inspectSetup } = await import('./setupInspect.js');
+    const { readSetupManifest } = await import('./service/setupManifest.js');
     try {
         const launch = { command: process.execPath, args: [entrypointPath] };
         const doctorTransport = await resolveDoctorTransport({ env: process.env, getHttpStatus: getHttpServiceStatus });
@@ -143,7 +218,13 @@ if (process.argv[2] === 'doctor') {
             ? { transport: 'http', url: httpConfigForDoctor.url, noAuth: httpConfigForDoctor.noAuth }
             : { transport: 'stdio' };
         const desiredEntries = await createDoctorDesiredEntryResolver({ launch, transport, env: process.env });
-        const report = await inspectSetup({ adapters: createClientAdapters(), desiredEntries, httpExpected: doctorTransport === 'http' });
+        const manifest = await readSetupManifest({ configDir: getConfigDir() });
+        const report = await inspectSetup({
+            adapters: createClientAdapters(),
+            desiredEntries,
+            requiredClients: manifest?.selectedClients || [],
+            httpExpected: doctorTransport === 'http',
+        });
         if (json) process.stdout.write(formatDoctorReport(report, true));
         else {
             process.stdout.write(formatDoctorReport(report));
@@ -168,6 +249,14 @@ if (process.argv[2] === 'auth') {
     }
 }
 
+// setupCommand.js and updateCommand.js are lightweight command seams. They
+// are integrated by the setup/update implementation pass; keep update from
+// ever falling through to a long-lived stdio server until that wiring lands.
+if (process.argv[2] === 'update') {
+    process.stderr.write('The update command is not available in this build.\n');
+    process.exit(1);
+}
+
 // --- Transport selection ---
 // Default is stdio (one server spawned per MCP client, the classic model).
 // Set GOOGLE_MCP_TRANSPORT=http to run a single long-lived HTTP server that
@@ -175,8 +264,8 @@ if (process.argv[2] === 'auth') {
 // client. Accepts "http" or "httpStream"; both now map to the same stateless
 // 2026-07-28 HTTP runtime ("httpStream" is kept only so an existing config
 // keeps starting, since there is no separate streamed transport any more).
-const transportEnv = (process.env.GOOGLE_MCP_TRANSPORT || 'stdio').toLowerCase();
-const useHttp = subcommand === 'serve' || transportEnv === 'http' || transportEnv === 'httpstream';
+const transportEnv = effectiveTransport();
+const useHttp = subcommand === 'serve' || transportEnv === 'http';
 // resolveHttpServiceConfig validates GOOGLE_MCP_PORT, GOOGLE_MCP_ENDPOINT,
 // GOOGLE_MCP_HTTP_HOST, the profile, and the loopback-only deployment boundary.
 let httpConfig = null;

@@ -1,5 +1,13 @@
 # Execution plans
 
+## Current approved execution plan
+
+The [2026-09-07 repository audit and proposed release](2026-09-07-repository-audit.md)
+is the approved successor to the historical issue-by-issue queue below. The maintainer
+authorized execution on 2026-09-07 for the 27 open issues, verified historical residue,
+six release phases, and persistent PR monitoring. The historical plans remain intact as
+their dated implementation records; use the current plan for ordering and acceptance.
+
 **2026-08-08 update:** the [MCP 2026-07-28 migration plan](mcp-2026-07-28-migration.md) (fastmcp → official SDK v2, stateless protocol) is the first technical implementation step. It absorbs #87's implementation into opaque, high-entropy `readHandle` state bound to principal, profile, file, tab, revision, and fingerprint; `expectedRevisionId` remains only a validated companion assertion. It absorbs obsolete transport plumbing from #75. It must land **before** #71, which must then re-baseline its import inventory against the final SDK v2 runtime. Read the migration plan before executing #71, #75, #87, #88, #105–#108, or #91.
 
 One plan per open issue, written against the code as of 2026-08-06. Each plan states the verified root cause, the design decisions with rationale, concrete implementation steps anchored to `file:line`, the tests that prove it, and acceptance criteria. Line numbers drift as the tree changes; the anchors were verified on the commit each plan names.

@@ -2,6 +2,7 @@
 import * as os from 'os';
 
 const publicMessages = new WeakMap();
+const publicCauses = new WeakMap();
 const operationErrorBrand = new WeakSet();
 const operationCauses = new WeakMap();
 const registeredSecrets = new Map();
@@ -34,17 +35,18 @@ function optionalStatus(value) {
 
 /** An error whose immutable message is explicitly safe for an MCP caller. */
 export class PublicToolError extends Error {
-    constructor(safeMessage) {
+    constructor(safeMessage, cause) {
         const snapshot = String(safeMessage);
         super(snapshot);
         this.name = 'PublicToolError';
         publicMessages.set(this, snapshot);
+        if (cause !== undefined) publicCauses.set(this, cause);
         Object.freeze(this);
     }
 }
 
-export function publicError(safeMessage) {
-    return new PublicToolError(safeMessage);
+export function publicError(safeMessage, cause) {
+    return new PublicToolError(safeMessage, cause);
 }
 
 export function isPublicError(error) {
@@ -54,6 +56,11 @@ export function isPublicError(error) {
 /** Return the immutable, construction-time message only for a branded error. */
 export function getPublicErrorMessage(error) {
     return isPublicError(error) ? publicMessages.get(error) : undefined;
+}
+
+/** Return a private upstream cause stored on a branded public error. */
+export function getPublicErrorCause(error) {
+    return isPublicError(error) ? publicCauses.get(error) : undefined;
 }
 
 // Temporary migration compatibility. New boundary code should use the public
@@ -89,6 +96,36 @@ export function isOperationError(error) {
 
 export function getOperationCause(error) {
     return isOperationError(error) ? operationCauses.get(error) : undefined;
+}
+
+/**
+ * Find a cause without asking callers to depend on OperationError's private
+ * WeakMap storage.  Ordinary Error#cause and our operation wrapper can be
+ * mixed freely, so every boundary that needs to classify an upstream failure
+ * sees the original Google response rather than only an outer operation name.
+ */
+export function findErrorCause(error, predicate) {
+    const seen = new WeakSet();
+    let current = error;
+    for (let depth = 0; depth < 8 && typeof current === 'object' && current !== null; depth += 1) {
+        if (seen.has(current)) return undefined;
+        seen.add(current);
+        try {
+            if (predicate(current)) return current;
+        } catch {
+            return undefined;
+        }
+        let next;
+        try {
+            next = isOperationError(current)
+                ? getOperationCause(current)
+                : (isPublicError(current) ? getPublicErrorCause(current) : current.cause);
+        } catch {
+            return undefined;
+        }
+        current = next;
+    }
+    return undefined;
 }
 
 export function wrapOperationError(operation, cause, metadata = {}) {
@@ -127,6 +164,149 @@ export function getApiErrorDetail(error) {
     }
     if (typeof description !== 'string' || description.length === 0) return null;
     return { description, code: Number.isInteger(rawCode) ? rawCode : undefined };
+}
+
+const RATE_LIMIT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded', 'RESOURCE_EXHAUSTED']);
+const QUOTA_EXHAUSTED_REASONS = new Set(['quotaExceeded', 'dailyLimitExceeded', 'DAILY_LIMIT_EXCEEDED']);
+const AUTH_REASONS = new Set(['authError', 'invalidCredentials', 'UNAUTHENTICATED']);
+const PERMISSION_REASONS = new Set(['forbidden', 'domainPolicy', 'PERMISSION_DENIED']);
+const NOT_FOUND_REASONS = new Set(['notFound', 'NOT_FOUND']);
+const CONFLICT_REASONS = new Set(['conflict', 'ABORTED', 'ALREADY_EXISTS']);
+const PRECONDITION_REASONS = new Set(['failedPrecondition', 'conditionNotMet', 'FAILED_PRECONDITION']);
+const UNAVAILABLE_REASONS = new Set(['backendError', 'internalError', 'SERVICE_UNAVAILABLE', 'UNAVAILABLE']);
+// Node and undici transport errors contain no caller-safe detail.  Treat only
+// this closed list as a transient upstream outage so arbitrary `error.code`
+// values never become a public reason or retry policy.
+const TRANSIENT_TRANSPORT_CODES = new Set([
+    'ECONNABORTED',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EAI_AGAIN',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'EPIPE',
+    'ETIMEDOUT',
+    'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_SOCKET',
+]);
+
+function classifySafeUpstreamFailure({ code, status, retryable, reason, message }) {
+    return Object.freeze({ code, status, retryable, reason, message });
+}
+
+function upstreamStatus(error) {
+    try {
+        for (const candidate of [error?.response?.status, error?.response?.data?.error?.code, error?.status, error?.code]) {
+            const status = optionalStatus(candidate);
+            if (status !== undefined) return status;
+        }
+    } catch {
+        // A hostile error object has no caller-visible API classification.
+    }
+    return undefined;
+}
+
+function upstreamReasons(error) {
+    const reasons = new Set();
+    try {
+        const payload = error?.response?.data?.error;
+        if (typeof payload?.status === 'string') reasons.add(payload.status);
+        if (typeof payload?.reason === 'string') reasons.add(payload.reason);
+        if (Array.isArray(payload?.errors)) {
+            for (const detail of payload.errors) {
+                if (typeof detail?.reason === 'string') reasons.add(detail.reason);
+            }
+        }
+    } catch {
+        // The status alone remains safe to classify when shape access fails.
+    }
+    return reasons;
+}
+
+/**
+ * Convert a Google-shaped failure into a closed, safe contract.  This never
+ * returns an API message, request URL, stack, or arbitrary Error#message.
+ * Callers can therefore give retry guidance without turning diagnostics into
+ * a dump of upstream data.
+ */
+export function classifyUpstreamError(error) {
+    let status;
+    const reasons = new Set();
+    const transportCodes = new Set();
+    findErrorCause(error, (candidate) => {
+        status ??= upstreamStatus(candidate);
+        for (const reason of upstreamReasons(candidate)) reasons.add(reason);
+        try {
+            if (typeof candidate?.code === 'string') transportCodes.add(candidate.code);
+        } catch {
+            // A hostile error object has no caller-visible transport code.
+        }
+        return false;
+    });
+    if (status === undefined && reasons.size === 0 && transportCodes.size === 0) return null;
+
+    const hasReason = (known) => [...reasons].some((reason) => known.has(reason));
+    const hasTransportCode = [...transportCodes].some((code) => TRANSIENT_TRANSPORT_CODES.has(code));
+    if (hasReason(RATE_LIMIT_REASONS) || status === 429) {
+        return classifySafeUpstreamFailure({
+            code: 'RATE_LIMITED', status: status ?? 429, retryable: true, reason: 'rate-limit',
+            message: 'Google API rate limit reached. Retry with exponential backoff.',
+        });
+    }
+    if (hasReason(QUOTA_EXHAUSTED_REASONS)) {
+        return classifySafeUpstreamFailure({
+            code: 'QUOTA_EXHAUSTED', status: status ?? 403, retryable: false, reason: 'quota-exhausted',
+            message: 'Google API quota is exhausted. Wait for the quota reset or adjust the project quota before retrying.',
+        });
+    }
+    if (hasReason(AUTH_REASONS) || status === 401) {
+        return classifySafeUpstreamFailure({
+            code: 'AUTHENTICATION_REQUIRED', status: status ?? 401, retryable: false, reason: 'authentication-required',
+            message: 'Google API authentication is required. Run the auth command, then retry.',
+        });
+    }
+    if (hasReason(PERMISSION_REASONS) || status === 403) {
+        return classifySafeUpstreamFailure({
+            code: 'PERMISSION_DENIED', status: status ?? 403, retryable: false, reason: 'permission-denied',
+            message: 'Google API permission was denied. Verify account access and API policy before retrying.',
+        });
+    }
+    if (hasReason(NOT_FOUND_REASONS) || status === 404) {
+        return classifySafeUpstreamFailure({
+            code: 'NOT_FOUND', status: status ?? 404, retryable: false, reason: 'not-found',
+            message: 'The requested Google resource was not found. Refresh its identifier before retrying.',
+        });
+    }
+    if (hasReason(CONFLICT_REASONS) || status === 409) {
+        return classifySafeUpstreamFailure({
+            code: 'CONFLICT', status: status ?? 409, retryable: false, reason: 'conflict',
+            message: 'Google rejected the request because the resource changed. Read the latest state before retrying.',
+        });
+    }
+    if (hasReason(PRECONDITION_REASONS) || status === 412) {
+        return classifySafeUpstreamFailure({
+            code: 'PRECONDITION_FAILED', status: status ?? 412, retryable: false, reason: 'precondition-failed',
+            message: 'Google rejected a required precondition. Read the latest state before retrying.',
+        });
+    }
+    if (hasTransportCode || hasReason(UNAVAILABLE_REASONS) || (status !== undefined && status >= 500)) {
+        return classifySafeUpstreamFailure({
+            code: 'SERVICE_UNAVAILABLE', status: status ?? 503, retryable: true, reason: 'service-unavailable',
+            message: 'Google API is temporarily unavailable. Retry this read after a short delay.',
+        });
+    }
+    if (status === 400) {
+        return classifySafeUpstreamFailure({
+            code: 'INVALID_REQUEST', status, retryable: false, reason: 'invalid-request',
+            message: 'Google rejected the request. Check the supplied parameters before retrying.',
+        });
+    }
+    return classifySafeUpstreamFailure({
+        code: 'UPSTREAM_FAILURE', status: status ?? 502, retryable: false, reason: 'upstream-failure',
+        message: 'Google API could not complete the request. Check diagnostics before retrying.',
+    });
 }
 
 /** Register a runtime credential that must be removed from all diagnostics. */

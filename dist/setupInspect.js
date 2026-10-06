@@ -172,12 +172,30 @@ export async function checkGlobalInstall({ run, access = fs.access } = {}) {
     }
 }
 
-export async function inspectSetup({ adapters = [], desiredEntry = null, desiredEntries = null, inspectHttp = getHttpServiceStatus, httpExpected = false, credentialsCheck = checkCredentials, tokenCheck = inspectToken, configWarnings = getConfigWarnings() } = {}) {
+function normalizedClientName(name) {
+    const compact = typeof name === 'string' ? name.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+    // The setup UI calls this client "Claude Code", while a persisted selection
+    // may reasonably use either its executable name or the compact display name.
+    return compact === 'claude' ? 'claudecode' : compact;
+}
+
+export async function inspectSetup({ adapters = [], desiredEntry = null, desiredEntries = null, requiredClients = [], inspectHttp = getHttpServiceStatus, httpExpected = false, credentialsCheck = checkCredentials, tokenCheck = inspectToken, configWarnings = getConfigWarnings() } = {}) {
     const credentials = await credentialsCheck();
     const token = await tokenCheck();
     const clients = [];
+    const requiredClientNames = new Set(requiredClients.map(normalizedClientName).filter(Boolean));
     for (const adapter of adapters) {
-        if (!await adapter.detect()) continue;
+        const required = requiredClientNames.has(normalizedClientName(adapter.name));
+        if (!await adapter.detect()) {
+            // A client selected during setup must remain visible to doctor even
+            // when its executable or configuration location has disappeared.
+            // Otherwise doctor can report healthy while a selected client
+            // cannot possibly use its registration.
+            if (required) {
+                clients.push({ client: adapter.name, status: 'problem', problem: 'selected client is not available for inspection' });
+            }
+            continue;
+        }
         const current = await adapter.get();
         const expectsRecommended = desiredEntry !== null || desiredEntries !== null;
         const desiredResult = typeof desiredEntries === 'function' ? desiredEntries(adapter) : (desiredEntries?.[adapter.name] || desiredEntry);
@@ -191,8 +209,19 @@ export async function inspectSetup({ adapters = [], desiredEntry = null, desired
             const problem = desiredProblem || target.problem || difference.problem;
             clients.push({ client: adapter.name, status: problem ? 'problem' : 'configured', problem, note: difference.note, entry: current.entry,
                 matchesRecommended, recommended });
+        } else if (current.status === 'missing') {
+            // An installed client can deliberately have no registration for this
+            // server. That is useful inventory information, not a broken server
+            // setup, so it must never change doctor’s exit status.
+            clients.push({
+                client: adapter.name,
+                status: required ? 'problem' : 'unconfigured',
+                ...(required && { problem: 'missing client entry' }),
+                ...(!required && { note: 'client is installed but has no google-tools-mcp registration' }),
+                recommended,
+            });
         } else {
-            const problem = desiredProblem || (recommended ? (current.status === 'missing' ? 'missing client entry' : 'unrecognized client entry') : undefined);
+            const problem = desiredProblem || (recommended ? 'unrecognized client entry' : undefined);
             clients.push({ client: adapter.name, status: problem ? 'problem' : current.status, problem, raw: current.raw, recommended });
         }
     }

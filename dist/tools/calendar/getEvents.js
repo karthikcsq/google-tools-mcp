@@ -85,7 +85,7 @@ export function register(server) {
                 if (error.code === 404)
                     throw publicError('Calendar or event not found. Check the calendar_id or event_id.');
                 if (error.code === 403)
-                    throw publicError('Permission denied. The calendar may not be shared with you.');
+                    throw publicError('Permission denied. The calendar may not be shared with you.', error);
 throw wrapOperationError('get calendar events', error, { status: error?.code });
             }
         },

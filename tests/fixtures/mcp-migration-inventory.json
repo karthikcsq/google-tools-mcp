@@ -94,6 +94,9 @@
         "file": "dist/requestContext.js"
       },
       {
+        "file": "dist/service/setupManifest.js"
+      },
+      {
         "file": "dist/setup.js"
       },
       {
@@ -573,6 +576,9 @@
         "file": "tests/batchModifyTextHandleIntegration.test.js"
       },
       {
+        "file": "tests/cliBootstrap.test.js"
+      },
+      {
         "file": "tests/commentRevisionRefresh.test.js"
       },
       {
@@ -760,6 +766,12 @@
       },
       {
         "file": "tests/packageScripts.test.js"
+      },
+      {
+        "file": "tests/phase1Diagnostics.test.js"
+      },
+      {
+        "file": "tests/productionToolDiagnostics.test.js"
       },
       {
         "file": "tests/publicErrorBoundary.test.js"
@@ -1332,22 +1344,22 @@
       },
       {
         "file": "dist/tools/index.js",
-        "line": 260,
+        "line": 345,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 337,
+        "line": 422,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 358,
+        "line": 443,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/index.js",
-        "line": 506,
+        "line": 598,
         "match": ".addTool({"
       },
       {

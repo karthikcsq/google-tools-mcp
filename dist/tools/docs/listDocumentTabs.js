@@ -53,7 +53,7 @@ export function register(server) {
                 if (error.code === 404)
                     throw publicError(`Document not found (ID: ${args.documentId}).`);
                 if (error.code === 403)
-                    throw publicError(`Permission denied for document (ID: ${args.documentId}).`);
+                    throw publicError(`Permission denied for document (ID: ${args.documentId}).`, error);
 throw wrapOperationError('list document tabs', error, { status: error?.code });
             }
         },

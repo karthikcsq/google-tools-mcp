@@ -18,6 +18,26 @@ came from. Planning notes under `docs/plans/` and `.planning/` are not logged.
 The 2.0.0 entry predates this convention and collapses thirteen pull requests
 into one release.
 
+## [3.4.7] - 2026-09-07
+
+PR [#171](https://github.com/karthikcsq/google-tools-mcp/pull/171) by
+[@ElliotDrel](https://github.com/ElliotDrel), with Codex implementation and
+independent review.
+
+### Fixed
+
+- Version, help, and invalid CLI arguments exit before configuration and runtime
+  imports. Status reports the effective transport, and doctor distinguishes
+  installed but unconfigured clients from required client selections. Setup
+  persists successful selections so doctor can detect a selected client that
+  later disappears without treating optional clients as failures.
+- API failures can expose bounded code, status, reason, and retryability without
+  leaking upstream messages. Read-only transient retries use bounded backoff;
+  uncertain mutations are not automatically replayed. Docs and Sheets helper
+  wrappers and direct read handlers preserve quota causes. Closed transport
+  errors are classified even without an HTTP response, and document-creation
+  warnings omit caught text.
+
 ## [3.4.6] - 2026-09-05
 
 PR [#148](https://github.com/karthikcsq/google-tools-mcp/pull/148) by

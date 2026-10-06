@@ -12,7 +12,7 @@ import { getTokenPath, SCOPES } from '../auth.js';
 import { getConfigDir, getLoadedConfigFiles, getConfigWarnings } from '../config.js';
 import { resetClients, withAuthRetry, getAuthClientIfReady } from '../clients.js';
 import { getLogFilePath, getStructuredLogFilePath, logger, readRecentToolCalls } from '../logger.js';
-import { getPublicErrorMessage, publicError } from '../errors.js';
+import { classifyUpstreamError, findErrorCause, getPublicErrorCause, getPublicErrorMessage, publicError } from '../errors.js';
 import { drive as driveApi } from '@googleapis/drive';
 import { gmail as gmailApi } from '@googleapis/gmail';
 import { calendar as calendarApi } from '@googleapis/calendar';
@@ -94,6 +94,91 @@ const ERROR_HINT =
 // Tools that should NOT have the hint appended (would be circular/noisy).
 const HINT_EXCLUDED_TOOLS = new Set(['troubleshoot', 'feedback', 'help', 'logout']);
 
+// Retrying an API call after its response was lost can duplicate a write. Keep
+// the automatic retry surface deliberately small and explicit until tool
+// metadata can declare operation semantics. Action-based tools are included
+// only for their listed read actions.
+export const RETRY_SAFE_READ_TOOL_NAMES = new Set([
+    'readDocument', 'listTabs', 'listHeadings', 'getFormatting', 'getComment', 'listComments',
+    'listDriveFiles', 'searchDocuments', 'getFileInfo', 'listFolderContents', 'getFolderInfo',
+    'listSharedDrives', 'listSharedWithMe', 'downloadFile', 'getFilePath', 'listPermissions',
+    'listRevisions', 'getRevision', 'readFile', 'readDriveFile', 'searchFileContents',
+    'readSpreadsheet', 'getSpreadsheetInfo', 'getTable', 'listTables', 'readCellFormat',
+    'getMessage', 'listMessages', 'batchGetMessages', 'getAttachment', 'getThread', 'listThreads',
+    'batchGetThreads', 'getDraft', 'listDrafts', 'getProfile', 'getEvents', 'getFree', 'getBusy',
+    'listRecurringEventInstances', 'listCalendars', 'listTaskLists', 'listTasks', 'getPresentation',
+    'getSpeakerNotes', 'exportSlideThumbnail', 'mapsDirections', 'mapsGeocode', 'mapsPlaceDetails',
+    'mapsReverseGeocode', 'mapsSearchNearby', 'mapsSearchPlaces',
+]);
+
+const RETRY_SAFE_READ_ACTIONS = Object.freeze({
+    manageGmailSettings: new Set(['get', 'list']),
+    manageSmime: new Set(['get', 'list']),
+    manageFilter: new Set(['get', 'list']),
+    manageLabel: new Set(['get', 'list']),
+    manageCalendar: new Set(['get', 'list']),
+});
+const RETRY_BACKOFF_MS = Object.freeze([100, 200]);
+const MAX_RETRY_DELAY_MS = 30_000;
+
+export function isRetrySafeReadTool(toolName, args = {}) {
+    if (RETRY_SAFE_READ_TOOL_NAMES.has(toolName)) return true;
+    const actions = RETRY_SAFE_READ_ACTIONS[toolName];
+    return Boolean(actions && actions.has(args?.action));
+}
+
+function retryAfterDelayMs(error, now) {
+    let value;
+    findErrorCause(error, (candidate) => {
+        const headers = candidate?.response?.headers;
+        if (typeof headers?.get === 'function') value = headers.get('retry-after');
+        else if (headers && typeof headers === 'object') value = headers['retry-after'] ?? headers['Retry-After'];
+        return typeof value === 'string' && value.length > 0;
+    });
+    if (typeof value !== 'string') return null;
+    if (/^\d+$/.test(value)) return Math.min(Number(value) * 1000, MAX_RETRY_DELAY_MS);
+    const retryAt = Date.parse(value);
+    if (Number.isNaN(retryAt)) return null;
+    return Math.min(Math.max(0, retryAt - now()), MAX_RETRY_DELAY_MS);
+}
+
+function retryDelayMs(error, baseDelay, { random, now }) {
+    const serverDelay = retryAfterDelayMs(error, now);
+    if (serverDelay !== null) return serverDelay;
+    // Keep the retry window bounded while spreading concurrent read clients so
+    // they do not immediately create the next rate-limit spike together.
+    const sample = Number(random());
+    const jitter = Number.isFinite(sample) ? Math.min(Math.max(sample, 0), 1) : 0.5;
+    return Math.round(baseDelay * (0.75 + (jitter * 0.5)));
+}
+
+export async function executeRetrySafeTool(toolName, args, execute, {
+    wait = (delay) => new Promise(resolve => setTimeout(resolve, delay)),
+    random = Math.random,
+    now = () => Date.now(),
+} = {}) {
+    try {
+        return await withAuthRetry(execute);
+    } catch (error) {
+        // Auth recovery is safe for every tool because Google rejected the
+        // request before the API operation ran. Transport retries are different:
+        // a missing response cannot prove whether a mutation landed, so only the
+        // explicit read set above receives two bounded exponential retries.
+        if (!isRetrySafeReadTool(toolName, args) || !classifyUpstreamError(error)?.retryable) throw error;
+        let lastError = error;
+        for (const baseDelay of RETRY_BACKOFF_MS) {
+            await wait(retryDelayMs(lastError, baseDelay, { random, now }));
+            try {
+                return await withAuthRetry(execute);
+            } catch (retryError) {
+                lastError = retryError;
+                if (!classifyUpstreamError(retryError)?.retryable) throw retryError;
+            }
+        }
+        throw lastError;
+    }
+}
+
 function appendHintToError(error, toolName) {
     if (HINT_EXCLUDED_TOOLS.has(toolName)) return error;
     if (!error) return error;
@@ -103,7 +188,7 @@ function appendHintToError(error, toolName) {
     if (existingMsg.includes('`troubleshoot` tool')) return error;
     // Public errors are immutable by design. Preserve their explicit caller-safe
     // status while adding the established troubleshooting guidance.
-    if (publicMessage !== undefined) return publicError(existingMsg + ERROR_HINT);
+    if (publicMessage !== undefined) return publicError(existingMsg + ERROR_HINT, getPublicErrorCause(error));
     try {
         error.message = existingMsg + ERROR_HINT;
     } catch {
@@ -127,7 +212,7 @@ function wrapServerWithAuthRetry(server) {
                 // is established once by the transport in dist/mcpServer.js and
                 // read ambiently, so this layer is purely auth-retry + hints.
                 try {
-                    return await withAuthRetry(() => originalExecute.apply(this, args));
+                    return await executeRetrySafeTool(toolName, args[0], () => originalExecute.apply(this, args));
                 } catch (err) {
                     throw appendHintToError(err, toolName);
                 }
@@ -461,7 +546,14 @@ export async function registerAllTools(server) {
                     toolCalls[record.tool] = (toolCalls[record.tool] || 0) + 1;
                     if (record.outcome !== 'ok') {
                         errorsByCode[record.errCode] = (errorsByCode[record.errCode] || 0) + 1;
-                        failures.push({ tool: record.tool, reqId: record.reqId, errCode: record.errCode, errMsg: record.errMsg });
+                        failures.push({
+                            tool: record.tool,
+                            reqId: record.reqId,
+                            errCode: record.errCode,
+                            errMsg: record.errMsg,
+                            ...(Number.isInteger(record.errStatus) && { status: record.errStatus }),
+                            ...(typeof record.retryable === 'boolean' && { retryable: record.retryable }),
+                        });
                     }
                 }
                 report.recentLogs = { source: recent.filePath, toolCalls, errorsByCode, lastFailures: failures.slice(-5) };

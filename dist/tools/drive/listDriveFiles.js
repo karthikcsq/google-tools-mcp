@@ -102,7 +102,8 @@ export function register(server) {
                 log.error(`Error listing Drive files: ${error.message || error}`);
                 if (error.code === 403)
                     throw publicError(
-                        'Permission denied. Make sure you have granted Google Drive access to the application.'
+                        'Permission denied. Make sure you have granted Google Drive access to the application.',
+                        error
                     );
                 throw wrapOperationError('list Drive files', error, { status: error?.code });
             }

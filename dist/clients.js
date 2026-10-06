@@ -12,7 +12,7 @@ import { calendar } from '@googleapis/calendar';
 import { forms } from '@googleapis/forms';
 import { slides } from '@googleapis/slides';
 import { tasks } from '@googleapis/tasks';
-import { publicError, isPublicError, wrapOperationError } from './errors.js';
+import { findErrorCause, publicError, isPublicError, wrapOperationError } from './errors.js';
 import { authorize } from './auth.js';
 import { logger } from './logger.js';
 import { openBrowser } from './shellSafe.js';
@@ -64,20 +64,24 @@ const AUTH_FAILURE_GUIDANCE = {
 // messages from dist/auth.js, Node's `code` for socket-level failures, and the
 // RFC 6749 error identifiers Google returns. Anything else returns undefined.
 function classifyAuthFailure(error) {
-    const message = typeof error?.message === 'string' ? error.message : '';
-    const oauthCode = error?.response?.data?.error;
-    const nodeCode = error?.code;
+    let classification;
+    findErrorCause(error, (candidate) => {
+        const message = typeof candidate?.message === 'string' ? candidate.message : '';
+        const oauthCode = candidate?.response?.data?.error;
+        const nodeCode = candidate?.code;
 
-    if (oauthCode === 'invalid_grant' || message.includes('invalid_grant')) return 'invalid_grant';
-    if (oauthCode === 'access_denied' || /Authorization error: access_denied/.test(message)) return 'access_denied';
-    if (oauthCode === 'invalid_client' || message.includes('invalid_client')) return 'invalid_client';
-    if (message.startsWith('No OAuth credentials found')
-        || message.startsWith('Service account key file not found')) return 'missing_credentials';
-    if (nodeCode === 'EADDRINUSE') return 'port_in_use';
-    if (message.startsWith('OAuth flow timed out')) return 'timed_out';
-    if (nodeCode === 'ENOTFOUND' || nodeCode === 'ECONNREFUSED' || nodeCode === 'EAI_AGAIN'
-        || nodeCode === 'ETIMEDOUT') return 'unreachable';
-    return undefined;
+        if (oauthCode === 'invalid_grant' || message.includes('invalid_grant')) classification = 'invalid_grant';
+        else if (oauthCode === 'access_denied' || /Authorization error: access_denied/.test(message)) classification = 'access_denied';
+        else if (oauthCode === 'invalid_client' || message.includes('invalid_client')) classification = 'invalid_client';
+        else if (message.startsWith('No OAuth credentials found')
+            || message.startsWith('Service account key file not found')) classification = 'missing_credentials';
+        else if (nodeCode === 'EADDRINUSE') classification = 'port_in_use';
+        else if (message.startsWith('OAuth flow timed out')) classification = 'timed_out';
+        else if (nodeCode === 'ENOTFOUND' || nodeCode === 'ECONNREFUSED' || nodeCode === 'EAI_AGAIN'
+            || nodeCode === 'ETIMEDOUT') classification = 'unreachable';
+        return classification !== undefined;
+    });
+    return classification;
 }
 
 // Every initializeXClient() below funnels through ensureAuth(), and the v3
@@ -186,22 +190,22 @@ async function reauthorize() {
  * Check if an error is an invalid_grant error (expired/revoked refresh token).
  */
 function isInvalidGrantError(error) {
-    if (!error) return false;
-    const msg = error.message || '';
-    const code = error.response?.data?.error || error.code || '';
-    return msg.includes('invalid_grant') || code === 'invalid_grant';
+    return Boolean(findErrorCause(error, (candidate) => {
+        const msg = candidate.message || '';
+        const code = candidate.response?.data?.error || candidate.code || '';
+        return msg.includes('invalid_grant') || code === 'invalid_grant';
+    }));
 }
 
 /**
  * Detect "API has not been used / is disabled" errors from Google APIs.
  * Triggered when a required Google API was never enabled in the user's project.
  */
-function isApiNotEnabledError(error) {
-    if (!error) return false;
-    const msg = error.message || '';
+function isApiNotEnabledErrorShape(error) {
+    const msg = error?.message || '';
     if (/has not been used in project .* before or it is disabled/i.test(msg)) return true;
     if (/SERVICE_DISABLED/i.test(msg)) return true;
-    const details = error.response?.data?.error?.details;
+    const details = error?.response?.data?.error?.details;
     if (Array.isArray(details)) {
         for (const d of details) {
             if (d?.reason === 'SERVICE_DISABLED') return true;
@@ -210,12 +214,17 @@ function isApiNotEnabledError(error) {
     return false;
 }
 
+function isApiNotEnabledError(error) {
+    return Boolean(findErrorCause(error, isApiNotEnabledErrorShape));
+}
+
 /**
  * Pull the API name, project ID, and enable URL out of an API-disabled error.
  * Returns null if extraction fails.
  */
 function extractApiEnableInfo(error) {
-    const msg = error?.message || '';
+    const source = findErrorCause(error, isApiNotEnabledErrorShape) || error;
+    const msg = source?.message || '';
     let api = null;
     let projectId = null;
     let enableUrl = null;
@@ -226,7 +235,7 @@ function extractApiEnableInfo(error) {
     if (apiMatch) api = apiMatch[1];
     const projMatch = msg.match(/project=(\d+)/) || msg.match(/project (\d+)/);
     if (projMatch) projectId = projMatch[1];
-    const details = error?.response?.data?.error?.details;
+    const details = source?.response?.data?.error?.details;
     if (Array.isArray(details)) {
         for (const d of details) {
             if (d?.metadata?.service && !api) api = d.metadata.service;

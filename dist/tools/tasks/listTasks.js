@@ -45,7 +45,7 @@ export function register(server) {
                 if (error.code === 404)
                     throw publicError(`Task list not found (ID: ${args.taskListId}).`);
                 if (error.code === 403)
-                    throw publicError('Permission denied. Make sure you have access to this task list.');
+                    throw publicError('Permission denied. Make sure you have access to this task list.', error);
 throw wrapOperationError('list tasks', error, { status: error?.code });
             }
         },

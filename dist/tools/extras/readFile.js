@@ -76,7 +76,7 @@ export function register(server) {
                 if (error.code === 404)
                     throw new UserError(`File not found: ${fileId}`);
                 if (error.code === 403)
-                    throw new UserError('Permission denied. Check that the file is shared with this account.');
+                    throw new UserError('Permission denied. Check that the file is shared with this account.', error);
                 throw wrapOperationError('read file', error, { status: error?.code });
             }
         },
