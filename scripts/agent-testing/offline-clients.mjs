@@ -653,7 +653,9 @@ class OfflineSheetsValues {
 }
 
 class OfflineSheetsSpreadsheets {
-    constructor() { this.values = new OfflineSheetsValues(); }
+    constructor() {
+        this.values = new OfflineSheetsValues();
+    }
 
     async get(params = {}) {
         return operation('sheets.spreadsheets.get', () => {
@@ -661,17 +663,111 @@ class OfflineSheetsSpreadsheets {
             return {
                 spreadsheetId: file.id,
                 properties: { title: file.name },
-                sheets: file.spreadsheet.sheets.map((sheet) => ({ properties: clone(sheet.properties) })),
+                sheets: file.spreadsheet.sheets.map((sheet) => {
+                    const result = { properties: clone(sheet.properties) };
+                    if (!params.includeGridData) return result;
+                    if (
+                        !Array.isArray(params.ranges) ||
+                        params.ranges.length === 0 ||
+                        /userEnteredFormat|dataValidation/.test(
+                            params.fields ?? '',
+                        )
+                    ) {
+                        throw unsupported(
+                            'sheets.spreadsheets.get',
+                            'grid observations require explicit bounded value ranges; formatting and validation remain unsupported.',
+                        );
+                    }
+                    result.data = params.ranges
+                        .map((range) => resolveSheet(file, range))
+                        .filter((entry) => entry.sheet === sheet)
+                        .map(({ parsed }) => {
+                            const rowData = [];
+                            for (
+                                let row = parsed.startRow;
+                                row <=
+                                Math.min(
+                                    parsed.endRow,
+                                    sheet.values.length - 1,
+                                );
+                                row += 1
+                            ) {
+                                const values = [];
+                                for (
+                                    let column = parsed.startCol;
+                                    column <=
+                                    Math.min(
+                                        parsed.endCol,
+                                        (sheet.values[row]?.length ?? 0) - 1,
+                                    );
+                                    column += 1
+                                ) {
+                                    const value = sheet.values[row]?.[column];
+                                    if (value === undefined || value === null) {
+                                        values.push({});
+                                        continue;
+                                    }
+                                    const type = typeof value;
+                                    if (
+                                        ![
+                                            'string',
+                                            'number',
+                                            'boolean',
+                                        ].includes(type) ||
+                                        (type === 'number' &&
+                                            !Number.isFinite(value))
+                                    ) {
+                                        throw unsupported(
+                                            'sheets.spreadsheets.get',
+                                            'cannot project non-scalar cell values.',
+                                        );
+                                    }
+                                    const entered = {
+                                        [type === 'string'
+                                            ? 'stringValue'
+                                            : type === 'number'
+                                              ? 'numberValue'
+                                              : 'boolValue']: value,
+                                    };
+                                    values.push({
+                                        userEnteredValue: entered,
+                                        effectiveValue: clone(entered),
+                                        formattedValue:
+                                            type === 'boolean'
+                                                ? String(value).toUpperCase()
+                                                : String(value),
+                                    });
+                                }
+                                rowData.push({ values });
+                            }
+                            return {
+                                startRow: parsed.startRow,
+                                startColumn: parsed.startCol,
+                                rowData,
+                            };
+                        });
+                    return result;
+                }),
             };
         });
     }
 
     async batchUpdate() {
-        return operation('sheets.spreadsheets.batchUpdate', () => { throw unsupported('sheets.spreadsheets.batchUpdate', 'does not support formatting or sheet-structure changes.'); });
+        return operation('sheets.spreadsheets.batchUpdate', () => {
+            throw unsupported(
+                'sheets.spreadsheets.batchUpdate',
+                'does not support formatting or sheet-structure changes.',
+            );
+        });
     }
 
     async create() {
-        return operation('sheets.spreadsheets.create', () => { throw unsupported('sheets.spreadsheets.create', 'use the production createSpreadsheet tool with parentFolderId so the offline sandbox can enforce confinement.'); });
+        return operation('sheets.spreadsheets.create', () => {
+            throw unsupported(
+                'sheets.spreadsheets.create',
+                'use the production createSpreadsheet tool with parentFolderId so the offline sandbox can enforce confinement.',
+            );
+        });
     }
 }
 
