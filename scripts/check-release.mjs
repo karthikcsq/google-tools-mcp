@@ -4,7 +4,7 @@
  *
  * CONTRIBUTING.md and CHANGELOG.md both state the same rule: the version at the
  * top of the changelog, the version in package.json, and the release tag are
- * always the same number. Nothing enforced it. The publish workflow compared the
+ * always the same version. Nothing enforced it. The publish workflow compared the
  * tag against package.json only, so a pull request that bumped package.json but
  * forgot its changelog entry produced a green release with a changelog that
  * never mentioned the version it shipped.
@@ -13,7 +13,7 @@
  * `npm ci`, and so a bad tag costs seconds rather than a full install.
  *
  *   node scripts/check-release.mjs                 # package.json vs CHANGELOG
- *   node scripts/check-release.mjs --tag v3.5.0    # also check the tag
+ *   node scripts/check-release.mjs --tag v3.5.0-rc.1    # also check the tag
  */
 
 import { readFileSync } from 'node:fs';
@@ -22,30 +22,80 @@ import { dirname, join } from 'node:path';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+const NUMERIC_IDENTIFIER = '(?:0|[1-9]\\d*)';
+const PRERELEASE_IDENTIFIER = `(?:${NUMERIC_IDENTIFIER}|\\d*[A-Za-z-][0-9A-Za-z-]*)`;
+const SEMVER = new RegExp(
+    `^(${NUMERIC_IDENTIFIER})\\.(${NUMERIC_IDENTIFIER})\\.(${NUMERIC_IDENTIFIER})` +
+        `(?:-(${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*))?` +
+        '(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$',
+);
 
-/** Parse `X.Y.Z` into comparable parts, or null if it is not a bare release version. */
-function parseVersion(value) {
+/** Parse a SemVer 2.0.0 version into comparable parts, or return null. */
+export function parseVersion(value) {
     const match = SEMVER.exec(value);
     if (!match) return null;
-    return [Number(match[1]), Number(match[2]), Number(match[3])];
+    return {
+        core: [match[1], match[2], match[3]],
+        prerelease: match[4] === undefined ? null : match[4].split('.'),
+        build: match[5] === undefined ? null : match[5].split('.'),
+    };
 }
 
-/** -1, 0, or 1. Both arguments must already have come back from parseVersion. */
-function compareVersions(a, b) {
+/** Select npm's release channel from parsed SemVer, never from shell globbing. */
+export function distributionTagForVersion(value) {
+    const parsed = parseVersion(value);
+    if (!parsed) throw new Error(`Invalid Semantic Version: ${value}`);
+    return parsed.prerelease === null ? 'latest' : 'next';
+}
+
+function compareNumericIdentifiers(a, b) {
+    if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+    return a === b ? 0 : a < b ? -1 : 1;
+}
+
+function isNumericIdentifier(value) {
+    return /^(?:0|[1-9]\d*)$/.test(value);
+}
+
+/** -1, 0, or 1 following SemVer 2.0.0 precedence. Build metadata is ignored. */
+export function compareVersions(a, b) {
     for (let i = 0; i < 3; i += 1) {
-        if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+        const coreComparison = compareNumericIdentifiers(a.core[i], b.core[i]);
+        if (coreComparison !== 0) return coreComparison;
     }
-    return 0;
+
+    if (a.prerelease === null && b.prerelease === null) return 0;
+    if (a.prerelease === null) return 1;
+    if (b.prerelease === null) return -1;
+
+    const length = Math.min(a.prerelease.length, b.prerelease.length);
+    for (let i = 0; i < length; i += 1) {
+        const left = a.prerelease[i];
+        const right = b.prerelease[i];
+        if (left === right) continue;
+
+        const leftNumeric = isNumericIdentifier(left);
+        const rightNumeric = isNumericIdentifier(right);
+        if (leftNumeric && rightNumeric)
+            return compareNumericIdentifiers(left, right);
+        if (leftNumeric) return -1;
+        if (rightNumeric) return 1;
+        return left < right ? -1 : 1;
+    }
+
+    if (a.prerelease.length === b.prerelease.length) return 0;
+    return a.prerelease.length < b.prerelease.length ? -1 : 1;
 }
 
 /**
- * Every `## [X.Y.Z] - YYYY-MM-DD` heading, in file order. The date is required:
+ * Every `## [SEMVER] - YYYY-MM-DD` heading, in file order. The date is required:
  * it is what distinguishes a release heading from any other `## [...]` line that
  * might appear in prose, and every existing entry has one.
  */
 export function parseChangelogVersions(changelog) {
-    const headings = [...changelog.matchAll(/^## \[([^\]]+)\] - (\d{4}-\d{2}-\d{2})\s*$/gm)];
+    const headings = [
+        ...changelog.matchAll(/^## \[([^\]]+)\] - (\d{4}-\d{2}-\d{2})\s*$/gm),
+    ];
     return headings.map((heading) => heading[1]);
 }
 
@@ -59,16 +109,16 @@ export function findReleaseProblems({ packageVersion, changelog, tag = null }) {
     const parsedPackage = parseVersion(packageVersion);
     if (!parsedPackage) {
         problems.push(
-            `package.json version "${packageVersion}" is not a bare X.Y.Z release version. ` +
-            'Prereleases and build metadata are not part of this release flow.',
+            `package.json version "${packageVersion}" is not a valid Semantic Version. ` +
+                'Use X.Y.Z, optionally followed by a SemVer prerelease or build identifier.',
         );
     }
 
     const changelogVersions = parseChangelogVersions(changelog);
     if (changelogVersions.length === 0) {
         problems.push(
-            'CHANGELOG.md has no `## [X.Y.Z] - YYYY-MM-DD` release heading. ' +
-            'Every release needs its own entry; see the bump rules at the top of that file.',
+            'CHANGELOG.md has no `## [X.Y.Z[-PRERELEASE]] - YYYY-MM-DD` release heading. ' +
+                'Every release needs its own entry; see the bump rules at the top of that file.',
         );
         return problems;
     }
@@ -78,23 +128,28 @@ export function findReleaseProblems({ packageVersion, changelog, tag = null }) {
     if (topVersion !== packageVersion) {
         problems.push(
             `CHANGELOG.md's newest entry is [${topVersion}] but package.json is ${packageVersion}. ` +
-            'A pull request moves both to its own version in the same change.',
+                'A pull request moves both to its own version in the same change.',
         );
     }
 
     const parsedTop = parseVersion(topVersion);
     if (!parsedTop) {
-        problems.push(`CHANGELOG.md's newest entry [${topVersion}] is not a bare X.Y.Z version.`);
+        problems.push(
+            `CHANGELOG.md's newest entry [${topVersion}] is not a valid Semantic Version.`,
+        );
     }
 
     // Catches the entry that was copied from the one below it and never
     // renumbered, and an entry filed out of order.
     if (parsedTop && previousVersion !== undefined) {
         const parsedPrevious = parseVersion(previousVersion);
-        if (parsedPrevious && compareVersions(parsedTop, parsedPrevious) !== 1) {
+        if (
+            parsedPrevious &&
+            compareVersions(parsedTop, parsedPrevious) !== 1
+        ) {
             problems.push(
                 `CHANGELOG.md's newest entry [${topVersion}] is not greater than the entry ` +
-                `below it, [${previousVersion}]. Entries run newest first, one bump per change.`,
+                    `below it, [${previousVersion}]. Entries run newest first, one bump per change.`,
             );
         }
     }
@@ -104,7 +159,9 @@ export function findReleaseProblems({ packageVersion, changelog, tag = null }) {
     const seen = new Set();
     for (const version of changelogVersions) {
         if (seen.has(version)) {
-            problems.push(`CHANGELOG.md has more than one entry for [${version}].`);
+            problems.push(
+                `CHANGELOG.md has more than one entry for [${version}].`,
+            );
             break;
         }
         seen.add(version);
@@ -115,7 +172,7 @@ export function findReleaseProblems({ packageVersion, changelog, tag = null }) {
         if (tagVersion !== packageVersion) {
             problems.push(
                 `Tag ${tag} does not match package.json version ${packageVersion}. ` +
-                'Tag the commit whose package.json already holds the version being released.',
+                    'Tag the commit whose package.json already holds the version being released.',
             );
         }
     }
@@ -147,7 +204,7 @@ function main(argv) {
 
     console.log(
         `Release ${packageVersion} is consistent` +
-        `${tag ? ` with tag ${tag}` : ''}: package.json and CHANGELOG.md agree.`,
+            `${tag ? ` with tag ${tag}` : ''}: package.json and CHANGELOG.md agree.`,
     );
     return 0;
 }

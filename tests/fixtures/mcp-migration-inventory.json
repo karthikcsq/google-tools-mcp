@@ -97,6 +97,9 @@
         "file": "dist/resourceHandles.js"
       },
       {
+        "file": "dist/service/probeCandidate.js"
+      },
+      {
         "file": "dist/setup.js"
       },
       {
@@ -778,6 +781,9 @@
       },
       {
         "file": "tests/packageScripts.test.js"
+      },
+      {
+        "file": "tests/probeCandidate.test.js"
       },
       {
         "file": "tests/publicErrorBoundary.test.js"

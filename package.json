@@ -1,6 +1,6 @@
 {
   "name": "google-tools-mcp",
-  "version": "3.4.8",
+  "version": "4.0.0-rc.1",
   "description": "The easiest MCP server for Google Workspace — Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, and Tasks. 160 tools with one-click browser auth. Read Word docs, PDFs, and spreadsheets straight from Drive.",
   "type": "module",
   "bin": {
@@ -59,7 +59,9 @@
     "release:check": "node scripts/check-release.mjs",
     "live-mission": "node scripts/live-mission.mjs",
     "live-coverage": "node scripts/live-coverage.mjs",
-    "agent-test": "node scripts/agent-test.mjs"
+    "agent-test": "node scripts/agent-test.mjs",
+    "package:check": "npm pack --dry-run --json --ignore-scripts",
+    "package:consumer-check": "node scripts/verify-consumer-install.mjs"
   },
   "repository": {
     "type": "git",

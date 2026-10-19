@@ -4,33 +4,48 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, codex/http-v4-resources]
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [20, 22]
+        os: [ubuntu-latest, windows-latest]
+        node-version: [20, 22, 24]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
         run: npm ci
+        env:
+          HUSKY: 0
+
+      - name: Verify release metadata
+        run: npm run release:check
+
+      - name: Verify packed consumer
+        if: matrix.node-version == 24
+        run: npm run package:consumer-check
 
       - name: Run tests
         run: npm run test:ci
 
       - name: Upload coverage
-        if: matrix.node-version == 22
-        uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 22
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-report
           path: coverage/

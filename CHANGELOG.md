@@ -18,6 +18,36 @@ came from. Planning notes under `docs/plans/` and `.planning/` are not logged.
 The 2.0.0 entry predates this convention and collapses thirteen pull requests
 into one release.
 
+## [4.0.0-rc.1] - 2026-10-19
+
+PR [#172](https://github.com/karthikcsq/google-tools-mcp/pull/172) by
+[@ElliotDrel](https://github.com/ElliotDrel): explicit resource safety and the
+prerelease gates for the HTTP-first modernization. This candidate covers the
+resource-safety slice; it does not yet switch installation or transport defaults.
+
+### Changed
+
+- Modern HTTP and stdio Sheets writes and Drive deletion require explicit
+  resource read handles. Guards compare the observed state before mutation and
+  return single-use successors with visible post-write values or structure.
+- Formatting, validation, destructive sheet/table/chart operations, and creation
+  or copy seeding use the appropriate bounded resource baseline. Sheets and
+  Drive compare-then-write checks cannot exclude external collaborator races.
+
+### Fixed
+
+- Integrate the merged offline tester with explicit Sheets/Drive handles and
+  scalar grid observations, retaining its refusal of unsupported Google behavior.
+
+### Added
+
+- SemVer prerelease checks and explicit `next` publishing for prereleases,
+  preserving `latest` for stable releases.
+- Windows/Linux Node 20/22/24 CI and a production-only packed-consumer protocol
+  probe with isolated configuration, discovery/version checking, and tools/list.
+- Native PowerShell 5.1 and Bash candidate verification recipes; exact registry
+  artifact verification remains a separate post-publication step.
+
 ## [3.4.8] - 2026-10-19
 
 Resource-handle review corrections by [@ElliotDrel](https://github.com/ElliotDrel),

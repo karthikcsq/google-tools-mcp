@@ -28,13 +28,13 @@ One step, for the repository owner.
 
 Add a GitHub Actions trusted publisher with exactly these values:
 
-| Field | Value |
-| --- | --- |
-| Organization or user | `karthikcsq` |
-| Repository | `google-tools-mcp` |
-| Workflow filename | `publish.yml` |
-| Environment name | `npm-publish` |
-| Allowed actions | `npm publish` |
+| Field                | Value              |
+| -------------------- | ------------------ |
+| Organization or user | `karthikcsq`       |
+| Repository           | `google-tools-mcp` |
+| Workflow filename    | `publish.yml`      |
+| Environment name     | `npm-publish`      |
+| Allowed actions      | `npm publish`      |
 
 The environment name must match the `environment: npm-publish` line on the
 `publish` job, or the OIDC identity the job presents will not be the one npm
@@ -70,7 +70,8 @@ Not needed for a release to work; it narrows who can trigger one.
 commit), each with its own semantic version; the bump rules are at the top of
 that file. Every pull request adds its own entry and moves `package.json` to
 that version in the same change, so the version at the top of the changelog,
-the version in `package.json`, and the next tag are always the same number.
+the version in `package.json`, and the next tag are always the same Semantic
+Version.
 `scripts/check-release.mjs` enforces exactly that, locally and in CI. Not every
 version gets tagged: patch versions accumulate on `main` and the tag goes on
 whichever commit is being published.
@@ -112,6 +113,11 @@ commit is on `main`.
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
+
+   A prerelease uses the same flow with a standard SemVer prerelease version,
+   for example `X.Y.Z-rc.1`. The publish workflow sends versions containing a
+   prerelease identifier to npm's `next` dist-tag; stable versions go to
+   `latest`.
 
 That is the whole release. Watch it at
 <https://github.com/karthikcsq/google-tools-mcp/actions>; there is nothing to
@@ -194,68 +200,164 @@ gh run list --workflow publish.yml --limit 1     # run succeeded
 npm view google-tools-mcp version                 # registry updated
 ```
 
-Then confirm the published tarball actually runs. There is no `--help` flag, so
-install it into a scratch directory and start it with stdin held open long
-enough to finish booting, then let the pipe close to shut it down.
+Before publishing, verify the exact tarball that `npm pack` creates. Each
+recipe creates an independent temporary consumer, installs with `--omit=dev`,
+and uses `scripts/probe-candidate.mjs` to keep stdio open while it sends modern
+`server/discover` followed by `tools/list`. A successful probe prints a JSON
+object with a nonzero `toolCount`. This checks the installed executable's
+actual MCP surface; `--help` and a ready log line are useful diagnostics but
+are not a protocol check.
 
-Run this from **outside** the repository, and create the manifest before
-installing anything:
+### Native PowerShell 5.1
 
-```bash
-mkdir -p ../gtm-verify && cd ../gtm-verify
-npm init -y > /dev/null        # load-bearing: see the warning below
-npm install google-tools-mcp@X.Y.Z
-node -e "setTimeout(() => {}, 40000)" | node node_modules/google-tools-mcp/dist/index.js
+Run this from the repository root in **Windows PowerShell 5.1** (not PowerShell
+7). It uses no Bash operators or Unix paths.
+
+```powershell
+$repoRoot = (Get-Location).Path
+$scratch = Join-Path ([System.IO.Path]::GetTempPath()) ('gtm-verify-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $scratch | Out-Null
+$env:npm_config_cache = Join-Path $scratch 'npm-cache'
+$packed = npm.cmd pack --json --ignore-scripts | ConvertFrom-Json
+$manifest = if ($packed -is [array]) { $packed[0] } else { $packed.PSObject.Properties.Value | Select-Object -First 1 }
+$tarball = $manifest.filename
+if ($LASTEXITCODE -ne 0) { throw 'npm pack failed.' }
+$tarballPath = Join-Path $repoRoot $tarball
+$expectedVersion = node -p "require('./package.json').version"
+
+try {
+    Push-Location $scratch
+    npm.cmd init -y
+    if ($LASTEXITCODE -ne 0) { throw 'npm init failed.' }
+    npm.cmd install --omit=dev $tarballPath
+    if ($LASTEXITCODE -ne 0) { throw 'tarball install failed.' }
+    $installedVersion = node -p "require(process.argv[1]).version" (Join-Path $scratch 'node_modules\google-tools-mcp\package.json')
+    if ($installedVersion -ne $expectedVersion) { throw 'installed package version does not match the packed version.' }
+    node (Join-Path $repoRoot 'scripts\probe-candidate.mjs') --entry (Join-Path $scratch 'node_modules\google-tools-mcp\dist\index.js') --expected-version $installedVersion
+    if ($LASTEXITCODE -ne 0) { throw 'installed MCP protocol probe failed.' }
+}
+finally {
+    Pop-Location
+    Remove-Item -LiteralPath $scratch -Recurse -Force
+    Remove-Item -LiteralPath $tarballPath -Force
+}
 ```
 
-> **Do not skip `npm init -y`, and do not put the scratch directory inside the
-> repository.** `npm install <pkg>` in a directory with no `package.json` does
-> not fail. npm walks up the tree looking for one, finds the repository's, and
-> installs there instead: `"google-tools-mcp": "^X.Y.Z"` is added to this
-> project's own `package.json` and `package-lock.json` as a dependency on
-> itself, and the tarball you meant to test lands in the repo's `node_modules`.
-> The install prints a perfectly normal `added 1 package` and says nothing about
-> which directory it chose. This is easy to commit by accident, since it happens
-> during the after-the-fact verification step when the release already looks
-> done. It bit the 3.4.5 release. If you hit it, `git checkout -- package.json
-> package-lock.json` and re-run `npm ci`.
+### Bash
 
-The timer is a `node` one-liner rather than `sleep` so the same block works from
-PowerShell, which is what the rest of this file uses. 40 seconds comfortably
-outlasts the 8-14 second startup measured on affected machines.
+Run this from the repository root in Bash. It uses the same independently
+packed package, rather than `npx` or the repository's `node_modules`.
 
-Expect a line like `MCP Server running using stdio in 13970ms`, then a clean
-exit 0 once the pipe closes. A hang, a module-resolution error, or a missing
-ready line means the tarball is broken even though the publish succeeded.
+```bash
+set -euo pipefail
+repo_root="$(pwd)"
+# Node chooses a path valid for the running platform, including Git Bash on
+# Windows where passing a literal /tmp path to npm would be wrong.
+scratch="$(node -e "const fs=require('node:fs'); const os=require('node:os'); const path=require('node:path'); process.stdout.write(fs.mkdtempSync(path.join(os.tmpdir(), 'gtm-verify-')))")"
+# Invoke npm's JavaScript entrypoint on Windows to avoid .cmd quoting problems
+# when Node is installed under Program Files. Use normal npm on Unix.
+if command -v npm.cmd >/dev/null 2>&1; then
+    npm_cli="$(node -e "const p=require('node:path'); process.stdout.write(p.join(p.dirname(process.argv[1]), 'node_modules/npm/bin/npm-cli.js'))" "$(command -v npm.cmd)")"
+    npm_run() { node "$npm_cli" "$@"; }
+else
+    npm_run() { command npm "$@"; }
+fi
+export npm_config_cache="$scratch/npm-cache"
+tarball="$(npm_run pack --json --ignore-scripts | node -e 'let output = ""; process.stdin.on("data", (chunk) => { output += chunk; }); process.stdin.on("end", () => process.stdout.write((Array.isArray(JSON.parse(output)) ? JSON.parse(output)[0] : Object.values(JSON.parse(output))[0]).filename));')"
+expected_version="$(node -p "require('./package.json').version")"
+cleanup() {
+    node -e "require('node:fs').rmSync(process.argv[1], { recursive: true, force: true })" "$scratch"
+    node -e "require('node:fs').rmSync(process.argv[1], { force: true })" "$repo_root/$tarball"
+}
+trap cleanup EXIT
 
-The install and the run are separate commands on purpose, and the wait has to
-outlast startup. Two ways to get this wrong, both of which report a broken build
-for a package that is fine:
+(
+    cd "$scratch"
+    npm_run init -y >/dev/null
+    npm_run install --omit=dev "$repo_root/$tarball"
+    installed_version="$(node -p "require(process.argv[1]).version" "$scratch/node_modules/google-tools-mcp/package.json")"
+    test "$installed_version" = "$expected_version"
+    node "$repo_root/scripts/probe-candidate.mjs" --entry "$scratch/node_modules/google-tools-mcp/dist/index.js" --expected-version "$installed_version"
+)
+```
 
-- **Closing stdin immediately.** With `echo "" |` the stream ends before
-  `server.start()` logs, the shutdown handler wins, and you get
-  `Loaded all 12 categories` followed straight by `stdin ended` with no ready
-  line at all.
-- **Combining the install and the run**, as in `node -e "setTimeout(() => {},
-  40000)" | npx -y google-tools-mcp@X.Y.Z`. Both sides of a pipe start at once,
-  so the timer runs
-  during `npx`'s resolve and unpack rather than during startup. `npx` is measured
-  at 23-34 seconds on affected machines (see the troubleshooting section in
-  `README.md`) and startup at 8-14 seconds, so the server can be handed an
-  already-closed stdin before it prints anything. Installing first takes the
-  resolve time out of the timed window entirely.
+The probe owns only the direct candidate child process and cleans it up after
+both responses. It gives the candidate a fresh absolute config directory,
+forces stdio, and removes inherited HTTP token/no-auth settings so no local
+service state can make the tarball look healthy.
 
-If you do want to exercise the `npx` path specifically, run it once to warm the
-cache and then time a second run, so only the second one is racing the timer.
+## Verify the published registry artifact
 
-**Do not pipe any of this into `head`.** `head` exits after its line quota and
-the resulting SIGPIPE can kill `npx` partway through unpacking, leaving a
-half-written directory under `npm-cache/_npx/<hash>`. Every later `npx` run for
-that package then fails with `ENOENT ... could not read package.json` and keeps
-failing until you delete that directory. The failure message says nothing about
-the cache, so it reads as a bad publish when it is purely local.
+After the publish workflow succeeds and npm has propagated the exact version,
+repeat the same protocol check with the registry artifact. A local tarball is a
+candidate check only; it cannot prove that npm serves the published bytes.
 
-When the check passes, delete `../gtm-verify`. Then run `git status` in the
-repository before you walk away: it should be clean. If `package.json` or
-`package-lock.json` come back modified, the install went to the wrong directory
-and the warning above tells you how to undo it.
+### Native PowerShell 5.1
+
+Set `$version` to the exact version that was published, then run from the
+repository root:
+
+```powershell
+$version = 'X.Y.Z'
+$repoRoot = (Get-Location).Path
+$scratch = Join-Path ([System.IO.Path]::GetTempPath()) ('gtm-registry-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $scratch | Out-Null
+$env:npm_config_cache = Join-Path $scratch 'npm-cache'
+$registryVersion = npm.cmd view "google-tools-mcp@$version" version --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $registryVersion -ne $version) { throw 'npm registry does not yet report the expected version.' }
+
+try {
+    Push-Location $scratch
+    npm.cmd init -y
+    if ($LASTEXITCODE -ne 0) { throw 'npm init failed.' }
+    npm.cmd install --omit=dev "google-tools-mcp@$version"
+    if ($LASTEXITCODE -ne 0) { throw 'registry install failed.' }
+    $installedVersion = node -p "require(process.argv[1]).version" (Join-Path $scratch 'node_modules\google-tools-mcp\package.json')
+    if ($installedVersion -ne $version) { throw 'installed package version does not match the published version.' }
+    node (Join-Path $repoRoot 'scripts\probe-candidate.mjs') --entry (Join-Path $scratch 'node_modules\google-tools-mcp\dist\index.js') --expected-version $installedVersion
+    if ($LASTEXITCODE -ne 0) { throw 'published MCP protocol probe failed.' }
+}
+finally {
+    Pop-Location
+    Remove-Item -LiteralPath $scratch -Recurse -Force
+}
+```
+
+### Bash
+
+Set `version` to the exact version that was published, then run from the
+repository root:
+
+```bash
+set -euo pipefail
+version='X.Y.Z'
+repo_root="$(pwd)"
+# See the candidate recipe above for why Node creates this portable scratch path.
+scratch="$(node -e "const fs=require('node:fs'); const os=require('node:os'); const path=require('node:path'); process.stdout.write(fs.mkdtempSync(path.join(os.tmpdir(), 'gtm-registry-')))")"
+# Invoke npm's JavaScript entrypoint on Windows to avoid .cmd quoting problems
+# when Node is installed under Program Files. Use normal npm on Unix.
+if command -v npm.cmd >/dev/null 2>&1; then
+    npm_cli="$(node -e "const p=require('node:path'); process.stdout.write(p.join(p.dirname(process.argv[1]), 'node_modules/npm/bin/npm-cli.js'))" "$(command -v npm.cmd)")"
+    npm_run() { node "$npm_cli" "$@"; }
+else
+    npm_run() { command npm "$@"; }
+fi
+export npm_config_cache="$scratch/npm-cache"
+test "$(npm_run view "google-tools-mcp@$version" version)" = "$version"
+cleanup() {
+    node -e "require('node:fs').rmSync(process.argv[1], { recursive: true, force: true })" "$scratch"
+}
+trap cleanup EXIT
+
+(
+    cd "$scratch"
+    npm_run init -y >/dev/null
+    npm_run install --omit=dev "google-tools-mcp@$version"
+    test "$(node -p "require(process.argv[1]).version" "$scratch/node_modules/google-tools-mcp/package.json")" = "$version"
+    node "$repo_root/scripts/probe-candidate.mjs" --entry "$scratch/node_modules/google-tools-mcp/dist/index.js" --expected-version "$version"
+)
+```
+
+Both registry recipes assert the requested version before the protocol probe;
+repeat the `npm view` step if propagation has not completed. Run `git status`
+after candidate verification to confirm the release worktree stayed clean.
