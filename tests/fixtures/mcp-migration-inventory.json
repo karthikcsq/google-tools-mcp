@@ -555,6 +555,9 @@
     ],
     "tests": [
       {
+        "file": "tests/agentTestAuth.test.js"
+      },
+      {
         "file": "tests/agentTestIntegration.test.js"
       },
       {

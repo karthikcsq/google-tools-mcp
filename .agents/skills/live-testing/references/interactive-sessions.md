@@ -37,6 +37,10 @@ npm run agent-test -- finish --session <manifest> --outcome pass|fail|blocked --
 
 The manifest is the session handle. Use `status` to learn the session's fixture folder, workspace, and backend limitations. Treat the manifest as sensitive operational state: it may hold the local broker credential. Do not copy its token, credentials, or raw environment into a brief, report, issue, or PR. If `finish` cannot reach the broker, use the controller's recovery guidance and report the cleanup state rather than killing processes by name.
 
+Live startup refreshes saved OAuth credentials only in memory through a non-interactive auth adapter. Missing scopes, malformed credentials, revoked tokens, and unusable refresh results fail without deleting or rewriting the shared token or opening an OAuth browser/callback server. Repair authentication outside the broker and start a new session. Service-account fallback is not used by this harness.
+
+Startup cancellation is cooperative so Windows cannot terminate the broker halfway through cleanup. If cancellation cannot finish, treat startup as blocked, inspect the reported startup-error and journal paths, and retain any recorded owned folder id for recovery. Do not claim cleanup succeeded or remove that folder while an operation may still be running.
+
 On PowerShell, use `@request.json` for every `call`; do not pass inline JSON. Other shells may accept inline JSON, but file-backed payloads are the portable form used in these instructions.
 
 ## Fresh tester rules

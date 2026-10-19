@@ -67,6 +67,7 @@ async function start(options) {
         reportFile: path.join(runDir, 'report.json'),
         journalFile: path.join(runDir, 'journal.jsonl'),
         startupErrorFile: path.join(runDir, 'startup-error.json'),
+        startupOwnershipFile: path.join(runDir, 'startup-ownership.json'),
     };
     if (backend === 'live') {
         const { getTokenPath } = await import('../dist/auth.js');
@@ -81,19 +82,32 @@ async function start(options) {
     let child;
     try {
         child = spawn(process.execPath, [BROKER, '--config', config.configFile], {
-            cwd: path.resolve(HERE, '..'), detached: true, stdio: 'ignore', windowsHide: true,
+            cwd: path.resolve(HERE, '..'), detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true,
         });
     } catch (error) { throw new Error(`agent-test broker could not be spawned: ${error.message}`); }
     child.unref();
+    child.channel?.unref?.();
     let spawnFailure = null;
     child.once('error', (error) => { spawnFailure = error; });
-    const stopOwnedStartupBroker = async () => {
-        if (!child || child.exitCode !== null) return;
-        try { child.kill('SIGTERM'); } catch { return; }
-        await new Promise((resolve) => {
-            const timer = setTimeout(resolve, 2_000);
-            child.once('exit', () => { clearTimeout(timer); resolve(); });
+    const requestStartupCancellation = async () => {
+        if (!child || child.exitCode !== null || !child.connected) return false;
+        return new Promise((resolve) => {
+            child.send({ type: 'cancel-startup' }, (error) => resolve(!error));
         });
+    };
+    const readOwnership = async () => {
+        try { return await readPrivateJson(config.startupOwnershipFile); } catch { return null; }
+    };
+    const waitForStartupTerminal = async (deadline) => {
+        while (Date.now() < deadline) {
+            try {
+                const failure = await readPrivateJson(config.startupErrorFile);
+                return { kind: 'failure', failure };
+            } catch {}
+            if (child.exitCode !== null) return { kind: 'exit' };
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        return { kind: 'pending' };
     };
     const until = Date.now() + 30_000;
     while (Date.now() < until) {
@@ -104,8 +118,7 @@ async function start(options) {
         } catch {}
         try {
             const failure = await readPrivateJson(config.startupErrorFile);
-            await stopOwnedStartupBroker();
-            throw new Error(`agent-test could not start: ${failure.error}`);
+            throw new Error(`agent-test could not start: ${failure.error}. Inspect ${config.startupErrorFile}, ${config.startupOwnershipFile}, and ${config.journalFile} for cleanup status and recovery evidence.`);
         } catch (error) {
             if (!/unsafe session file|ENOENT/.test(String(error?.message || error))) {
                 if (String(error?.message || error).startsWith('agent-test could not start:')) throw error;
@@ -113,8 +126,14 @@ async function start(options) {
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    await stopOwnedStartupBroker();
-    throw new Error(`agent-test broker did not become ready. Its owned startup process was stopped. Inspect ${config.startupErrorFile} and ${config.journalFile}; no unrelated process was touched.`);
+    const cancellationSent = await requestStartupCancellation();
+    const terminal = await waitForStartupTerminal(Date.now() + 10_000);
+    if (terminal.kind === 'failure') {
+        throw new Error(`agent-test broker did not become ready and recorded startup failure and cleanup status: ${terminal.failure.error}. Inspect ${config.startupErrorFile}, ${config.startupOwnershipFile}, and ${config.journalFile}.`);
+    }
+    const ownership = await readOwnership();
+    const owned = ownership?.folderId ? ` Its recoverable live child folder is ${ownership.folderId} under ${ownership.rootFolderId}.` : '';
+    throw new Error(`agent-test broker did not become ready. ${cancellationSent ? 'Cooperative startup cancellation was requested' : 'The broker IPC channel was unavailable'} but it has not produced terminal cleanup evidence, so it was not forcibly terminated.${owned} Inspect ${config.startupErrorFile}, ${config.startupOwnershipFile}, and ${config.journalFile}; no unrelated process was touched.`);
 }
 
 async function control(session, body) {

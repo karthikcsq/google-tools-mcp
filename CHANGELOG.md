@@ -32,6 +32,13 @@ tools through persistent MCP sessions and report usability failures.
 - A repo-local `live-testing` skill owns the goal-driven tester workflow and
   regression-runner instructions, with links from the former documentation.
 
+### Fixed
+
+- Failed or cancelled agent-test startup closes partial transports and retains
+  owned-folder IDs and cleanup evidence, including persistence/cleanup failures.
+- Live agent-test validates saved OAuth credentials without browser authentication
+  or modifying shared tokens; unusable credentials fail with recovery guidance.
+
 ## [3.4.6] - 2026-09-05
 
 PR [#148](https://github.com/karthikcsq/google-tools-mcp/pull/148) by

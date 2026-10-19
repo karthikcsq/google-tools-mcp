@@ -9,6 +9,7 @@ import { cleanupResources, makeRecorder } from '../scripts/agent-testing/instrum
 
 let temporary = null;
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const brokerPath = path.join(repositoryRoot, 'scripts', 'agent-testing', 'broker.mjs');
 
 function runNode(file) {
     return new Promise((resolve, reject) => {
@@ -23,6 +24,52 @@ function runNode(file) {
         child.once('error', (error) => { clearTimeout(timer); reject(error); });
         child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout, stderr }); });
     });
+}
+
+function startBroker(configFile, { entrypoint = brokerPath, env = process.env } = {}) {
+    const child = spawn(process.execPath, [entrypoint, '--config', configFile], {
+        cwd: repositoryRoot, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const exited = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, 15_000);
+        child.once('error', (error) => { clearTimeout(timer); reject(error); });
+        child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout, stderr }); });
+    });
+    return { child, exited };
+}
+
+async function waitForFile(file, timeoutMs = 10_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (await fs.stat(file).then(() => true).catch(() => false)) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`Timed out waiting for ${file}`);
+}
+
+async function makeBrokerConfig({ startupFault, startupPauseAt, backend = 'offline', extra = {} } = {}) {
+    temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'google-tools-mcp-agent-startup-'));
+    const workspaceDir = path.join(temporary, 'workspace');
+    const config = {
+        runId: 'startup-fault-test', backend, transport: 'http', goal: 'startup ownership test',
+        workspaceDir, folderId: 'agent_test_root', controlToken: 'control-test-token', nativeToken: 'native-test-token',
+        sessionTimeoutMs: 30_000, callTimeoutMs: 5_000, startupDeadlineAt: Date.now() + 20_000,
+        manifestFile: path.join(temporary, 'session.json'), configFile: path.join(temporary, 'broker-config.json'),
+        reportFile: path.join(temporary, 'report.json'), journalFile: path.join(temporary, 'journal.jsonl'),
+        startupErrorFile: path.join(temporary, 'startup-error.json'), startupOwnershipFile: path.join(temporary, 'startup-ownership.json'),
+        ...(startupFault ? { startupFault } : {}),
+        ...(startupPauseAt ? { startupPauseAt, startupPauseFile: path.join(temporary, 'startup-paused.json') } : {}),
+        ...extra,
+    };
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(config.configFile, JSON.stringify(config), 'utf8');
+    return config;
 }
 
 afterEach(async () => {
@@ -163,5 +210,77 @@ describe('agent-test runtime accounting', () => {
         const probe = JSON.parse(result.stdout.slice(marker + '__PROBE__'.length));
         expect(probe).toMatchObject({ insideChild: true, outsideRejected: true, remaining: [] });
         expect(probe.cleaned).toEqual(expect.arrayContaining([expect.any(String)]));
+    }, 30_000);
+
+    test.each(['after-transport', 'after-native-listen', 'after-control-listen', 'before-manifest', 'after-session-ready-journal'])('cleans partial offline startup surfaces after an injected %s failure', async (startupFault) => {
+        const config = await makeBrokerConfig({ startupFault });
+        const { exited } = startBroker(config.configFile);
+        const result = await exited;
+        expect(result).toMatchObject({ code: 1, signal: null });
+        expect(await fs.stat(config.manifestFile).then(() => true).catch(() => false)).toBe(false);
+        const failure = JSON.parse(await fs.readFile(config.startupErrorFile, 'utf8'));
+        expect(failure).toMatchObject({ phase: startupFault, partialRuntimeClosed: true, cleanup: { remaining: [] } });
+        expect(await fs.readFile(config.journalFile, 'utf8')).toContain('startup-failure');
+    }, 30_000);
+
+    test('honors IPC cancellation before ready and records cleanup evidence', async () => {
+        const config = await makeBrokerConfig({ startupPauseAt: 'before-manifest' });
+        const { child, exited } = startBroker(config.configFile);
+        await waitForFile(config.startupPauseFile);
+        await new Promise((resolve, reject) => child.send({ type: 'cancel-startup' }, (error) => error ? reject(error) : resolve()));
+        const result = await exited;
+        expect(result).toMatchObject({ code: 1, signal: null });
+        expect(await fs.stat(config.manifestFile).then(() => true).catch(() => false)).toBe(false);
+        const failure = JSON.parse(await fs.readFile(config.startupErrorFile, 'utf8'));
+        expect(failure).toMatchObject({
+            phase: 'before-manifest', cancelled: 'controller requested cooperative startup cancellation',
+            partialRuntimeClosed: true, cleanup: { remaining: [] },
+        });
+    }, 30_000);
+
+    test.each(['ownership-double-failure', 'factory-failure'])('retains live child ownership evidence after %s', async (fault) => {
+        const config = await makeBrokerConfig({
+            backend: 'live',
+            extra: fault === 'ownership-double-failure'
+                ? { startupOwnershipFault: 'after-child-created', startupCleanupFault: 'child-trash' }
+                : { startupFactoryFault: true },
+        });
+        const bootstrap = path.join(temporary, 'offline-live-broker.mjs');
+        await fs.writeFile(bootstrap, `
+            import { installOfflineBackend } from ${JSON.stringify(pathToFileURL(path.join(repositoryRoot, 'scripts/agent-testing/offline.mjs')).href)};
+            await installOfflineBackend({ folderId: 'agent_test_root', workspaceDir: ${JSON.stringify(config.workspaceDir)} });
+            await import(${JSON.stringify(pathToFileURL(brokerPath).href)});
+        `, 'utf8');
+        const { exited } = startBroker(config.configFile, { entrypoint: bootstrap });
+        const result = await exited;
+        expect(result).toMatchObject({ code: 1, signal: null });
+        const failure = JSON.parse(await fs.readFile(config.startupErrorFile, 'utf8'));
+        expect(failure.ownedResource).toMatchObject({ id: expect.any(String), kind: 'drive', rootFolderId: 'agent_test_root' });
+        if (fault === 'factory-failure') {
+            expect(failure.cleanup).toMatchObject({ remaining: [], cleaned: [failure.ownedResource.id] });
+            return;
+        }
+        expect(failure.cleanup).toMatchObject({
+            remaining: [failure.ownedResource.id],
+            errors: [expect.objectContaining({ id: failure.ownedResource.id })],
+        });
+        const ownership = JSON.parse(await fs.readFile(config.startupOwnershipFile, 'utf8'));
+        expect(ownership).toMatchObject({ folderId: failure.ownedResource.id, rootFolderId: 'agent_test_root', state: 'cleanup-incomplete' });
+    }, 30_000);
+    test('detached live startup rejects stale credentials without changing the shared token', async () => {
+        const config = await makeBrokerConfig({ backend: 'live' });
+        const configHome = path.join(temporary, 'config');
+        const tokenPath = path.join(configHome, 'google-tools-mcp', 'token.json');
+        await fs.mkdir(path.dirname(tokenPath), { recursive: true });
+        const stale = JSON.stringify({ type: 'authorized_user', refresh_token: 'stale-test-token', scopes: [] });
+        await fs.writeFile(tokenPath, stale);
+        const { exited } = startBroker(config.configFile, {
+            env: { ...process.env, XDG_CONFIG_HOME: configHome, GOOGLE_MCP_PROFILE: '' },
+        });
+        expect(await exited).toMatchObject({ code: 1, signal: null });
+        expect(await fs.readFile(tokenPath, 'utf8')).toBe(stale);
+        expect(await fs.stat(config.manifestFile).then(() => true).catch(() => false)).toBe(false);
+        const failure = JSON.parse(await fs.readFile(config.startupErrorFile, 'utf8'));
+        expect(failure.error).toContain('outside the test broker');
     }, 30_000);
 });

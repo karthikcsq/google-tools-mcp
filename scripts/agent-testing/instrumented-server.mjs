@@ -5,7 +5,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { classifyCreation } from '../live-smoke/createdResource.mjs';
-import { appendJsonl, isInside, redact, resultErrorText, resultIsError } from './common.mjs';
+import { appendJsonl, isInside, redact, resultErrorText, resultIsError, writePrivateJson } from './common.mjs';
 
 const BLOCKED_TOOL_NAMES = new Map([
     ['sendMessage', 'agent-test never sends email.'],
@@ -128,6 +128,7 @@ async function prepareBackend(config) {
         throw new Error('Refusing live agent-test: configured test folder is missing, not writable, trashed, or not a Drive folder.');
     }
     let folderId = null;
+    let ownership = null;
     try {
         const child = await drive.files.create({
             requestBody: {
@@ -140,6 +141,22 @@ async function prepareBackend(config) {
         if (!folderId || child.data.mimeType !== 'application/vnd.google-apps.folder') {
             throw new Error('Refusing live agent-test: could not create its dedicated child test folder.');
         }
+        ownership = {
+            runId: config.runId,
+            backend: 'live',
+            rootFolderId,
+            folderId,
+            createdAt: new Date().toISOString(),
+            state: 'created',
+        };
+        if (config.startupOwnershipFault === 'after-child-created') {
+            throw new Error('Injected startup ownership persistence failure after child creation.');
+        }
+        // This must be durable before imports, tool registration, or transport
+        // startup can fail. It gives a controller enough information to audit
+        // and recover a child folder even if this process is forcibly lost.
+        if (config.startupOwnershipFile) await writePrivateJson(config.startupOwnershipFile, ownership);
+        await appendJsonl(config.journalFile, { kind: 'startup-owned-resource', ...ownership });
         const guard = createGuard({ folderId });
         await guard.ensureInstrumented();
         const { getGmailClient } = await import('../../dist/clients.js');
@@ -152,8 +169,37 @@ async function prepareBackend(config) {
             backend: { backend: 'live', limitations: [...LIVE_LIMITATIONS], accountVerified: Boolean(accountFingerprint), accountFingerprint },
             getStatus: () => null, guard, folderId, rootFolderId, sessionRootResource: { id: folderId, kind: 'drive', tool: 'agent-test-session-folder' },
         };
-    } catch (error) {
-        if (folderId) await drive.files.update({ fileId: folderId, requestBody: { trashed: true }, supportsAllDrives: true }).catch(() => {});
+    } catch (caught) {
+        const error = new Error(String(caught?.message || caught), { cause: caught });
+        if (folderId) {
+            const cleanup = { attempted: 1, cleaned: [], remaining: [], errors: [] };
+            try {
+                if (config.startupCleanupFault === 'child-trash') {
+                    throw new Error('Injected child-folder cleanup failure.');
+                }
+                await drive.files.update({ fileId: folderId, requestBody: { trashed: true }, supportsAllDrives: true });
+                try {
+                    const after = await drive.files.get({ fileId: folderId, fields: 'id,trashed', supportsAllDrives: true });
+                    if (!after?.data?.trashed) throw new Error('Drive did not confirm startup child cleanup.');
+                } catch (failure) { if (!isNotFound(failure)) throw failure; }
+                cleanup.cleaned.push(folderId);
+            } catch (cleanupFailure) {
+                cleanup.remaining.push(folderId);
+                cleanup.errors.push({ id: folderId, error: String(cleanupFailure?.message || cleanupFailure) });
+            }
+            // If the durable ownership files were the operation that failed,
+            // this thrown detail is the broker's final path to record exactly
+            // which child exists and whether cleanup proved it is gone.
+            error.agentTestStartupOwnership = {
+                runId: config.runId,
+                backend: 'live',
+                rootFolderId,
+                folderId,
+                state: cleanup.remaining.length ? 'cleanup-incomplete' : 'cleaned',
+                cleanup,
+                ...(ownership?.createdAt ? { createdAt: ownership.createdAt } : {}),
+            };
+        }
         throw error;
     }
 }
@@ -314,6 +360,7 @@ export async function createInstrumentedFactory(config) {
     const backendState = await prepareBackend(config);
     const recorder = makeRecorder(config, backendState);
     try {
+        if (config.startupFactoryFault) throw new Error('Injected factory initialization failure.');
         const { prepareMcpServerFactory } = await import('../../dist/mcpServer.js');
         const { registerAllTools } = await import('../../dist/tools/index.js');
         const factory = await prepareMcpServerFactory({
@@ -324,8 +371,24 @@ export async function createInstrumentedFactory(config) {
             }),
         });
         return { factory, backendState, recorder };
-    } catch (error) {
-        await cleanupResources({ backendState, recorder });
+    } catch (caught) {
+        const error = new Error(String(caught?.message || caught), { cause: caught });
+        let cleanup = null;
+        let cleanupError = null;
+        try { cleanup = await cleanupResources({ backendState, recorder }); }
+        catch (failure) { cleanupError = String(failure?.message || failure); }
+        if (backendState.sessionRootResource) {
+            error.agentTestStartupOwnership = {
+                folderId: backendState.folderId, rootFolderId: backendState.rootFolderId, cleanup, cleanupError,
+            };
+        }
+        if (config.startupOwnershipFile && backendState.sessionRootResource) {
+            await writePrivateJson(config.startupOwnershipFile, {
+                runId: config.runId, backend: config.backend, rootFolderId: backendState.rootFolderId,
+                folderId: backendState.folderId, state: 'factory-failed', cleanup, cleanupError,
+                updatedAt: new Date().toISOString(),
+            }).catch(() => {});
+        }
         throw error;
     }
 }
