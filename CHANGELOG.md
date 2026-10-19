@@ -38,6 +38,30 @@ following PR [#172](https://github.com/karthikcsq/google-tools-mcp/pull/172).
   including successor observations, and expose chart specifications in
   `getSpreadsheetInfo` so callers can inspect the state authorizing a mutation.
 
+## [3.4.7] - 2026-09-07
+
+PR [#173](https://github.com/karthikcsq/google-tools-mcp/pull/173) by
+[@ElliotDrel](https://github.com/ElliotDrel): agents can test this worktree's
+tools through persistent MCP sessions and report usability failures.
+
+### Added
+
+- `npm run agent-test` starts isolated stdio or HTTP test sessions with live
+  Google APIs or a limited, stateful offline backend. Reports retain tool
+  failures, tester friction, code identity, and cleanup results.
+- A repo-local `live-testing` skill owns the goal-driven tester workflow and
+  regression-runner instructions, with links from the former documentation.
+
+### Fixed
+
+- Failed or cancelled agent-test startup closes partial transports and retains
+  owned-folder IDs and cleanup evidence, including persistence/cleanup failures.
+- Live agent-test validates saved OAuth credentials without browser authentication
+  or modifying shared tokens; unusable credentials fail with recovery guidance.
+
+- Legacy aliases receive canonical safety checks and creation tracking, so draft aliases cannot bypass cleanup accounting.
+- Offline Sheets rejects unsupported USER_ENTERED strings before mutation; explicit RAW values remain literal.
+
 ## [3.4.6] - 2026-09-05
 
 PR [#148](https://github.com/karthikcsq/google-tools-mcp/pull/148) by

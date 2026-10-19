@@ -11,6 +11,8 @@ npx -y google-tools-mcp setup
 ## Contents
 
 - [Quick Start](#quick-start)
+- [Production OAuth setup](docs/production-oauth.md)
+- [Privacy policy](PRIVACY.md)
 - [Tool Categories](#tool-categories)
 - [Common Workflows](docs/workflows.md)
 - [Local Working Copies](#local-working-copies)
@@ -23,7 +25,7 @@ npx -y google-tools-mcp setup
 
 - **One command to install.** No cloning repos, no building from source, no Docker. Just `npx -y google-tools-mcp setup` and it works.
 - **One login for everything.** A single OAuth flow gives you Drive, Docs, Sheets, Gmail, Calendar, Forms, Slides, and Tasks. No juggling multiple tokens or servers.
-- **Auth that stays out of your way.** No browser popup until your first tool call. After that, your token is saved and you won't be asked again.
+- **Saved authorization.** No browser popup until your first tool call. The token is saved for reuse; [production OAuth setup](docs/production-oauth.md) avoids Testing's seven-day expiry. Revocation or permission changes can still require consent again.
 - **Read anything in your Drive.** PDFs, Word docs (.docx), spreadsheets — your AI agent can read them directly. No extra setup.
 - **160 tools, zero config.** Every tool is available the moment the server starts. Send emails, create Docs and Slides, manage Tasks and calendar events, build forms, search places — it's all there.
 - **Switch between Google accounts.** Set a profile name and keep work and personal accounts completely separate.
@@ -48,6 +50,8 @@ The wizard walks you through:
 4. Authenticating with Google
 
 The setup wizard can add the MCP server to Codex or Claude Code automatically when their CLIs are installed. You can also add it manually later (see [Step 3](#step-3-add-to-your-mcp-client) below).
+
+For ongoing use without weekly Google consent, follow [Production OAuth setup](docs/production-oauth.md). It covers publishing status, homepage and privacy-policy URLs, and when Google verification is required.
 
 ### Manual Setup
 
