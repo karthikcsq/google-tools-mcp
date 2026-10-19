@@ -341,17 +341,32 @@ function scalarValue(value) {
     return value.errorValue ? `#${value.errorValue.type ?? 'ERROR'}` : null;
 }
 
-function displayRange(captured, valueRenderOption) {
-    const rows = captured.rows.map((row) => row.map((cell) => {
-        if (valueRenderOption === 'FORMATTED_VALUE') return cell.formatted ?? '';
-        if (valueRenderOption === 'FORMULA') return scalarValue(cell.entered) ?? scalarValue(cell.effective) ?? '';
-        return scalarValue(cell.effective) ?? '';
-    }).map((value) => value === '' ? null : value));
+function trimDisplayRows(rows) {
     while (rows.length > 0 && rows[rows.length - 1].every((value) => value === null)) rows.pop();
     return rows.map((row) => {
         while (row.length > 0 && row[row.length - 1] === null) row.pop();
         return row.map((value) => value ?? '');
     });
+}
+
+function displayRange(captured, valueRenderOption) {
+    const values = trimDisplayRows(captured.rows.map((row) => row.map((cell) => {
+        if (valueRenderOption === 'FORMATTED_VALUE') return cell.formatted ?? '';
+        if (valueRenderOption === 'FORMULA') return scalarValue(cell.entered) ?? scalarValue(cell.effective) ?? '';
+        return scalarValue(cell.effective) ?? '';
+    }).map((value) => value === '' ? null : value)));
+    // The fingerprint always includes the user-entered and formula state. Show
+    // those bounded projections on every value read/successor as well, so a
+    // caller never receives authority based on a formula it could not inspect.
+    const enteredValues = trimDisplayRows(captured.rows.map((row) => row.map((cell) => {
+        const value = scalarValue(cell.entered);
+        return value === null || value === '' ? null : value;
+    })));
+    const formulas = trimDisplayRows(captured.rows.map((row) => row.map((cell) => {
+        const value = cell?.entered?.formulaValue;
+        return typeof value === 'string' && value.length > 0 ? value : null;
+    })));
+    return { values, enteredValues, formulas };
 }
 
 /** Fetch the Drive version plus value/formula/sheet-identity state for bounded ranges. */
@@ -400,7 +415,7 @@ export async function readSheetsValueBaseline({ drive, sheets, spreadsheetId, ra
             cell.entered === null && cell.effective === null && cell.formatted === null))),
         displayRanges: capturedRanges.map((entry, index) => ({
             range: canonical[index].canonical,
-            values: displayRange(entry, valueRenderOption),
+            ...displayRange(entry, valueRenderOption),
         })),
     };
 }
@@ -503,7 +518,11 @@ export async function readSheetsStructureBaseline({ drive, sheets, spreadsheetId
     return {
         version,
         fingerprint: hash({ kind: SHEETS_STRUCTURE_KIND, structure }),
-        metadata: { kind: SHEETS_STRUCTURE_KIND, structure },
+        // Structural writes recompute this full fingerprint immediately before
+        // the request and use the freshly observed `sheets` for object lookup.
+        // Retaining the entire structure in handle metadata adds no authority
+        // and would make an ordinary large workbook exceed a private budget.
+        metadata: { kind: SHEETS_STRUCTURE_KIND },
         sheets: sheetList,
         title: metadataResponse.title,
         observedStructure,

@@ -72,7 +72,10 @@ HTTP has no session, so **read state is never carried between HTTP requests**.
   transport, including modern stdio.** `readSpreadsheet` returns one after it
   reads Drive version, sheet identity, values, and formulas for an explicit
   bounded A1 range. Pass `ranges: [...]` to read several bounded areas for one
-  later `batchWrite`. Named ranges, whole rows, and whole columns remain
+  later `batchWrite` (up to 32 ranges). Value reads and successor observations
+  include `values`, `enteredValues`, and `formulas`, so display formatting never
+  hides the formula state checked by the mutation guard.
+  Named ranges, whole rows, and whole columns remain
   read-only compatible, but intentionally return no write authority.
 - **`writeSpreadsheet`, `batchWrite`, and `clearRange` may change only cells
   inside the captured ranges.** The actual output rectangle comes from the
@@ -82,7 +85,8 @@ HTTP has no session, so **read state is never carried between HTTP requests**.
   both text output and `structuredContent.observedResourceState`.
 - **`getSpreadsheetInfo` returns a separate structure handle.** It observes
   sheet identity, grid, hidden state, chart identity/specification, and table
-  identity/range. It authorizes `deleteSheet`, `deleteColumns`, `deleteChart`,
+  identity/range. The response includes each chart's full `spec` as well as
+  its ID and position. It authorizes `deleteSheet`, `deleteColumns`, `deleteChart`,
   and `deleteTable` when table data is preserved; it never authorizes a value
   write. `deleteTable(deleteData: true)` requires a bounded `readSpreadsheet`
   value handle that contains the table's actual data range.

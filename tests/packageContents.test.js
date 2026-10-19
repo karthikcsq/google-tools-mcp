@@ -57,7 +57,13 @@ describe('npm package tarball contents', () => {
                 env: { ...process.env, npm_config_cache: cache },
             });
             expect(result.status).toBe(0);
-            const [manifest] = JSON.parse(result.stdout);
+            // npm 12 keys pack results by package name; earlier releases return
+            // an array. Keep checking the actual tarball under either shape.
+            const packed = JSON.parse(result.stdout);
+            const manifests = Array.isArray(packed) ? packed : Object.values(packed);
+            expect(manifests).toHaveLength(1);
+            const [manifest] = manifests;
+            expect(Array.isArray(manifest.files)).toBe(true);
             files = manifest.files.map(({ path }) => path);
         }
         finally {

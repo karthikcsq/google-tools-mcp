@@ -208,9 +208,25 @@ function normalizeBinding(input) {
     });
 }
 
-function normalizeResource(input) {
+function assertHandleInputSafety(input, limits, label) {
+    // Resource identity/workspace fields have their own fixed envelope bounds.
+    // Metadata budgets apply to metadata itself, independent of its nesting in
+    // an initial or successor input. Both scans still reject raw credentials.
+    const { metadata, ...envelope } = input;
+    assertNoRawCredentialMaterial(envelope, label);
+    if (metadata !== undefined && metadata !== null) {
+        assertNoRawCredentialMaterial(metadata, `${label} metadata`, {
+            maxDepth: limits.maxMetadataDepth,
+            maxNodes: limits.maxMetadataNodes,
+            maxStringBytes: limits.maxMetadataStringBytes,
+            maxTotalBytes: limits.maxMetadataTotalBytes,
+        });
+    }
+}
+
+function normalizeResource(input, limits) {
     assertAllowedKeys(input, HANDLE_INPUT_KEYS, 'read handle input');
-    assertNoRawCredentialMaterial(input, 'read handle input');
+    assertHandleInputSafety(input, limits, 'read handle input');
     const resourceKind = requireBoundedString(input.resourceKind, 'resourceKind', 16);
     if (!RESOURCE_KINDS.has(resourceKind)) {
         throw new TypeError('resourceKind must be docs, sheets, or drive.');
@@ -251,10 +267,10 @@ function normalizeResource(input) {
         metadata: input.metadata === undefined || input.metadata === null
             ? null
             : cloneBoundedMetadata(input.metadata, {
-                maxMetadataDepth: 6,
-                maxMetadataNodes: 64,
-                maxMetadataStringBytes: 4096,
-                maxMetadataTotalBytes: 16384,
+                maxMetadataDepth: limits.maxMetadataDepth,
+                maxMetadataNodes: limits.maxMetadataNodes,
+                maxMetadataStringBytes: limits.maxMetadataStringBytes,
+                maxMetadataTotalBytes: limits.maxMetadataTotalBytes,
             }, 'read handle metadata'),
     });
 }
@@ -409,10 +425,13 @@ export function createReadHandleStore({
     maxActiveHandles = DEFAULT_MAX_ACTIVE_HANDLES,
     maxTerminalTombstones = DEFAULT_MAX_TERMINAL_TOMBSTONES,
     maxRetainedDirtyWorkspaces = DEFAULT_MAX_RETAINED_DIRTY_WORKSPACES,
-    maxMetadataDepth = 6,
-    maxMetadataNodes = 64,
+    maxMetadataDepth = 10,
+    // 32 bounded Sheets ranges contain roughly 225 primitive/object nodes;
+    // eight structural sheets with complete chart/table descriptors also need
+    // more than the old accidental 64-node ceiling. 512 remains finite.
+    maxMetadataNodes = 512,
     maxMetadataStringBytes = 4096,
-    maxMetadataTotalBytes = 16384,
+    maxMetadataTotalBytes = 65536,
     binding = null,
 } = {}) {
     if (typeof clock !== 'function') throw new TypeError('clock must be a function.');
@@ -616,7 +635,7 @@ export function createReadHandleStore({
                         ? null
                         : cloneBoundedMetadata(input.metadata, limits, 'read handle metadata')),
             }
-            : normalizeResource(input);
+            : normalizeResource(input, limits);
         if (predecessor && resource.version !== null && typeof resource.version !== 'string' &&
             (!Number.isSafeInteger(resource.version) || resource.version < 0)) {
             throw new TypeError('version must be a non-empty string or non-negative safe integer when provided.');
@@ -691,7 +710,7 @@ export function createReadHandleStore({
 
     function issue(input, options = {}) {
         if (!input || typeof input !== 'object') throw new TypeError('read handle input must be an object.');
-        assertNoRawCredentialMaterial(input, 'read handle input');
+        assertHandleInputSafety(input, limits, 'read handle input');
         requireOpenStore();
         const context = contextFor(options);
         assertConfiguredBinding(context);
@@ -833,7 +852,7 @@ export function createReadHandleStore({
         if (!successorInput || typeof successorInput !== 'object') {
             throw new TypeError('successor input must be an object.');
         }
-        assertNoRawCredentialMaterial(successorInput, 'successor input');
+        assertHandleInputSafety(successorInput, limits, 'successor input');
         for (const immutableKey of [
             'resourceKind', 'resourceId', 'scope', 'tabId',
             'principalFingerprint', 'profile', 'epoch',

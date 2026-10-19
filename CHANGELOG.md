@@ -18,6 +18,26 @@ came from. Planning notes under `docs/plans/` and `.planning/` are not logged.
 The 2.0.0 entry predates this convention and collapses thirteen pull requests
 into one release.
 
+## [3.4.8] - 2026-10-19
+
+Resource-handle review corrections by [@ElliotDrel](https://github.com/ElliotDrel),
+following PR [#172](https://github.com/karthikcsq/google-tools-mcp/pull/172).
+
+### Fixed
+
+- Apply bounded metadata budgets consistently when issuing and advancing read
+  handles, supporting all 32 bounded Sheets ranges without a hidden smaller
+  credential-scan ceiling. Credential rejection and finite limits remain enforced.
+- Preserve caller-submitted range names in single- and multi-range read results
+  while still exposing captured values, entered values, and formulas.
+- Accept both npm 12 object and earlier array pack manifests in the package
+  content gate, preserving all runtime-only tarball checks.
+- Keep large workbook structure handles compact while retaining the complete
+  fingerprint and freshly checking structural state before mutations.
+- Return user-entered values and formulas alongside displayed Sheets values,
+  including successor observations, and expose chart specifications in
+  `getSpreadsheetInfo` so callers can inspect the state authorizing a mutation.
+
 ## [3.4.6] - 2026-09-05
 
 PR [#148](https://github.com/karthikcsq/google-tools-mcp/pull/148) by
