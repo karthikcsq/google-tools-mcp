@@ -277,4 +277,22 @@ describe('agent-test CLI integration', () => {
             if (ownedSessions.has(session.manifestPath)) await finish(session, 'blocked', 'Test cleanup.');
         }
     }, 120_000);
+    test('cleans a created spreadsheet when unsupported optional initialization rejects the call', async () => {
+        const session = await startSession('stdio', 'Unsupported initialization ownership');
+        try {
+            const created = await call(session, 'createSpreadsheet', {
+                title: 'Rejected string initialization', parentFolderId: session.manifest.folderId,
+                initialData: [['=1+1']],
+            });
+            expect(created.result.code).toBe(1);
+            expect(created.body.result.isError).toBe(true);
+            const report = await finish(session, 'blocked', 'String interpretation is unsupported offline.');
+            expect(report.body.verdict.strictPass).toBe(false);
+            expect(report.body.totals.offlineUnsupported).toBe(1);
+            expect(report.body.cleanup.remaining).toEqual([]);
+            expect(report.body.cleanup.cleaned).toHaveLength(1);
+        } finally {
+            if (ownedSessions.has(session.manifestPath)) await finish(session, 'blocked', 'Regression cleanup.');
+        }
+    }, 120_000);
 });

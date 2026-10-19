@@ -289,15 +289,17 @@ export function makeRecorder(config, backendState) {
                     }
                     const creation = classifyCreation(definition.canonicalName || definition.name, toolText(result));
                     const after = backendState.getStatus?.();
-                    if (config.backend === 'offline' && offlineUnsupported(before, after)) {
-                        throw publicError('This operation is unavailable in the offline agent-test backend. It is blocked/inconclusive rather than a successful test result.');
-                    }
                     if (creation && !creation.id) {
                         state.untrackedCreations.push({ tool: definition.name });
                         throw publicError(`${definition.name} created a resource without an extractable id, so agent-test cannot prove cleanup.`);
                     }
                     if (creation?.id && !state.resources.some((item) => item.id === creation.id)) {
                         state.resources.push({ ...creation, tool: definition.name });
+                    }
+                    // A tool may return an owned file even when optional initialization
+                    // hit an unsupported API. Retain ownership before rejecting its verdict.
+                    if (config.backend === 'offline' && offlineUnsupported(before, after)) {
+                        throw publicError('This operation is unavailable in the offline agent-test backend. It is blocked/inconclusive rather than a successful test result.');
                     }
                     await record({ source: 'server-execute', tool: definition.name, args, outcome: 'ok', durationMs: Date.now() - started });
                     return result;
