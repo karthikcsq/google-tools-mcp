@@ -95,7 +95,9 @@ HTTP has no session, so **read state is never carried between HTTP requests**.
   `formatCells`, `setDropdownValidation`, or the destination range of
   `copyFormatting`, because each replaces that current state. Whole rows,
   whole columns, and named ranges remain readable without a handle but cannot
-  authorize one of these mutations.
+  authorize one of these mutations. Direct legacy `formatCells` callers retain
+  tracker-guarded whole-row and whole-column formatting; modern callers must
+  read and format an explicit bounded cell range.
 - **Creation/copy seeding remains bounded.** An empty newly-created spreadsheet
   verifies and seeds its actual default grid (up to 100,000 cells), so an
   ordinary multi-cell first write is covered. A copied spreadsheet remains

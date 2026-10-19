@@ -1497,7 +1497,7 @@
       },
       {
         "file": "dist/tools/sheets/formatCells.js",
-        "line": 8,
+        "line": 9,
         "match": ".addTool({"
       },
       {

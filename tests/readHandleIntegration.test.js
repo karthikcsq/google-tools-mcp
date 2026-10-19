@@ -777,6 +777,12 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
                 cell: 'A1',
                 userEnteredFormat: { padding: { top: 7, bottom: 3, left: 2, right: 2 } },
             });
+            const unbounded = await call(handler, 'formatCells', {
+                spreadsheetId: 'format-sheet', range: '1:1', bold: true, readHandle: read.readHandle,
+            });
+            expect(unbounded.isError).toBe(true);
+            expect(textOf(unbounded)).toMatch(/bounded A1/);
+            expect(batchUpdate).not.toHaveBeenCalled();
             bold = true;
             const write = await call(handler, 'formatCells', {
                 spreadsheetId: 'format-sheet', range: 'A1', bold: false, readHandle: read.readHandle,

@@ -18,6 +18,7 @@ const { register: registerDeleteChart } = await import('../dist/tools/sheets/del
 const { register: registerDeleteColumns } = await import('../dist/tools/sheets/deleteColumns.js');
 const { register: registerDeleteTable } = await import('../dist/tools/sheets/deleteTable.js');
 const { register: registerCopyFormatting } = await import('../dist/tools/sheets/copyFormatting.js');
+const { register: registerFormatCells } = await import('../dist/tools/sheets/formatCells.js');
 
 const log = { info() {}, error() {}, warn() {}, debug() {} };
 
@@ -54,6 +55,19 @@ beforeEach(() => {
 });
 
 describe('legacy Sheets lease metadata adapters', () => {
+    it.each([
+        ['1:1', { sheetId: 0, startRowIndex: 0, endRowIndex: 1 }, 'endColumnIndex'],
+        ['A:A', { sheetId: 0, startColumnIndex: 0, endColumnIndex: 1 }, 'endRowIndex'],
+    ])('preserves direct legacy formatting for %s after a tracker read', async (range, expectedRange, absentBound) => {
+        const spreadsheetId = `legacy-format-${range}-${Date.now()}-${Math.random()}`;
+        trackRead(spreadsheetId, null);
+        const tool = serverFor(registerFormatCells).get('formatCells');
+        await expect(tool.execute({ spreadsheetId, range, bold: true }, { log })).resolves.toContain('Successfully applied formatting');
+        const request = fakeSheets.spreadsheets.batchUpdate.mock.calls[0][0].requestBody.requests[0];
+        expect(request.repeatCell.range).toEqual(expectedRange);
+        expect(request.repeatCell.range).not.toHaveProperty(absentBound);
+    });
+
     it.each([
         ['deleteSheet', registerDeleteSheet, { sheetId: 1 }],
         ['deleteChart', registerDeleteChart, { chartId: 17 }],

@@ -66,6 +66,31 @@ export async function run(ctx) {
         ctx.assertMatch(textOf(stale), /changed|read again|authorize/i,
             'Stale Sheets handle returned an unrelated error.');
 
+        const formatRead = await http.call('readCellFormat', { spreadsheetId: spreadsheet.id, range });
+        const formatHandle = assertOk(ctx, formatRead, 'HTTP format baseline');
+        const unboundedFormat = await http.call('formatCells', {
+            spreadsheetId: spreadsheet.id, range: '1:1', bold: true, readHandle: formatHandle,
+        });
+        ctx.assert(unboundedFormat.isError === true, 'Modern formatting accepted an unbounded row.');
+        ctx.assertMatch(textOf(unboundedFormat), /bounded A1/i, 'Unbounded modern formatting returned an unrelated failure.');
+        const formatted = await http.call('formatCells', {
+            spreadsheetId: spreadsheet.id, range, bold: true, readHandle: formatHandle,
+        });
+        assertOk(ctx, formatted, 'HTTP bounded formatting');
+        const formatAfter = await http.call('readCellFormat', { spreadsheetId: spreadsheet.id, range });
+        assertOk(ctx, formatAfter, 'HTTP format readback');
+        const visibleFormat = JSON.parse(formatAfter.content[0].text);
+        ctx.assert(visibleFormat.cells.some((cell) => cell.userEnteredFormat?.textFormat?.bold === true), 'Bold formatting was absent from Google readback.');
+
+        // Direct legacy callers keep their tracker-based whole-axis behavior.
+        await ctx.call('readCellFormat', { spreadsheetId: spreadsheet.id, range });
+        await ctx.call('formatCells', { spreadsheetId: spreadsheet.id, range: '1:1', bold: false });
+        const rowReadback = JSON.parse(await ctx.call('readCellFormat', { spreadsheetId: spreadsheet.id, range }));
+        ctx.assert(rowReadback.cells.some((cell) => cell.cell === 'B1' && cell.userEnteredFormat?.textFormat?.bold === false), 'Legacy whole-row formatting did not reach Google.');
+        await ctx.call('formatCells', { spreadsheetId: spreadsheet.id, range: 'A:A', italic: true });
+        const legacyReadback = JSON.parse(await ctx.call('readCellFormat', { spreadsheetId: spreadsheet.id, range: 'A1' }));
+        ctx.assert(legacyReadback.cells.some((cell) => cell.userEnteredFormat?.textFormat?.italic === true), 'Legacy whole-column formatting did not reach Google.');
+
         // getFileInfo carries the observed metadata baseline. Rename through
         // the guard first, then the original HTTP handle must reject. A fresh
         // metadata handle is the only authority that can trash this owned doc.

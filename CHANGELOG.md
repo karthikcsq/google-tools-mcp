@@ -36,6 +36,8 @@ resource-safety slice; it does not yet switch installation or transport defaults
 
 ### Fixed
 
+- Preserve whole-row/column formatting for direct legacy callers, while modern
+  formatting continues to require a bounded readCellFormat handle.
 - Integrate the merged offline tester with explicit Sheets/Drive handles and
   scalar grid observations, retaining its refusal of unsupported Google behavior.
 
