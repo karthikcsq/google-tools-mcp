@@ -768,6 +768,9 @@
         "file": "tests/offlineAgentBackend.test.js"
       },
       {
+        "file": "tests/offlineSheetsInput.test.js"
+      },
+      {
         "file": "tests/packageContents.test.js"
       },
       {

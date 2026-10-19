@@ -32,6 +32,8 @@ function toolText(result) {
 }
 
 function toolIsBlocked(definition) {
+    const name = definition.canonicalName || definition.name;
+    definition = { ...definition, name };
     if (BLOCKED_TOOL_NAMES.has(definition.name)) return BLOCKED_TOOL_NAMES.get(definition.name);
     if (definition.name.startsWith('maps')) return 'agent-test blocks Maps because its client performs independent network fetches outside the Drive-folder guard.';
     if (['uploadFile', 'downloadFile'].includes(definition.name)) return 'agent-test blocks local file transfer tools until their localPath boundary has a dedicated no-symlink implementation.';
@@ -285,7 +287,7 @@ export function makeRecorder(config, backendState) {
                     if (backendState.guard && backendState.guard.denialCount > guardDenialsBefore) {
                         throw publicError(backendState.guard.lastDenial?.reason || 'agent-test guard refused this operation.');
                     }
-                    const creation = classifyCreation(definition.name, toolText(result));
+                    const creation = classifyCreation(definition.canonicalName || definition.name, toolText(result));
                     const after = backendState.getStatus?.();
                     if (config.backend === 'offline' && offlineUnsupported(before, after)) {
                         throw publicError('This operation is unavailable in the offline agent-test backend. It is blocked/inconclusive rather than a successful test result.');
@@ -363,10 +365,13 @@ export async function createInstrumentedFactory(config) {
         if (config.startupFactoryFault) throw new Error('Injected factory initialization failure.');
         const { prepareMcpServerFactory } = await import('../../dist/mcpServer.js');
         const { registerAllTools } = await import('../../dist/tools/index.js');
+        const { PURE_RENAMES, CONSOLIDATED_ALIASES } = await import('../../dist/tools/legacyAliases.js');
         const factory = await prepareMcpServerFactory({
             registerTools: async (server) => registerAllTools({
                 addTool(definition) {
-                    server.addTool({ ...definition, execute: (args, context) => recorder.execute(definition, args, context) });
+                    const canonicalName = PURE_RENAMES[definition.name] || CONSOLIDATED_ALIASES[definition.name]?.target || definition.name;
+                    const instrumented = { ...definition, canonicalName };
+                    server.addTool({ ...definition, execute: (args, context) => recorder.execute(instrumented, args, context) });
                 },
             }),
         });

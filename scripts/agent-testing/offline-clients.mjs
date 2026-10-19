@@ -11,7 +11,7 @@ export const OFFLINE_LIMITATIONS = Object.freeze([
     'Data is process-local and is discarded when the Node process exits.',
     'Drive writes are confined to the configured offline folder and its descendants.',
     'Docs supports plain-text body edits only; tabs, rich formatting, images, tables, comments, and templates are unsupported.',
-    'Sheets supports a single plain-value grid and basic A1 reads and writes; formatting, charts, formulas, and multi-sheet operations are unsupported.',
+    'Sheets supports one plain-value grid with RAW string writes and native number/boolean writes. USER_ENTERED strings, formulas, formatting, charts, and multi-sheet operations are unsupported.',
     'Gmail only supports users.getProfile. Calendar, Forms, Slides, Tasks, Apps Script, and other Gmail operations are unavailable offline.',
 ]);
 
@@ -573,6 +573,16 @@ class OfflineDocsDocuments {
     }
 }
 
+function assertSupportedSheetInput(params, method) {
+    const option = params.valueInputOption || 'USER_ENTERED';
+    if (!['RAW', 'USER_ENTERED'].includes(option)) throw unsupported(method, 'requires RAW or USER_ENTERED input.');
+    // USER_ENTERED parses strings using Google's formula/locale rules. A
+    // literal fake write would claim behavior we did not actually test.
+    if (option === 'USER_ENTERED' && params.requestBody.values.some((row) => row.some((value) => typeof value === 'string'))) {
+        throw unsupported(method, 'cannot interpret USER_ENTERED strings (formulas, dates, or locale-dependent values). Use RAW for literal strings or test against live Google.');
+    }
+}
+
 class OfflineSheetsValues {
     async get(params = {}) {
         return operation('sheets.spreadsheets.values.get', () => {
@@ -595,6 +605,7 @@ class OfflineSheetsValues {
             if (!Array.isArray(body.values) || body.values.some((row) => !Array.isArray(row))) {
                 throw apiError(400, 'Offline Sheets update requires requestBody.values as a two-dimensional array.', 'INVALID_ARGUMENT');
             }
+            assertSupportedSheetInput(params, 'sheets.spreadsheets.values.update');
             const { parsed, sheet } = resolveSheet(file, params.range);
             body.values.forEach((row, rowOffset) => {
                 const targetRow = parsed.startRow + rowOffset;
@@ -615,6 +626,7 @@ class OfflineSheetsValues {
             assertObject(body, 'sheets.spreadsheets.values.append');
             if (!Array.isArray(body.values) || body.values.some((row) => !Array.isArray(row))) throw apiError(400, 'Offline Sheets append requires a two-dimensional values array.', 'INVALID_ARGUMENT');
             const { parsed, sheet } = resolveSheet(file, params.range);
+            assertSupportedSheetInput(params, 'sheets.spreadsheets.values.append');
             const firstOpenRow = Math.max(parsed.startRow, sheet.values.length);
             body.values.forEach((row, rowOffset) => {
                 const targetRow = firstOpenRow + rowOffset;

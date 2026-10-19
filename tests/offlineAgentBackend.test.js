@@ -152,12 +152,12 @@ describe('offline agent backend', () => {
         expect(cleanup.action).toBe('trashed');
 
         const spreadsheet = jsonToolResult(await client.callTool('createSpreadsheet', {
-            title: 'Numbers', parentFolderId: folder.id, initialData: [['item', 'count']],
+            title: 'Numbers', parentFolderId: folder.id,
         }));
         const write = await client.callTool('writeSpreadsheet', {
-            spreadsheetId: spreadsheet.id, range: 'A2:B2', values: [['widgets', 2]],
+            spreadsheetId: spreadsheet.id, range: 'A1:B2', values: [['item', 'count'], ['widgets', 2]], valueInputOption: 'RAW',
         });
-        expect(toolText(write)).toContain('Successfully wrote 2 cells');
+        expect(toolText(write)).toContain('Successfully wrote 4 cells');
         const sheet = await client.callTool('readSpreadsheet', {
             spreadsheetId: spreadsheet.id, range: 'A1:B2',
         });
@@ -175,4 +175,16 @@ describe('offline agent backend', () => {
         expect(toolText(unavailable)).toMatch(/unavailable in the offline agent-test backend/i);
         expect(stderr).not.toMatch(/Google authentication required|Unable to read config file/i);
     }, 35_000);
+    test('refuses USER_ENTERED formulas through the real MCP tool without changing cells', async () => {
+        const sheet = jsonToolResult(await client.callTool('createSpreadsheet', {
+            title: 'Formula refusal', parentFolderId: 'agent_test_root',
+        }));
+        const failed = await client.callTool('writeSpreadsheet', {
+            spreadsheetId: sheet.id, range: 'A1', values: [['=1+1']], valueInputOption: 'USER_ENTERED',
+        });
+        expect(failed.result.isError).toBe(true);
+        expect(toolText(failed)).toMatch(/unavailable in the offline agent-test backend/i);
+        const read = await client.callTool('readSpreadsheet', { spreadsheetId: sheet.id, range: 'A1' });
+        expect(JSON.parse(toolText(read)).values).toEqual([]);
+    });
 });

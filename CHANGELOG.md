@@ -39,6 +39,9 @@ tools through persistent MCP sessions and report usability failures.
 - Live agent-test validates saved OAuth credentials without browser authentication
   or modifying shared tokens; unusable credentials fail with recovery guidance.
 
+- Legacy aliases receive canonical safety checks and creation tracking, so draft aliases cannot bypass cleanup accounting.
+- Offline Sheets rejects unsupported USER_ENTERED strings before mutation; explicit RAW values remain literal.
+
 ## [3.4.6] - 2026-09-05
 
 PR [#148](https://github.com/karthikcsq/google-tools-mcp/pull/148) by

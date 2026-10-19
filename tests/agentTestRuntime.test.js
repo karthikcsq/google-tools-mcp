@@ -283,4 +283,49 @@ describe('agent-test runtime accounting', () => {
         const failure = JSON.parse(await fs.readFile(config.startupErrorFile, 'utf8'));
         expect(failure.error).toContain('outside the test broker');
     }, 30_000);
+    test('tracks and cleans legacy draft creation through the actual MCP factory', async () => {
+        temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-legacy-draft-'));
+        const childFile = path.join(temporary, 'alias-probe.mjs');
+        const url = (relative) => pathToFileURL(path.join(repositoryRoot, relative)).href;
+        await fs.writeFile(childFile, `
+            import { PassThrough } from 'node:stream';
+            import { installOfflineBackend } from ${JSON.stringify(url('scripts/agent-testing/offline.mjs'))};
+            await installOfflineBackend({ folderId: 'agent_test_root', workspaceDir: ${JSON.stringify(temporary)} });
+            process.env.GOOGLE_MCP_ENABLE_LEGACY_ALIASES = 'true';
+            const { getGmailClient } = await import(${JSON.stringify(url('dist/clients.js'))});
+            const gmail = await getGmailClient();
+            const drafts = new Set();
+            let sends = 0;
+            gmail.users.drafts = {
+                create: async () => { drafts.add('owned-draft'); return { data: { id: 'owned-draft' } }; },
+                delete: async ({ id }) => { drafts.delete(id); return { data: {} }; },
+                send: async () => { sends++; return { data: {} }; },
+            };
+            const { createInstrumentedFactory, cleanupResources } = await import(${JSON.stringify(url('scripts/agent-testing/instrumented-server.mjs'))});
+            const { startV2Stdio } = await import(${JSON.stringify(url('dist/mcpServer.js'))});
+            const { StdioRpcClient } = await import(${JSON.stringify(url('scripts/agent-testing/stdio-client.mjs'))});
+            const { factory, backendState, recorder } = await createInstrumentedFactory({
+                backend: 'live', folderId: 'agent_test_root', workspaceDir: ${JSON.stringify(temporary)},
+                journalFile: ${JSON.stringify(path.join(temporary, 'journal.jsonl'))}, runId: 'alias-regression',
+            });
+            const input = new PassThrough();
+            const output = new PassThrough();
+            const runtime = startV2Stdio(factory, { input, output });
+            const client = new StdioRpcClient({ stdin: input, stdout: output, once() {} }, { timeoutMs: 5000 });
+            await client.discover();
+            const created = await client.callTool('create_draft', { raw: 'dGVzdA' });
+            if (created.error || created.result?.isError) throw new Error(JSON.stringify(created));
+            const tracked = recorder.state.resources.some((item) => item.kind === 'draft' && item.id === 'owned-draft');
+            const denied = await client.callTool('send_draft', { id: 'owned-draft' });
+            const cleanup = await cleanupResources({ backendState, recorder });
+            await runtime.close();
+            process.stdout.write('__PROBE__' + JSON.stringify({ tracked, remainingDrafts: drafts.size, sends,
+                sendBlocked: Boolean(denied.error || denied.result?.isError), cleanup }));
+        `, 'utf8');
+        const result = await runNode(childFile);
+        if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+        const probe = JSON.parse(result.stdout.slice(result.stdout.lastIndexOf('__PROBE__') + '__PROBE__'.length));
+        expect(probe).toMatchObject({ tracked: true, remainingDrafts: 0, sends: 0, sendBlocked: true, cleanup: { remaining: [] } });
+        expect(probe.cleanup.cleaned).toContain('owned-draft');
+    }, 30_000);
 });

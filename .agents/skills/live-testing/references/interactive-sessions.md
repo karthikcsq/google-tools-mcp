@@ -51,7 +51,7 @@ Every failure, confusing schema, guess, retry, workaround, or unexpected error i
 
 ## Backend boundary
 
-`offline` is a stateful, limited Docs/Drive/Sheets fixture. It proves the MCP session and supported flows without network or Google credentials. An operation outside its supported surface returns `blocked` or inconclusive and cannot make the session pass.
+`offline` is a stateful, limited Docs/Drive/Sheets fixture. It proves the MCP session and supported flows without network or Google credentials. Use explicit `valueInputOption: "RAW"` for offline Sheets strings, including formula-looking literals. USER_ENTERED string parsing is unsupported; it is rejected before mutation. Create offline spreadsheets without string `initialData`, then write literal values with RAW. Native numeric/boolean values do not require string interpretation. An operation outside its supported surface returns `blocked` or inconclusive and cannot make the session pass.
 
 `live` requires an existing saved project OAuth token. It also requires `GOOGLE_MCP_TEST_FOLDER_ID` or `start --folder-id <id>`, then creates an isolated child folder for the run. It preserves the existing in-server guards for every client connection and cleans only owned resources. The test broker blocks Maps, `uploadFile`, `downloadFile`, `insertImage`, `addPermission`, `updatePermission`, and `removePermission`, along with mail, authentication, feedback, browser-opening, and other configured side effects. Existing read-only service restrictions remain in force. Live success is evidence for the exercised flow, not a claim that every registered tool works E2E.
 
