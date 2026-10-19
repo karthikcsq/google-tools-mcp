@@ -703,7 +703,12 @@ export function createReadHandleStore({
 
     function issue(input, options = {}) {
         if (!input || typeof input !== 'object') throw new TypeError('read handle input must be an object.');
-        assertNoRawCredentialMaterial(input, 'read handle input');
+        assertNoRawCredentialMaterial(input, 'read handle input', {
+            maxDepth: limits.maxMetadataDepth,
+            maxNodes: limits.maxMetadataNodes,
+            maxStringBytes: limits.maxMetadataStringBytes,
+            maxTotalBytes: limits.maxMetadataTotalBytes,
+        });
         requireOpenStore();
         const context = contextFor(options);
         assertConfiguredBinding(context);
@@ -845,7 +850,12 @@ export function createReadHandleStore({
         if (!successorInput || typeof successorInput !== 'object') {
             throw new TypeError('successor input must be an object.');
         }
-        assertNoRawCredentialMaterial(successorInput, 'successor input');
+        assertNoRawCredentialMaterial(successorInput, 'successor input', {
+            maxDepth: limits.maxMetadataDepth,
+            maxNodes: limits.maxMetadataNodes,
+            maxStringBytes: limits.maxMetadataStringBytes,
+            maxTotalBytes: limits.maxMetadataTotalBytes,
+        });
         for (const immutableKey of [
             'resourceKind', 'resourceId', 'scope', 'tabId',
             'principalFingerprint', 'profile', 'epoch',
