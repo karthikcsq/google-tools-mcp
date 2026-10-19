@@ -80,7 +80,7 @@ describe('request context and read-handle core', () => {
     it('uses configured metadata budgets for issuance and successor credential scans', () => {
         const context = httpContext();
         const store = createReadHandleStore({ maxMetadataNodes: 512 });
-        const metadata = { observations: Array.from({ length: 300 }, (_, index) => index) };
+        const metadata = { observations: Array.from({ length: 507 }, (_, index) => index) };
         const issued = store.issue(handleInput({ metadata, workspace: null }), { context });
         const lease = store.beginMutation(issued.readHandle, { context });
         const successor = store.completeSuccess(lease.operationId, { metadata }, { context });
@@ -90,6 +90,18 @@ describe('request context and read-handle core', () => {
             .toThrow(/node limit/);
         expect(() => store.issue(handleInput({ metadata: { access_token: 'private-value' } }), { context }))
             .toThrow(/raw credential field/);
+    });
+
+    it('measures metadata depth independently of the handle envelope', () => {
+        const context = httpContext();
+        const store = createReadHandleStore({ maxMetadataDepth: 2 });
+        const metadata = { observations: [0] };
+        const issued = store.issue(handleInput({ metadata, workspace: null }), { context });
+        const lease = store.beginMutation(issued.readHandle, { context });
+        const successor = store.completeSuccess(lease.operationId, { metadata }, { context });
+        expect(store.getInternalMetadata(successor.readHandle, { context })).toEqual(metadata);
+        expect(() => store.issue(handleInput({ metadata: { observations: [[0]] }, workspace: null }), { context }))
+            .toThrow(/depth limit/);
     });
 
     it('uses canonical HMAC-SHA256 fingerprints and requires a 32-byte HMAC key override', () => {

@@ -208,18 +208,25 @@ function normalizeBinding(input) {
     });
 }
 
+function assertHandleInputSafety(input, limits, label) {
+    // Resource identity/workspace fields have their own fixed envelope bounds.
+    // Metadata budgets apply to metadata itself, independent of its nesting in
+    // an initial or successor input. Both scans still reject raw credentials.
+    const { metadata, ...envelope } = input;
+    assertNoRawCredentialMaterial(envelope, label);
+    if (metadata !== undefined && metadata !== null) {
+        assertNoRawCredentialMaterial(metadata, `${label} metadata`, {
+            maxDepth: limits.maxMetadataDepth,
+            maxNodes: limits.maxMetadataNodes,
+            maxStringBytes: limits.maxMetadataStringBytes,
+            maxTotalBytes: limits.maxMetadataTotalBytes,
+        });
+    }
+}
+
 function normalizeResource(input, limits) {
     assertAllowedKeys(input, HANDLE_INPUT_KEYS, 'read handle input');
-    // The resource adapter has already bounded its documented maximum ranges
-    // and structural objects. Apply the store's one budget consistently here,
-    // rather than a smaller hidden preflight ceiling that rejects valid
-    // credentials before `cloneBoundedMetadata` receives the configured limit.
-    assertNoRawCredentialMaterial(input, 'read handle input', {
-        maxDepth: limits.maxMetadataDepth,
-        maxNodes: limits.maxMetadataNodes,
-        maxStringBytes: limits.maxMetadataStringBytes,
-        maxTotalBytes: limits.maxMetadataTotalBytes,
-    });
+    assertHandleInputSafety(input, limits, 'read handle input');
     const resourceKind = requireBoundedString(input.resourceKind, 'resourceKind', 16);
     if (!RESOURCE_KINDS.has(resourceKind)) {
         throw new TypeError('resourceKind must be docs, sheets, or drive.');
@@ -703,12 +710,7 @@ export function createReadHandleStore({
 
     function issue(input, options = {}) {
         if (!input || typeof input !== 'object') throw new TypeError('read handle input must be an object.');
-        assertNoRawCredentialMaterial(input, 'read handle input', {
-            maxDepth: limits.maxMetadataDepth,
-            maxNodes: limits.maxMetadataNodes,
-            maxStringBytes: limits.maxMetadataStringBytes,
-            maxTotalBytes: limits.maxMetadataTotalBytes,
-        });
+        assertHandleInputSafety(input, limits, 'read handle input');
         requireOpenStore();
         const context = contextFor(options);
         assertConfiguredBinding(context);
@@ -850,12 +852,7 @@ export function createReadHandleStore({
         if (!successorInput || typeof successorInput !== 'object') {
             throw new TypeError('successor input must be an object.');
         }
-        assertNoRawCredentialMaterial(successorInput, 'successor input', {
-            maxDepth: limits.maxMetadataDepth,
-            maxNodes: limits.maxMetadataNodes,
-            maxStringBytes: limits.maxMetadataStringBytes,
-            maxTotalBytes: limits.maxMetadataTotalBytes,
-        });
+        assertHandleInputSafety(successorInput, limits, 'successor input');
         for (const immutableKey of [
             'resourceKind', 'resourceId', 'scope', 'tabId',
             'principalFingerprint', 'profile', 'epoch',
