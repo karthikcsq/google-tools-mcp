@@ -28,6 +28,8 @@ following PR [#172](https://github.com/karthikcsq/google-tools-mcp/pull/172).
 - Apply bounded metadata budgets consistently when issuing and advancing read
   handles, supporting all 32 bounded Sheets ranges without a hidden smaller
   credential-scan ceiling. Credential rejection and finite limits remain enforced.
+- Preserve caller-submitted range names in single- and multi-range read results
+  while still exposing captured values, entered values, and formulas.
 - Accept both npm 12 object and earlier array pack manifests in the package
   content gate, preserving all runtime-only tarball checks.
 - Keep large workbook structure handles compact while retaining the complete

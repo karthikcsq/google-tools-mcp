@@ -616,6 +616,7 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
         try {
             const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'formula-sheet', range: 'A1' });
             const observedRead = JSON.parse(textOf(read));
+            expect(observedRead.range).toBe('A1');
             expect(observedRead.values).toEqual([['1']]);
             expect(observedRead.enteredValues).toEqual([['=1']]);
             expect(observedRead.formulas).toEqual([['=1']]);
@@ -651,7 +652,7 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
             const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'max-ranges', ranges });
             expect(read.isError).toBeFalsy();
             expect(read.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
-            expect(JSON.parse(textOf(read)).ranges).toHaveLength(32);
+            expect(JSON.parse(textOf(read)).ranges.map((entry) => entry.range)).toEqual(ranges);
 
             const write = await call(handler, 'writeSpreadsheet', {
                 spreadsheetId: 'max-ranges', range: 'Sheet1!A1', values: [['written']], readHandle: read.readHandle,

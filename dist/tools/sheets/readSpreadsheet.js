@@ -59,10 +59,10 @@ export function register(server) {
                 trackRead(args.spreadsheetId);
                 await mintSheetsReadHandle(args.spreadsheetId, baseline);
                 if (args.range) {
-                    return JSON.stringify({ range: args.range, ...baseline.displayRanges[0] }, null, 2);
+                    return JSON.stringify({ ...baseline.displayRanges[0], range: args.range }, null, 2);
                 }
                 return JSON.stringify({
-                    ranges: ranges.map((range, index) => ({ range, ...baseline.displayRanges[index] })),
+                    ranges: ranges.map((range, index) => ({ ...baseline.displayRanges[index], range })),
                 }, null, 2);
             }
             catch (error) {
