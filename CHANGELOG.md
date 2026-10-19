@@ -36,6 +36,8 @@ resource-safety slice; it does not yet switch installation or transport defaults
 
 ### Fixed
 
+- Force-terminate and reap packed-candidate probes that ignore EOF/SIGTERM,
+  with bounded cleanup so a broken candidate cannot hang the release gate.
 - Preserve whole-row/column formatting for direct legacy callers, while modern
   formatting continues to require a bounded readCellFormat handle.
 - Integrate the merged offline tester with explicit Sheets/Drive handles and

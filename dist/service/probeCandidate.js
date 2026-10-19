@@ -48,27 +48,35 @@ function hasValidToolCatalog(tools) {
     );
 }
 
-function waitForChildExit(child, timeoutMs) {
-    if (child.exitCode !== null || child.signalCode) return Promise.resolve();
-    return new Promise((resolve) => {
-        const timer = setTimeout(resolve, timeoutMs);
-        child.once('close', () => {
-            clearTimeout(timer);
-            resolve();
-        });
-    });
+function waitForChildClose(closed, timeoutMs) {
+    let timer;
+    return Promise.race([
+        closed.then(() => true),
+        new Promise((resolve) => {
+            timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+    ]).finally(() => clearTimeout(timer));
 }
 
-async function stopDirectChild(child) {
+async function stopDirectChild(child, closed) {
     if (!child) return;
     if (child.stdin?.writable) child.stdin.end();
-    await waitForChildExit(child, 2_000);
-    if (child.exitCode === null && !child.signalCode) {
-        try {
-            child.kill('SIGTERM');
-        } catch {}
-        await waitForChildExit(child, 5_000);
-    }
+    if (await waitForChildClose(closed, 2_000)) return;
+    try {
+        child.kill('SIGTERM');
+    } catch {}
+    if (await waitForChildClose(closed, 5_000)) return;
+    try {
+        child.kill('SIGKILL');
+    } catch {}
+    if (await waitForChildClose(closed, 5_000)) return;
+    // Report failed cleanup without letting abandoned pipes keep the caller
+    // alive forever. Only the exact child created by this probe is signalled.
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.unref();
+    throw candidateError('candidate did not close after forced termination.');
 }
 
 /**
@@ -116,6 +124,7 @@ export async function probeStdioCandidate({
     });
 
     let child;
+    let closed;
     try {
         child = spawnImpl(nodePath, [path.resolve(entrypoint)], {
             cwd: isolatedConfigDir,
@@ -123,6 +132,8 @@ export async function probeStdioCandidate({
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
         });
+
+        closed = new Promise((resolve) => child.once('close', resolve));
 
         const result = await new Promise((resolve, reject) => {
             let buffer = '';
@@ -272,6 +283,6 @@ export async function probeStdioCandidate({
         });
         return result;
     } finally {
-        await stopDirectChild(child);
+        await stopDirectChild(child, closed);
     }
 }

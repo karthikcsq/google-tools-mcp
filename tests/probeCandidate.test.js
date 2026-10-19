@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -167,6 +168,97 @@ describe('packed candidate stdio probe', () => {
             await fs.rm(root, { recursive: true, force: true });
         }
     });
+
+    it('force-kills a candidate ignoring EOF and SIGTERM, and waits for close', async () => {
+        const root = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'google-tools-mcp-probe-stubborn-'),
+        );
+        const candidate = new FakeCandidate();
+        candidate.stdin.removeAllListeners('end');
+        const finishing = new Promise((resolve) =>
+            candidate.stdin.once('finish', resolve),
+        );
+        candidate.kill = jest.fn((signal) => {
+            if (signal === 'SIGKILL')
+                setTimeout(() => {
+                    candidate.signalCode = signal;
+                    candidate.emit('close', null, signal);
+                }, 25);
+            return true;
+        });
+        jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+        try {
+            let settled = false;
+            const probe = probeStdioCandidate({
+                entrypoint: path.join(root, 'index.js'),
+                configDir: path.join(root, 'config'),
+                spawnImpl: () => candidate,
+            }).then((result) => {
+                settled = true;
+                return result;
+            });
+            await finishing;
+            await jest.advanceTimersByTimeAsync(7000);
+            expect(candidate.kill.mock.calls.map(([signal]) => signal)).toEqual(
+                ['SIGTERM', 'SIGKILL'],
+            );
+            expect(settled).toBe(false);
+            await jest.advanceTimersByTimeAsync(25);
+            await expect(probe).resolves.toEqual({
+                healthy: true,
+                toolCount: 2,
+            });
+        } finally {
+            jest.useRealTimers();
+            await fs.rm(root, { recursive: true, force: true });
+        }
+    });
+
+    (process.platform === 'win32' ? it.skip : it)(
+        'reaps a real POSIX candidate that ignores EOF and SIGTERM',
+        async () => {
+            const root = await fs.mkdtemp(
+                path.join(os.tmpdir(), 'google-tools-mcp-probe-posix-'),
+            );
+            let child;
+            let closed;
+            try {
+                const entrypoint = path.join(root, 'stubborn.mjs');
+                await fs.writeFile(
+                    entrypoint,
+                    [
+                        "import { createInterface } from 'node:readline';",
+                        "process.on('SIGTERM', () => {});",
+                        'setInterval(() => {}, 1000);',
+                        "createInterface({ input: process.stdin }).on('line', (line) => {",
+                        'const request = JSON.parse(line);',
+                        `const result = request.id === 1 ? { supportedVersions: ['${CANDIDATE_PROTOCOL_VERSION}'] } : { tools: [{ name: 'probe' }] };`,
+                        "process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + String.fromCharCode(10));",
+                        '});',
+                    ].join('\n'),
+                );
+                const result = await probeStdioCandidate({
+                    entrypoint,
+                    configDir: path.join(root, 'config'),
+                    spawnImpl: (...args) => {
+                        child = spawn(...args);
+                        closed = new Promise((resolve) =>
+                            child.once('close', resolve),
+                        );
+                        return child;
+                    },
+                });
+                expect(result.healthy).toBe(true);
+                expect(child.signalCode).toBe('SIGKILL');
+                await closed;
+            } finally {
+                if (child && child.exitCode === null && !child.signalCode)
+                    child.kill('SIGKILL');
+                if (closed) await closed;
+                await fs.rm(root, { recursive: true, force: true });
+            }
+        },
+    );
 
     it('rejects an empty catalog and a discovery result that does not identify the expected version', async () => {
         const root = await fs.mkdtemp(
