@@ -1,6 +1,8 @@
 import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
+import { guardMutation } from '../../readTracker.js';
+import { beginSheetsStructureMutation, ResourceReadHandleParameter } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'deleteChart',
@@ -11,12 +13,22 @@ export function register(server) {
                 .string()
                 .describe('The spreadsheet ID — the long string between /d/ and /edit in a Google Sheets URL.'),
             chartId: z.number().int().describe('The numeric chart ID to delete.'),
+            readHandle: ResourceReadHandleParameter,
         }),
         execute: async (args, { log }) => {
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
             log.info(`Deleting chart ${args.chartId} from spreadsheet ${args.spreadsheetId}`);
             try {
-                await sheets.spreadsheets.batchUpdate({
+                const lease = await beginSheetsStructureMutation({
+                    spreadsheetId: args.spreadsheetId, readHandle: args.readHandle, drive, sheets,
+                    legacyGuard: () => guardMutation(args.spreadsheetId),
+                });
+                if (!lease.structure.some((sheet) => sheet.charts.some((chart) => chart.chartId === args.chartId))) {
+                    await lease.abort();
+                    throw new UserError('The requested chart is not present in the current spreadsheet structure. Call getSpreadsheetInfo again.');
+                }
+                await lease.write(() => sheets.spreadsheets.batchUpdate({
                     spreadsheetId: args.spreadsheetId,
                     requestBody: {
                         requests: [
@@ -27,7 +39,7 @@ export function register(server) {
                             },
                         ],
                     },
-                });
+                }));
                 const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
                 return `${sheetUrl}\nChart ${args.chartId} deleted successfully.`;
             }

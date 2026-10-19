@@ -1,11 +1,14 @@
-import { UserError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getSheetsClient } from '../../clients.js';
+import { UserError, wrapOperationError } from '../../errors.js';
+import { getDriveClient, getSheetsClient } from '../../clients.js';
 import * as SheetsHelpers from '../../googleSheetsApiHelpers.js';
+import { guardMutation } from '../../readTracker.js';
+import { isHandleRuntimeActive } from '../../handleRuntime.js';
+import { beginSheetsCellStateMutation, prepareSheetRangeTargets, ResourceReadHandleParameter } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'formatCells',
-        description: "Applies formatting to a range of cells in a spreadsheet. Supports bold, italic, font size, text color, background color, alignment, and number format. Use range '1:1' to format an entire header row, 'A:A' for an entire column, or 'A1:D1' for specific cells. Use numberFormat to control how values are displayed (e.g. as numbers, text, dates) or to clear a format by setting type to 'TEXT'.",
+        description: "Applies formatting to a range of cells in a spreadsheet. Supports bold, italic, font size, text color, background color, alignment, and number format. Modern runtimes require a bounded readCellFormat handle for the exact overwritten range. Use a bounded range such as 'A1:D1' for header cells. Direct legacy callers retain whole-row and whole-column formatting through the tracker fallback. Use numberFormat to control how values are displayed (e.g. as numbers, text, dates) or to clear a format by setting type to 'TEXT'.",
         parameters: z
             .object({
             spreadsheetId: z
@@ -13,7 +16,7 @@ export function register(server) {
                 .describe('The spreadsheet ID — the long string between /d/ and /edit in a Google Sheets URL.'),
             range: z
                 .string()
-                .describe('A1 notation range to format. Examples: "Sheet1!A1:D1", "1:1" (entire row 1), "A:A" (entire column A), "B2:E10".'),
+                .describe('Bounded A1 range to format, such as "Sheet1!A1:D1" or "B2:E10". Modern calls require a matching readCellFormat handle; unbounded rows/columns remain available only to direct legacy callers.'),
             bold: z.boolean().optional().describe('Apply bold text formatting.'),
             italic: z.boolean().optional().describe('Apply italic text formatting.'),
             fontSize: z.number().min(1).optional().describe('Font size in points.'),
@@ -47,6 +50,7 @@ export function register(server) {
             })
                 .optional()
                 .describe('Controls how cell values are displayed. Useful for clearing date formatting (set type to "TEXT") or applying a custom number pattern.'),
+            readHandle: ResourceReadHandleParameter,
         })
             .refine((data) => data.bold !== undefined ||
             data.italic !== undefined ||
@@ -72,8 +76,18 @@ export function register(server) {
         }),
         execute: async (args, { log }) => {
             const sheets = await getSheetsClient();
+            const drive = await getDriveClient();
+            let lease;
             log.info(`Formatting cells in range "${args.range}" of spreadsheet ${args.spreadsheetId}`);
             try {
+                const targets = isHandleRuntimeActive()
+                    ? await prepareSheetRangeTargets(sheets, args.spreadsheetId, [args.range])
+                    : null;
+                lease = await beginSheetsCellStateMutation({
+                    spreadsheetId: args.spreadsheetId, readHandle: args.readHandle, drive, sheets,
+                    targets,
+                    legacyGuard: () => guardMutation(args.spreadsheetId),
+                });
                 // Build the format object expected by the helper
                 const format = {};
                 if (args.backgroundColor) {
@@ -107,11 +121,12 @@ export function register(server) {
                 if (args.numberFormat) {
                     format.numberFormat = args.numberFormat;
                 }
-                await SheetsHelpers.formatCells(sheets, args.spreadsheetId, args.range, format);
+                await lease.write(() => SheetsHelpers.formatCells(sheets, args.spreadsheetId, args.range, format));
                 const sheetUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit`;
                 return `${sheetUrl}\nSuccessfully applied formatting to range "${args.range}".`;
             }
             catch (error) {
+                await lease?.abort();
                 log.error(`Error formatting cells: ${error.message || error}`);
                 if (error instanceof UserError)
                     throw error;

@@ -73,8 +73,16 @@ async function call(session, tool, args, expectedNegative) {
 async function eventuallyClosed(url) {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-        try { await fetch(url, { method: 'POST' }); }
-        catch { return; }
+        try {
+            // Consume the response and close the polling socket on Node 20 too.
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { connection: 'close' },
+            });
+            await response.arrayBuffer();
+        } catch {
+            return;
+        }
         await new Promise((resolve) => setTimeout(resolve, 50));
     }
     throw new Error('Owned agent-test broker remained reachable after finish.');

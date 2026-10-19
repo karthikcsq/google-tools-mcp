@@ -30,10 +30,10 @@ const WORKSPACE_KEYS = new Set([
 ]);
 const HANDLE_INPUT_KEYS = new Set([
     'resourceKind', 'resourceId', 'scope', 'tabId', 'revisionId',
-    'structuralFingerprint', 'version', 'workspace', 'ttlMs',
+    'structuralFingerprint', 'version', 'metadata', 'workspace', 'ttlMs',
 ]);
 const SUCCESSOR_INPUT_KEYS = new Set([
-    'revisionId', 'structuralFingerprint', 'version', 'workspace', 'ttlMs',
+    'revisionId', 'structuralFingerprint', 'version', 'metadata', 'workspace', 'ttlMs',
 ]);
 const BINDING_KEYS = new Set(['principalFingerprint', 'profile', 'epoch']);
 
@@ -208,9 +208,25 @@ function normalizeBinding(input) {
     });
 }
 
-function normalizeResource(input) {
+function assertHandleInputSafety(input, limits, label) {
+    // Resource identity/workspace fields have their own fixed envelope bounds.
+    // Metadata budgets apply to metadata itself, independent of its nesting in
+    // an initial or successor input. Both scans still reject raw credentials.
+    const { metadata, ...envelope } = input;
+    assertNoRawCredentialMaterial(envelope, label);
+    if (metadata !== undefined && metadata !== null) {
+        assertNoRawCredentialMaterial(metadata, `${label} metadata`, {
+            maxDepth: limits.maxMetadataDepth,
+            maxNodes: limits.maxMetadataNodes,
+            maxStringBytes: limits.maxMetadataStringBytes,
+            maxTotalBytes: limits.maxMetadataTotalBytes,
+        });
+    }
+}
+
+function normalizeResource(input, limits) {
     assertAllowedKeys(input, HANDLE_INPUT_KEYS, 'read handle input');
-    assertNoRawCredentialMaterial(input, 'read handle input');
+    assertHandleInputSafety(input, limits, 'read handle input');
     const resourceKind = requireBoundedString(input.resourceKind, 'resourceKind', 16);
     if (!RESOURCE_KINDS.has(resourceKind)) {
         throw new TypeError('resourceKind must be docs, sheets, or drive.');
@@ -245,6 +261,17 @@ function normalizeResource(input) {
         revisionId: requireOptionalString(input.revisionId, 'revisionId', 2048),
         structuralFingerprint: requireOptionalString(input.structuralFingerprint, 'structuralFingerprint', 4096),
         version,
+        // Resource adapters retain only bounded, non-secret hashes and scope
+        // descriptors here. This is deliberately internal: caller-facing handle
+        // records never expose a read's values, formulas, or other baseline.
+        metadata: input.metadata === undefined || input.metadata === null
+            ? null
+            : cloneBoundedMetadata(input.metadata, {
+                maxMetadataDepth: limits.maxMetadataDepth,
+                maxMetadataNodes: limits.maxMetadataNodes,
+                maxMetadataStringBytes: limits.maxMetadataStringBytes,
+                maxMetadataTotalBytes: limits.maxMetadataTotalBytes,
+            }, 'read handle metadata'),
     });
 }
 
@@ -398,10 +425,13 @@ export function createReadHandleStore({
     maxActiveHandles = DEFAULT_MAX_ACTIVE_HANDLES,
     maxTerminalTombstones = DEFAULT_MAX_TERMINAL_TOMBSTONES,
     maxRetainedDirtyWorkspaces = DEFAULT_MAX_RETAINED_DIRTY_WORKSPACES,
-    maxMetadataDepth = 6,
-    maxMetadataNodes = 64,
+    maxMetadataDepth = 10,
+    // 32 bounded Sheets ranges contain roughly 225 primitive/object nodes;
+    // eight structural sheets with complete chart/table descriptors also need
+    // more than the old accidental 64-node ceiling. 512 remains finite.
+    maxMetadataNodes = 512,
     maxMetadataStringBytes = 4096,
-    maxMetadataTotalBytes = 16384,
+    maxMetadataTotalBytes = 65536,
     binding = null,
 } = {}) {
     if (typeof clock !== 'function') throw new TypeError('clock must be a function.');
@@ -599,8 +629,13 @@ export function createReadHandleStore({
                     ? predecessor.structuralFingerprint
                     : requireOptionalString(input.structuralFingerprint, 'structuralFingerprint', 4096),
                 version: input.version === undefined ? predecessor.version : input.version,
+                metadata: input.metadata === undefined
+                    ? predecessor.metadata
+                    : (input.metadata === null
+                        ? null
+                        : cloneBoundedMetadata(input.metadata, limits, 'read handle metadata')),
             }
-            : normalizeResource(input);
+            : normalizeResource(input, limits);
         if (predecessor && resource.version !== null && typeof resource.version !== 'string' &&
             (!Number.isSafeInteger(resource.version) || resource.version < 0)) {
             throw new TypeError('version must be a non-empty string or non-negative safe integer when provided.');
@@ -675,7 +710,7 @@ export function createReadHandleStore({
 
     function issue(input, options = {}) {
         if (!input || typeof input !== 'object') throw new TypeError('read handle input must be an object.');
-        assertNoRawCredentialMaterial(input, 'read handle input');
+        assertHandleInputSafety(input, limits, 'read handle input');
         requireOpenStore();
         const context = contextFor(options);
         assertConfiguredBinding(context);
@@ -694,6 +729,15 @@ export function createReadHandleStore({
     function getInternalWorkspace(capability, options = {}) {
         const workspace = findRecord(capability, options, { allowReserved: true }).record.workspace;
         return workspace ? cloneBoundedMetadata(workspace, limits, 'workspace') : null;
+    }
+
+    /**
+     * Return the bounded adapter metadata for a validated handle. It is an
+     * internal integration seam, never part of the client record.
+     */
+    function getInternalMetadata(capability, options = {}) {
+        const metadata = findRecord(capability, options, { allowReserved: true }).record.metadata;
+        return metadata === null ? null : cloneBoundedMetadata(metadata, limits, 'read handle metadata');
     }
 
     function resolveImplicit(options = {}) {
@@ -808,7 +852,7 @@ export function createReadHandleStore({
         if (!successorInput || typeof successorInput !== 'object') {
             throw new TypeError('successor input must be an object.');
         }
-        assertNoRawCredentialMaterial(successorInput, 'successor input');
+        assertHandleInputSafety(successorInput, limits, 'successor input');
         for (const immutableKey of [
             'resourceKind', 'resourceId', 'scope', 'tabId',
             'principalFingerprint', 'profile', 'epoch',
@@ -836,6 +880,17 @@ export function createReadHandleStore({
         terminalize(record, 'READ_HANDLE_INVALID', now, {
             retainDirty: true,
             reason: 'post-write-failure',
+        });
+        return clientRecord;
+    }
+
+    /** Terminal success for a mutation that intentionally has no successor. */
+    function completeConsumed(operationId, options = {}) {
+        const { record, now } = findLease(operationId, options);
+        const clientRecord = makeClientRecord(record);
+        terminalize(record, 'READ_HANDLE_CONSUMED', now, {
+            retainDirty: false,
+            reason: 'mutation-success-no-successor',
         });
         return clientRecord;
     }
@@ -992,6 +1047,7 @@ export function createReadHandleStore({
         issue,
         validate,
         getInternalWorkspace,
+        getInternalMetadata,
         resolveImplicit,
         resolveImplicitCapability,
         setImplicit,
@@ -1001,6 +1057,7 @@ export function createReadHandleStore({
         abortBeforeWrite,
         completeSuccess,
         completeAfterWriteFailure,
+        completeConsumed,
         transitionToSuccessor,
         consume,
         revoke,

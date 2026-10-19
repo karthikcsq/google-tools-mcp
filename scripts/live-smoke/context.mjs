@@ -234,6 +234,12 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+    /** Start the production MCP server on loopback for HTTP-only contracts. */
+    async function startLoopbackMcp() {
+        const { startLoopbackMcp: start } = await import('./http.mjs');
+        return start({ guard, journal, scenario: scenario.name });
+    }
+
     return {
         scenario,
         folderId,
@@ -281,6 +287,7 @@ export function createContext({ scenario, tools, guard, journal, folderId, self,
         rememberMirror,
         get lastMirror() { return lastMirror; },
         sleep,
+        startLoopbackMcp,
         log: (message) => journal.progress(`      · ${message}`),
     };
 }

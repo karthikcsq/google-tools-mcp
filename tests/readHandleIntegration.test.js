@@ -49,7 +49,18 @@ const {
 const { register: registerReadDocument } = await import('../dist/tools/docs/readGoogleDoc.js');
 const { register: registerAppendText } = await import('../dist/tools/docs/appendToGoogleDoc.js');
 const { register: registerReadSpreadsheet } = await import('../dist/tools/sheets/readSpreadsheet.js');
+const { register: registerGetSpreadsheetInfo } = await import('../dist/tools/sheets/getSpreadsheetInfo.js');
+const { register: registerDeleteSheet } = await import('../dist/tools/sheets/deleteSheet.js');
+const { register: registerDeleteColumns } = await import('../dist/tools/sheets/deleteColumns.js');
+const { register: registerDeleteChart } = await import('../dist/tools/sheets/deleteChart.js');
 const { register: registerWriteSpreadsheet } = await import('../dist/tools/sheets/writeSpreadsheet.js');
+const { register: registerBatchWrite } = await import('../dist/tools/sheets/batchWrite.js');
+const { register: registerCreateSpreadsheet } = await import('../dist/tools/sheets/createSpreadsheet.js');
+const { register: registerReadCellFormat } = await import('../dist/tools/sheets/readCellFormat.js');
+const { register: registerFormatCells } = await import('../dist/tools/sheets/formatCells.js');
+const { register: registerCopyFormatting } = await import('../dist/tools/sheets/copyFormatting.js');
+const { register: registerGetFileInfo } = await import('../dist/tools/drive/getFileInfo.js');
+const { register: registerDeleteFile } = await import('../dist/tools/drive/deleteFile.js');
 const { beginDocsMutation } = await import('../dist/docsHandles.js');
 const { cleanupHandleWorkspaces, resetHandleRuntimeState } = await import('../dist/handleRuntime.js');
 
@@ -77,7 +88,7 @@ function setUpGoogleMocks({ text = 'Hello world\n', revisionId = REVISION } = {}
     documentsGet = jest.fn(async () => docPayload(text, revisionId));
     batchUpdate = jest.fn(async ({ requestBody }) => ({ data: { writeControl: requestBody.writeControl ?? { requiredRevisionId: 'rev-after-write' } } }));
     fakeDocs = { documents: { get: documentsGet, batchUpdate } };
-    fakeDrive = { files: { get: async () => ({ data: { modifiedTime: null } }) } };
+    fakeDrive = { files: { get: async () => ({ data: { modifiedTime: null, version: '1' } }) } };
     fakeSheets = {};
 }
 
@@ -118,7 +129,18 @@ async function buildFactory() {
             registerReadDocument(server);
             registerAppendText(server);
             registerReadSpreadsheet(server);
+            registerGetSpreadsheetInfo(server);
+            registerDeleteChart(server);
+            registerDeleteSheet(server);
+            registerDeleteColumns(server);
             registerWriteSpreadsheet(server);
+            registerBatchWrite(server);
+            registerCreateSpreadsheet(server);
+            registerReadCellFormat(server);
+            registerFormatCells(server);
+            registerCopyFormatting(server);
+            registerGetFileInfo(server);
+            registerDeleteFile(server);
             registerProbe(server);
         },
     });
@@ -429,13 +451,24 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
         } finally { await handler.close(); }
     });
 
-    it('fails closed on guarded Sheets surfaces that have no handle wiring yet', async () => {
+    it('requires an explicit Sheets read handle and permits its bounded successor flow', async () => {
         const factory = await buildFactory();
-        const writeRange = jest.fn(async () => ({ updatedCells: 1, updatedRows: 1, updatedColumns: 1 }));
+        const writeRange = jest.fn(async () => ({ data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } }));
         fakeSheets = {
             spreadsheets: {
+                get: jest.fn(async () => ({
+                    data: {
+                        properties: { title: 'Handle spreadsheet' },
+                        sheets: [{
+                            properties: {
+                                sheetId: 0, title: 'Sheet1', hidden: false,
+                                gridProperties: { rowCount: 1000, columnCount: 26 },
+                            },
+                            data: [{ startRow: 0, startColumn: 0, rowData: [{ values: [{ formattedValue: 'a', effectiveValue: { stringValue: 'a' }, userEnteredValue: { stringValue: 'a' } }] }] }],
+                        }],
+                    },
+                })),
                 values: {
-                    get: jest.fn(async () => ({ data: { values: [['a']] } })),
                     update: writeRange,
                 },
             },
@@ -445,6 +478,7 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
             // Request A reads the spreadsheet (trackRead runs for real).
             const readA = await call(handler, 'readSpreadsheet', { spreadsheetId: 'sheet-1', range: 'A1:B2' });
             expect(readA.isError).toBeFalsy();
+            expect(readA.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
             // Request B mutates it without ever reading it. It must fail closed
             // rather than borrow A's tracker entry.
@@ -452,8 +486,650 @@ describe('v2 HTTP: one request\'s read can never authorize another request\'s mu
                 spreadsheetId: 'sheet-1', range: 'A1:B2', values: [['x']],
             });
             expect(writeB.isError).toBe(true);
-            expect(textOf(writeB)).toMatch(/has not been read in this request/i);
+            expect(textOf(writeB)).toMatch(/requires a readHandle/i);
             expect(writeRange).not.toHaveBeenCalled();
+
+            const writeA = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'sheet-1', range: 'A1:B2', values: [['x']], readHandle: readA.readHandle,
+            });
+            expect(writeA.isError).toBeFalsy();
+            expect(writeA.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(writeA.structuredContent.observedResourceState.ranges[0].range).toMatch(/'Sheet1'!A1:B2/);
+            expect(writeRange).toHaveBeenCalledTimes(1);
+        } finally { await handler.close(); }
+    });
+
+    it('rejects overlapping batch outputs before Google and consumes Drive deletion handles', async () => {
+        const valuesBatchUpdate = jest.fn(async () => ({ data: {} }));
+        const moveToTrash = jest.fn(async () => ({ data: {} }));
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({
+                    data: {
+                        properties: { title: 'Handle spreadsheet' },
+                        sheets: [{
+                            properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                            data: [],
+                        }],
+                    },
+                })),
+                values: { batchUpdate: valuesBatchUpdate },
+            },
+        };
+        fakeDrive = {
+            files: {
+                get: jest.fn(async ({ fileId }) => ({
+                    data: fileId === 'drive-file-1'
+                        ? {
+                            id: 'drive-file-1', name: 'Delete me', mimeType: 'text/plain', parents: ['folder-1'],
+                            trashed: false, modifiedTime: '2026-09-07T00:00:00.000Z', version: '7',
+                        }
+                        : { id: fileId, version: '1' },
+                })),
+                update: moveToTrash,
+                delete: jest.fn(async () => ({ data: {} })),
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'sheet-1', range: 'A1:C3' });
+            const overlap = await call(handler, 'batchWrite', {
+                spreadsheetId: 'sheet-1', readHandle: read.readHandle,
+                data: [{ range: 'A1:B2', values: [[1, 2], [3, 4]] }, { range: 'B2:C3', values: [[5, 6], [7, 8]] }],
+            });
+            expect(overlap.isError).toBe(true);
+            expect(textOf(overlap)).toMatch(/overlapping output ranges/i);
+            expect(valuesBatchUpdate).not.toHaveBeenCalled();
+
+            const info = await call(handler, 'getFileInfo', { fileId: 'drive-file-1' });
+            expect(info.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            const missing = await call(handler, 'deleteFile', { fileId: 'drive-file-1' });
+            expect(missing.isError).toBe(true);
+            expect(moveToTrash).not.toHaveBeenCalled();
+
+            const deleted = await call(handler, 'deleteFile', { fileId: 'drive-file-1', readHandle: info.readHandle });
+            expect(deleted.isError).toBeFalsy();
+            expect(moveToTrash).toHaveBeenCalledTimes(1);
+            const replay = await call(handler, 'deleteFile', { fileId: 'drive-file-1', readHandle: info.readHandle });
+            expect(replay.isError).toBe(true);
+            expect(textOf(replay)).toMatch(/already been consumed/i);
+        } finally { await handler.close(); }
+    });
+
+    it('rejects stale and cross-resource Sheets handles before a values update', async () => {
+        let version = '1';
+        const valuesUpdate = jest.fn(async () => ({ data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({
+                    data: {
+                        properties: { title: 'Handle spreadsheet' },
+                        sheets: [{
+                            properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                            data: [],
+                        }],
+                    },
+                })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const first = await call(handler, 'readSpreadsheet', { spreadsheetId: 'sheet-stale', range: 'A1:B2' });
+            version = '2';
+            const stale = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'sheet-stale', range: 'A1', values: [['x']], readHandle: first.readHandle,
+            });
+            expect(stale.isError).toBe(true);
+            expect(textOf(stale)).toMatch(/spreadsheet changed/i);
+            expect(valuesUpdate).not.toHaveBeenCalled();
+
+            const fresh = await call(handler, 'readSpreadsheet', { spreadsheetId: 'sheet-one', range: 'A1:B2' });
+            const crossResource = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'sheet-two', range: 'A1', values: [['x']], readHandle: fresh.readHandle,
+            });
+            expect(crossResource.isError).toBe(true);
+            expect(textOf(crossResource)).toMatch(/does not match this request or resource/i);
+            expect(valuesUpdate).not.toHaveBeenCalled();
+        } finally { await handler.close(); }
+    });
+
+    it('rejects changed formulas even while Drive version is unchanged', async () => {
+        let formula = '=1';
+        const valuesUpdate = jest.fn(async () => ({ data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Formula sheet' },
+                    sheets: [{
+                        properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                        data: [{ startRow: 0, startColumn: 0, rowData: [{ values: [{
+                            userEnteredValue: { formulaValue: formula }, effectiveValue: { numberValue: formula === '=1' ? 1 : 2 }, formattedValue: formula === '=1' ? '1' : '2',
+                        }] }] }],
+                    }],
+                } })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'formula-sheet', range: 'A1' });
+            const observedRead = JSON.parse(textOf(read));
+            expect(observedRead.range).toBe('A1');
+            expect(observedRead.values).toEqual([['1']]);
+            expect(observedRead.enteredValues).toEqual([['=1']]);
+            expect(observedRead.formulas).toEqual([['=1']]);
+            formula = '=2';
+            const write = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'formula-sheet', range: 'A1', values: [['replacement']], readHandle: read.readHandle,
+            });
+            expect(write.isError).toBe(true);
+            expect(textOf(write)).toMatch(/does not authorize|spreadsheet changed/i);
+            expect(valuesUpdate).not.toHaveBeenCalled();
+        } finally { await handler.close(); }
+    });
+
+    it('mints and advances a handle for all 32 documented bounded ranges', async () => {
+        const valuesUpdate = jest.fn(async () => ({ data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Maximum range sheet' },
+                    sheets: [{
+                        properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                        data: [],
+                    }],
+                } })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const ranges = Array.from({ length: 32 }, (_, index) => `Sheet1!A${index + 1}`);
+            const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'max-ranges', ranges });
+            expect(read.isError).toBeFalsy();
+            expect(read.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(JSON.parse(textOf(read)).ranges.map((entry) => entry.range)).toEqual(ranges);
+
+            const write = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'max-ranges', range: 'Sheet1!A1', values: [['written']], readHandle: read.readHandle,
+            });
+            expect(write.isError).toBeFalsy();
+            expect(valuesUpdate).toHaveBeenCalledTimes(1);
+            expect(write.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(write.readHandle).not.toBe(read.readHandle);
+        } finally { await handler.close(); }
+    });
+
+    it('returns the chart spec from the registered getSpreadsheetInfo tool', async () => {
+        const spec = {
+            title: 'Revenue',
+            basicChart: {
+                chartType: 'COLUMN',
+                legendPosition: 'BOTTOM_LEGEND',
+            },
+        };
+        fakeDrive = {
+            files: {
+                get: jest.fn(async ({ fileId }) => ({
+                    data: { id: fileId, version: '1' },
+                })),
+            },
+        };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({
+                    data: {
+                        properties: { title: 'Observed chart sheet' },
+                        sheets: Array.from({ length: 8 }, (_, index) => ({
+                            properties: {
+                                sheetId: 7 + index,
+                                title:
+                                    index === 0 ? 'Dashboard' : `Data ${index}`,
+                                hidden: false,
+                                gridProperties: {
+                                    rowCount: 100,
+                                    columnCount: 12,
+                                },
+                            },
+                            charts:
+                                index === 0
+                                    ? [
+                                          {
+                                              chartId: 55,
+                                              position: { newSheet: true },
+                                              spec,
+                                          },
+                                      ]
+                                    : [],
+                            tables: [],
+                        })),
+                    },
+                })),
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, {
+            auth: { token: TOKEN },
+        });
+        try {
+            const result = await call(handler, 'getSpreadsheetInfo', {
+                spreadsheetId: 'chart-info',
+            });
+            expect(result.isError).toBeFalsy();
+            const payload = JSON.parse(textOf(result));
+            expect(payload.sheets).toHaveLength(8);
+            expect(result.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(payload.sheets[0].charts[0]).toEqual({
+                chartId: 55,
+                position: { newSheet: true },
+                spec,
+            });
+        } finally {
+            await handler.close();
+        }
+    });
+
+    it.each(['deleteSheet', 'deleteColumns'])(
+        '%s requires complete fresh value authority as well as structure and consumes both handles',
+        async (tool) => {
+            let cell = {
+                userEnteredValue: { formulaValue: '=1+1' },
+                effectiveValue: { numberValue: 2 },
+                formattedValue: '2',
+            };
+            const destructiveWrite = jest.fn(async () => ({ data: {} }));
+            fakeDrive = {
+                files: {
+                    get: jest.fn(async () => ({ data: { version: '1' } })),
+                },
+            };
+            fakeSheets = {
+                spreadsheets: {
+                    get: jest.fn(async () => ({
+                        data: {
+                            properties: { title: 'Deletion test' },
+                            sheets: [
+                                {
+                                    properties: {
+                                        sheetId: 0,
+                                        title: 'Sheet1',
+                                        hidden: false,
+                                        gridProperties: {
+                                            rowCount: 2,
+                                            columnCount: 2,
+                                        },
+                                    },
+                                    data: [
+                                        {
+                                            startRow: 0,
+                                            startColumn: 0,
+                                            rowData: [{ values: [cell] }],
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    })),
+                    batchUpdate: destructiveWrite,
+                },
+            };
+            const handler = createV2HttpHandler(await buildFactory(), {
+                auth: { token: TOKEN },
+            });
+            try {
+                const args = {
+                    spreadsheetId: 'delete-values',
+                    ...(tool === 'deleteSheet'
+                        ? { sheetId: 0 }
+                        : { columns: [{ startIndex: 1, endIndex: 1 }] }),
+                };
+                const structure = await call(handler, 'getSpreadsheetInfo', {
+                    spreadsheetId: args.spreadsheetId,
+                });
+                const onlyStructure = await call(handler, tool, {
+                    ...args,
+                    readHandle: structure.readHandle,
+                });
+                expect(onlyStructure.isError).toBe(true);
+                expect(textOf(onlyStructure)).toMatch(/valueReadHandle/);
+                const partial = await call(handler, 'readSpreadsheet', {
+                    spreadsheetId: args.spreadsheetId,
+                    range: 'A1',
+                });
+                expect(
+                    (
+                        await call(handler, tool, {
+                            ...args,
+                            readHandle: structure.readHandle,
+                            valueReadHandle: partial.readHandle,
+                        })
+                    ).isError,
+                ).toBe(true);
+                const values = await call(handler, 'readSpreadsheet', {
+                    spreadsheetId: args.spreadsheetId,
+                    range: 'A1:B2',
+                });
+                // Same effective/displayed value, different formula, unchanged Drive version.
+                cell = { ...cell, userEnteredValue: { formulaValue: '=2' } };
+                expect(
+                    (
+                        await call(handler, tool, {
+                            ...args,
+                            readHandle: structure.readHandle,
+                            valueReadHandle: values.readHandle,
+                        })
+                    ).isError,
+                ).toBe(true);
+                expect(destructiveWrite).not.toHaveBeenCalled();
+                const fresh = await call(handler, 'readSpreadsheet', {
+                    spreadsheetId: args.spreadsheetId,
+                    range: 'A1:B2',
+                });
+                const deleted = await call(handler, tool, {
+                    ...args,
+                    readHandle: structure.readHandle,
+                    valueReadHandle: fresh.readHandle,
+                });
+                expect(deleted.isError).toBeFalsy();
+                expect(deleted.readHandle).toBeUndefined();
+                expect(destructiveWrite).toHaveBeenCalledTimes(1);
+                expect(
+                    (
+                        await call(handler, tool, {
+                            ...args,
+                            readHandle: structure.readHandle,
+                            valueReadHandle: fresh.readHandle,
+                        })
+                    ).isError,
+                ).toBe(true);
+                // Neither consumed handle can be combined with a new counterpart.
+                const anotherStructure = await call(
+                    handler,
+                    'getSpreadsheetInfo',
+                    { spreadsheetId: args.spreadsheetId },
+                );
+                expect(
+                    (
+                        await call(handler, tool, {
+                            ...args,
+                            readHandle: anotherStructure.readHandle,
+                            valueReadHandle: fresh.readHandle,
+                        })
+                    ).isError,
+                ).toBe(true);
+                expect(destructiveWrite).toHaveBeenCalledTimes(1);
+            } finally {
+                await handler.close();
+            }
+        },
+    );
+
+    it('carries a 100-sheet structure read through deleteChart without persisting the full structure metadata', async () => {
+        const batchUpdate = jest.fn(async () => ({ data: {} }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Large workbook' },
+                    sheets: Array.from({ length: 100 }, (_, index) => ({
+                        properties: { sheetId: index, title: `Sheet ${index + 1}`, hidden: false, gridProperties: { rowCount: 100, columnCount: 26 } },
+                        charts: index === 99 ? [{ chartId: 9001, position: { newSheet: true }, spec: { title: 'Last chart' } }] : [], tables: [],
+                    })),
+                } })),
+                batchUpdate,
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'getSpreadsheetInfo', { spreadsheetId: 'large-structure' });
+            expect(read.isError).toBeFalsy();
+            const deleted = await call(handler, 'deleteChart', {
+                spreadsheetId: 'large-structure', chartId: 9001, readHandle: read.readHandle,
+            });
+            expect(deleted.isError).toBeFalsy();
+            expect(batchUpdate).toHaveBeenCalledTimes(1);
+        } finally { await handler.close(); }
+    });
+
+    it('rejects a sheet identity shift before a values update', async () => {
+        let sheetId = 0;
+        const valuesUpdate = jest.fn(async () => ({ data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Identity sheet' },
+                    sheets: [{
+                        properties: { sheetId, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                        data: [],
+                    }],
+                } })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'identity-sheet', range: 'A1' });
+            sheetId = 99;
+            const write = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'identity-sheet', range: 'A1', values: [['replacement']], readHandle: read.readHandle,
+            });
+            expect(write.isError).toBe(true);
+            expect(textOf(write)).toMatch(/does not authorize|spreadsheet changed/i);
+            expect(valuesUpdate).not.toHaveBeenCalled();
+        } finally { await handler.close(); }
+    });
+
+    it('rejects formatting overwrite after a collaborator changes its target state', async () => {
+        let bold = false;
+        const batchUpdate = jest.fn(async () => ({ data: {} }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Format sheet' },
+                    sheets: [{
+                        properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                        data: [{ startRow: 0, startColumn: 0, rowData: [{ values: [{ userEnteredFormat: {
+                            textFormat: { bold },
+                            padding: { top: 7, bottom: 3, left: 2, right: 2 },
+                        } }] }] }],
+                    }],
+                } })),
+                batchUpdate,
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readCellFormat', { spreadsheetId: 'format-sheet', range: 'A1' });
+            expect(read.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            const observed = JSON.parse(textOf(read));
+            expect(observed.cells[0]).toMatchObject({
+                cell: 'A1',
+                userEnteredFormat: { padding: { top: 7, bottom: 3, left: 2, right: 2 } },
+            });
+            const unbounded = await call(handler, 'formatCells', {
+                spreadsheetId: 'format-sheet', range: '1:1', bold: true, readHandle: read.readHandle,
+            });
+            expect(unbounded.isError).toBe(true);
+            expect(textOf(unbounded)).toMatch(/bounded A1/);
+            expect(batchUpdate).not.toHaveBeenCalled();
+            bold = true;
+            const write = await call(handler, 'formatCells', {
+                spreadsheetId: 'format-sheet', range: 'A1', bold: false, readHandle: read.readHandle,
+            });
+            expect(write.isError).toBe(true);
+            expect(textOf(write)).toMatch(/spreadsheet changed/i);
+            expect(batchUpdate).not.toHaveBeenCalled();
+        } finally { await handler.close(); }
+    });
+
+    it('rejects a CopyPaste whose smaller destination expands outside the format handle', async () => {
+        const batchUpdate = jest.fn(async () => ({ data: {} }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Copy scope sheet' },
+                    sheets: [{
+                        properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } },
+                        data: [],
+                    }],
+                } })),
+                batchUpdate,
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readCellFormat', { spreadsheetId: 'copy-scope-sheet', range: 'D1' });
+            expect(read.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            const write = await call(handler, 'copyFormatting', {
+                spreadsheetId: 'copy-scope-sheet',
+                sourceSheetName: 'Sheet1', sourceRange: 'A1:B10',
+                destinationSheetName: 'Sheet1', destinationRange: 'D1',
+                readHandle: read.readHandle,
+            });
+            expect(write.isError).toBe(true);
+            expect(textOf(write)).toMatch(/does not authorize|exact bounded destination range|read every range/i);
+            expect(batchUpdate).not.toHaveBeenCalled();
+        } finally { await handler.close(); }
+    });
+
+    it('invalidates a successful write when its post-write observation fails', async () => {
+        let postWriteReadFails = false;
+        const valuesUpdate = jest.fn(async () => {
+            postWriteReadFails = true;
+            return { data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } };
+        });
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => {
+                    if (postWriteReadFails) throw new Error('post-write read unavailable');
+                    return { data: {
+                        properties: { title: 'Post state sheet' },
+                        sheets: [{ properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } }, data: [] }],
+                    } };
+                }),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'post-state-sheet', range: 'A1' });
+            const write = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'post-state-sheet', range: 'A1', values: [['x']], readHandle: read.readHandle,
+            });
+            expect(write.isError).toBeFalsy();
+            expect(write.readHandle).toBeUndefined();
+            expect(textOf(write)).toMatch(/post-write state could not be observed/i);
+            expect(valuesUpdate).toHaveBeenCalledTimes(1);
+        } finally { await handler.close(); }
+    });
+
+    it('reserves a handle before the first in-flight Google write completes', async () => {
+        let releaseWrite;
+        const writeStarted = new Promise((resolve) => {
+            releaseWrite = () => resolve();
+        });
+        let startWrite;
+        const writeHasStarted = new Promise((resolve) => { startWrite = resolve; });
+        const valuesUpdate = jest.fn(async () => {
+            startWrite();
+            await writeStarted;
+            return { data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } };
+        });
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Concurrency sheet' },
+                    sheets: [{ properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } }, data: [] }],
+                } })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const read = await call(handler, 'readSpreadsheet', { spreadsheetId: 'concurrency-sheet', range: 'A1' });
+            const first = call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'concurrency-sheet', range: 'A1', values: [['one']], readHandle: read.readHandle,
+            });
+            await writeHasStarted;
+            const second = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'concurrency-sheet', range: 'A1', values: [['two']], readHandle: read.readHandle,
+            });
+            expect(second.isError).toBe(true);
+            expect(textOf(second)).toMatch(/in progress|already been consumed/i);
+            expect(valuesUpdate).toHaveBeenCalledTimes(1);
+            releaseWrite();
+            expect((await first).isError).toBeFalsy();
+        } finally { await handler.close(); }
+    });
+
+    it('seeds a verified blank default grid after creation for a multi-cell write', async () => {
+        const valuesUpdate = jest.fn(async () => ({ data: { updatedCells: 4, updatedRows: 2, updatedColumns: 2 } }));
+        fakeDrive = { files: {
+            create: jest.fn(async () => ({ data: { id: 'created-grid', name: 'Created grid', webViewLink: 'https://sheets/created-grid' } })),
+            get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })),
+        } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Created grid' },
+                    sheets: [{ properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } }, data: [] }],
+                } })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const created = await call(handler, 'createSpreadsheet', { title: 'Created grid' });
+            expect(created.isError).toBeFalsy();
+            expect(created.readHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(textOf(created)).toMatch(/'Sheet1'!A1:Z1000/);
+            const write = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'created-grid', range: 'A1', values: [[1, 2], [3, 4]], readHandle: created.readHandle,
+            });
+            expect(write.isError).toBeFalsy();
+            expect(valuesUpdate).toHaveBeenCalledTimes(1);
+        } finally { await handler.close(); }
+    });
+
+    it('does not mint a handle after createSpreadsheet initialData fails', async () => {
+        const valuesUpdate = jest.fn(async () => { throw new Error('initial write unavailable'); });
+        fakeDrive = { files: {
+            create: jest.fn(async () => ({ data: { id: 'created-failed-data', name: 'Created failed data', webViewLink: 'https://sheets/created-failed-data' } })),
+            get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })),
+        } };
+        fakeSheets = { spreadsheets: { values: { update: valuesUpdate }, get: jest.fn() } };
+        const factory = await buildFactory();
+        const handler = createV2HttpHandler(factory, { auth: { token: TOKEN } });
+        try {
+            const created = await call(handler, 'createSpreadsheet', { title: 'Failed initial data', initialData: [['x']] });
+            expect(created.isError).toBeFalsy();
+            expect(created.readHandle).toBeUndefined();
+            expect(textOf(created)).toMatch(/initial data was not confirmed/i);
+            const write = await call(handler, 'writeSpreadsheet', {
+                spreadsheetId: 'created-failed-data', range: 'A1', values: [['retry']],
+            });
+            expect(write.isError).toBe(true);
+            expect(valuesUpdate).toHaveBeenCalledTimes(1);
         } finally { await handler.close(); }
     });
 });
@@ -506,6 +1182,37 @@ describe('v2 stdio: implicit state is pinned to one connection', () => {
             await first.runtime.close();
             await second.runtime.close();
         }
+    });
+
+    it('requires an explicit Sheets handle even on the modern stdio runtime', async () => {
+        const valuesUpdate = jest.fn(async () => ({ data: { updatedCells: 1, updatedRows: 1, updatedColumns: 1 } }));
+        fakeDrive = { files: { get: jest.fn(async ({ fileId }) => ({ data: { id: fileId, version: '1' } })) } };
+        fakeSheets = {
+            spreadsheets: {
+                get: jest.fn(async () => ({ data: {
+                    properties: { title: 'Stdio sheet' },
+                    sheets: [{ properties: { sheetId: 0, title: 'Sheet1', hidden: false, gridProperties: { rowCount: 1000, columnCount: 26 } }, data: [] }],
+                } })),
+                values: { update: valuesUpdate },
+            },
+        };
+        const factory = await buildFactory();
+        const client = await stdioClient(factory, 'stdio-sheets-explicit');
+        try {
+            const read = await client.send('readSpreadsheet', { spreadsheetId: 'stdio-sheet', range: 'A1' });
+            const missing = await client.send('writeSpreadsheet', {
+                spreadsheetId: 'stdio-sheet', range: 'A1', values: [['missing']],
+            });
+            expect(missing.isError).toBe(true);
+            expect(textOf(missing)).toMatch(/requires a readHandle/i);
+            expect(valuesUpdate).not.toHaveBeenCalled();
+
+            const write = await client.send('writeSpreadsheet', {
+                spreadsheetId: 'stdio-sheet', range: 'A1', values: [['present']], readHandle: read.readHandle,
+            });
+            expect(write.isError).toBeFalsy();
+            expect(valuesUpdate).toHaveBeenCalledTimes(1);
+        } finally { await client.runtime.close(); }
     });
 });
 

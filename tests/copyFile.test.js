@@ -13,6 +13,7 @@ jest.unstable_mockModule('../dist/clients.js', () => ({
     // destination as a Google Doc. These #124 schema tests use generic
     // metadata, but the named export must still exist for ESM linking.
     getDocsClient: async () => { throw new Error('Docs client not used in this suite'); },
+    getSheetsClient: async () => { throw new Error('Sheets client not used in this suite'); },
 }));
 
 const { register } = await import('../dist/tools/drive/copyFile.js');

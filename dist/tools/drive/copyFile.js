@@ -1,9 +1,11 @@
 import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
-import { getDriveClient, getDocsClient } from '../../clients.js';
+import { getDriveClient, getDocsClient, getSheetsClient } from '../../clients.js';
 import { docsJsonToMarkdown } from '../../markdown-transformer/index.js';
 import { trackRead } from '../../readTracker.js';
 import { mintDocsReadHandle } from '../../docsHandles.js';
+import { mintSheetsReadHandle, readSheetsValueBaseline } from '../../resourceHandles.js';
+import { setResultResourceState } from '../../handleRuntime.js';
 
 const GOOGLE_DOC_MIME_TYPE = 'application/vnd.google-apps.document';
 const GOOGLE_SHEET_MIME_TYPE = 'application/vnd.google-apps.spreadsheet';
@@ -63,6 +65,7 @@ export function register(server) {
                 const copiedFile = response.data;
                 let readHandle;
                 let readStateWarning;
+                let observedRanges;
                 if (copiedFile.mimeType === GOOGLE_DOC_MIME_TYPE) {
                     // A Docs mutation needs the exact content and revision it
                     // is based on. Fetch the copied document rather than
@@ -91,14 +94,23 @@ export function register(server) {
                     }
                 }
                 else if (copiedFile.mimeType === GOOGLE_SHEET_MIME_TYPE) {
-                    // Sheets reads intentionally record no content or revision,
-                    // so a copied Sheet must use that same honest baseline.
+                    // A copied spreadsheet has no trusted value snapshot until
+                    // it is read back with Drive version, formulas and sheet
+                    // identity. A failed baseline stays explicitly unread.
                     try {
+                        const sheets = await getSheetsClient();
+                        const baseline = await readSheetsValueBaseline({
+                            drive, sheets, spreadsheetId: copiedFile.id, ranges: ['A1'],
+                        });
                         trackRead(copiedFile.id);
+                        const minted = await mintSheetsReadHandle(copiedFile.id, baseline);
+                        readHandle = minted?.readHandle;
+                        observedRanges = baseline.displayRanges;
+                        setResultResourceState({ kind: 'sheets-values-v1', ranges: observedRanges });
                     }
                     catch (seedError) {
-                        log.warn(`Copied Google Sheet ${copiedFile.id} but read state could not be seeded: ${seedError.message}`);
-                        readStateWarning = 'The Google Sheet copy was created, but its read state could not be seeded. Call readSpreadsheet before the next mutation.';
+                        log.warn(`Copied Google Sheet ${copiedFile.id} but a verified read baseline could not be captured.`, seedError);
+                        readStateWarning = 'The Google Sheet copy was created, but its read baseline could not be captured. Call readSpreadsheet before the next mutation.';
                     }
                 }
                 // Arbitrary binary copies deliberately stay unseeded. Some
@@ -110,9 +122,12 @@ export function register(server) {
                     name: copiedFile.name,
                     url: copiedFile.webViewLink,
                     ...(readHandle && {
-                        readHandleNote: 'This document copy has been seeded as read. You can mutate it immediately without calling readDocument first.',
+                        readHandleNote: copiedFile.mimeType === GOOGLE_SHEET_MIME_TYPE
+                            ? 'This spreadsheet copy was read after copying. The returned readHandle authorizes only its captured bounded range.'
+                            : 'This document copy has been seeded as read. You can mutate it immediately without calling readDocument first.',
                     }),
                     ...(readStateWarning && { warnings: [readStateWarning] }),
+                    ...(observedRanges ? { observedRanges } : {}),
                 }, null, 2);
             }
             catch (error) {

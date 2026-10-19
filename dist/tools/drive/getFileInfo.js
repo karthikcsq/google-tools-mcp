@@ -1,6 +1,8 @@
 import { publicError, isPublicError, wrapOperationError } from '../../errors.js';
 import { z } from 'zod';
 import { getDriveClient } from '../../clients.js';
+import { trackRead } from '../../readTracker.js';
+import { mintDriveReadHandle } from '../../resourceHandles.js';
 export function register(server) {
     server.addTool({
         name: 'getFileInfo',
@@ -14,7 +16,7 @@ export function register(server) {
             try {
                 const response = await drive.files.get({
                     fileId: args.fileId,
-                    fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
+                    fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,trashed,version',
                     supportsAllDrives: true,
                 });
                 const file = response.data;
@@ -32,7 +34,16 @@ export function register(server) {
                     shared: file.shared || false,
                     url: file.webViewLink,
                     description: file.description || null,
+                    version: file.version ?? null,
+                    parents: file.parents || [],
+                    trashed: Boolean(file.trashed),
                 };
+                // File metadata is sufficient authority for delete only. It is
+                // deliberately not used to authorize spreadsheet value writes.
+                if (file.id && file.version !== undefined && file.version !== null) {
+                    trackRead(file.id, file.modifiedTime ?? null);
+                    await mintDriveReadHandle(file.id, file);
+                }
                 return JSON.stringify(info, null, 2);
             }
             catch (error) {
