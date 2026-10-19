@@ -1477,12 +1477,12 @@
       },
       {
         "file": "dist/tools/sheets/deleteColumns.js",
-        "line": 7,
+        "line": 10,
         "match": ".addTool({"
       },
       {
         "file": "dist/tools/sheets/deleteSheet.js",
-        "line": 7,
+        "line": 10,
         "match": ".addTool({"
       },
       {

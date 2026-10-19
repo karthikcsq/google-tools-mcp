@@ -86,10 +86,19 @@ HTTP has no session, so **read state is never carried between HTTP requests**.
 - **`getSpreadsheetInfo` returns a separate structure handle.** It observes
   sheet identity, grid, hidden state, chart identity/specification, and table
   identity/range. The response includes each chart's full `spec` as well as
-  its ID and position. It authorizes `deleteSheet`, `deleteColumns`, `deleteChart`,
+  its ID and position. It authorizes `deleteChart`
   and `deleteTable` when table data is preserved; it never authorizes a value
   write. `deleteTable(deleteData: true)` requires a bounded `readSpreadsheet`
   value handle that contains the table's actual data range.
+- **`deleteSheet` and `deleteColumns` require two observations.** Pass the
+  `getSpreadsheetInfo` handle as `readHandle` and a bounded `readSpreadsheet`
+  handle as `valueReadHandle`. The latter must cover the whole current sheet
+  grid for sheet deletion, or every deleted column across the full grid height
+  for column deletion, including blanks. Existing bounded-read limits apply;
+  deletions whose complete scope cannot be captured are rejected. Both baselines
+  are checked immediately before deletion, including values and formulas even
+  when Drive's version lags. Both handles are consumed without successors;
+  reread after deletion. Column ranges must be in bounds and non-overlapping.
 - **`readCellFormat` returns a cell-state handle for bounded ranges.** It
   captures existing user-entered format and dropdown validation. Use it for
   `formatCells`, `setDropdownValidation`, or the destination range of

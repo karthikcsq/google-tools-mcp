@@ -36,6 +36,10 @@ resource-safety slice; it does not yet switch installation or transport defaults
 
 ### Fixed
 
+- Require fresh structure and value/formula observations before deleting sheets
+  or columns. Structure metadata alone cannot authorize unseen cell deletion;
+  both handles are consumed, and invalid or overlapping column ranges reject.
+
 - Force-terminate and reap packed-candidate probes that ignore EOF/SIGTERM,
   with bounded cleanup so a broken candidate cannot hang the release gate.
 - Preserve whole-row/column formatting for direct legacy callers, while modern

@@ -91,6 +91,31 @@ export async function run(ctx) {
         const legacyReadback = JSON.parse(await ctx.call('readCellFormat', { spreadsheetId: spreadsheet.id, range: 'A1' }));
         ctx.assert(legacyReadback.cells.some((cell) => cell.userEnteredFormat?.textFormat?.italic === true), 'Legacy whole-column formatting did not reach Google.');
 
+        // Destructive structure operations require separate value authority.
+        let info = await http.call('getSpreadsheetInfo', { spreadsheetId: spreadsheet.id });
+        let structureHandle = assertOk(ctx, info, 'HTTP deletion structure');
+        let sheetInfo = JSON.parse(info.content[0].text).sheets.find((sheet) => sheet.title === 'Sheet1');
+        const columnsArgs = { spreadsheetId: spreadsheet.id, sheetName: 'Sheet1', columns: [{ startIndex: 1, endIndex: 1 }], readHandle: structureHandle };
+        ctx.assert((await http.call('deleteColumns', columnsArgs)).isError === true, 'Structure alone authorized column deletion.');
+        const columnValues = await http.call('readSpreadsheet', { spreadsheetId: spreadsheet.id, range: `Sheet1!A1:A${sheetInfo.rows}` });
+        const deletedColumns = await http.call('deleteColumns', { ...columnsArgs, valueReadHandle: assertOk(ctx, columnValues, 'HTTP whole-column value observation') });
+        ctx.assert(!deletedColumns.isError && !deletedColumns.readHandle, `Column deletion failed or returned a successor: ${textOf(deletedColumns)}`);
+        info = await http.call('getSpreadsheetInfo', { spreadsheetId: spreadsheet.id });
+        ctx.assert(JSON.parse(info.content[0].text).sheets.find((sheet) => sheet.title === 'Sheet1').columns === sheetInfo.columns - 1, 'Column deletion was absent from Google readback.');
+
+        await ctx.call('addSheet', { spreadsheetId: spreadsheet.id, sheetTitle: 'OwnedDeletion' });
+        info = await http.call('getSpreadsheetInfo', { spreadsheetId: spreadsheet.id });
+        structureHandle = assertOk(ctx, info, 'HTTP new-tab structure');
+        sheetInfo = JSON.parse(info.content[0].text).sheets.find((sheet) => sheet.title === 'OwnedDeletion');
+        const sheetArgs = { spreadsheetId: spreadsheet.id, sheetId: sheetInfo.sheetId, readHandle: structureHandle };
+        ctx.assert((await http.call('deleteSheet', sheetArgs)).isError === true, 'Structure alone authorized sheet deletion.');
+        const tabValues = await http.call('readSpreadsheet', { spreadsheetId: spreadsheet.id, range: `OwnedDeletion!A1:Z${sheetInfo.rows}` });
+        ctx.assert(sheetInfo.columns === 26, 'Live fixture has an unexpected default width.');
+        const deletedSheet = await http.call('deleteSheet', { ...sheetArgs, valueReadHandle: assertOk(ctx, tabValues, 'HTTP full-tab value observation') });
+        ctx.assert(!deletedSheet.isError && !deletedSheet.readHandle, `Sheet deletion failed or returned a successor: ${textOf(deletedSheet)}`);
+        info = await http.call('getSpreadsheetInfo', { spreadsheetId: spreadsheet.id });
+        ctx.assert(!JSON.parse(info.content[0].text).sheets.some((sheet) => sheet.sheetId === sheetInfo.sheetId), 'Sheet deletion was absent from Google readback.');
+
         // getFileInfo carries the observed metadata baseline. Rename through
         // the guard first, then the original HTTP handle must reject. A fresh
         // metadata handle is the only authority that can trash this owned doc.

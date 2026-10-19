@@ -787,37 +787,71 @@ export async function beginSheetsMutation({ spreadsheetId, readHandle, drive, sh
  * captured by readCellFormat. Formatting writes must not rely on Drive version
  * alone because it can lag while a collaborator changes the target cells.
  */
-export async function beginSheetsCellStateMutation({ spreadsheetId, readHandle, drive, sheets, targets, legacyGuard = null }) {
+export async function beginSheetsCellStateMutation({
+    spreadsheetId,
+    readHandle,
+    drive,
+    sheets,
+    targets,
+    legacyGuard = null,
+}) {
     if (!isHandleRuntimeActive()) {
         if (legacyGuard) await legacyGuard();
         const metadata = await getSheetMetadata(sheets, spreadsheetId);
         return legacySheetsLease(spreadsheetId, { sheets: metadata.sheets });
     }
-    if (typeof readHandle !== 'string' || readHandle.length === 0) throw publicError(SHEETS_HANDLE_REQUIRED);
+    if (typeof readHandle !== 'string' || readHandle.length === 0)
+        throw publicError(SHEETS_HANDLE_REQUIRED);
     const context = getRequestContext();
     const store = getReadHandleStore();
     syncRuntimeBinding(context);
-    const expected = { resourceKind: 'sheets', resourceId: spreadsheetId, scope: 'resource', tabId: null };
+    const expected = {
+        resourceKind: 'sheets',
+        resourceId: spreadsheetId,
+        scope: 'resource',
+        tabId: null,
+    };
     let rawLease;
-    try { rawLease = store.beginMutation(readHandle, { expected }); } catch (error) { throw asPublic(error); }
+    try {
+        rawLease = store.beginMutation(readHandle, { expected });
+    } catch (error) {
+        throw asPublic(error);
+    }
     const release = await acquireMutationLock(`sheets:${spreadsheetId}`);
     let settled = false;
     const abort = async () => {
         if (settled) return;
         settled = true;
-        try { store.abortBeforeWrite(rawLease.operationId, { expected }); } catch { /* original error wins */ }
+        try {
+            store.abortBeforeWrite(rawLease.operationId, { expected });
+        } catch {
+            /* original error wins */
+        }
         release();
     };
     try {
         const metadata = store.getInternalMetadata(readHandle, { expected });
         if (metadata?.kind !== SHEETS_CELL_STATE_KIND) {
-            throw publicError('This mutation requires a handle returned by readCellFormat for the exact bounded destination range.');
+            throw publicError(
+                'This mutation requires a handle returned by readCellFormat for the exact bounded destination range.',
+            );
         }
-        assertValueTargets({ kind: SHEETS_VALUES_KIND, ranges: metadata.ranges }, targets);
+        assertValueTargets(
+            { kind: SHEETS_VALUES_KIND, ranges: metadata.ranges },
+            targets,
+        );
         assertNoOverlaps(targets);
         const descriptors = normalizeBaselineRanges(metadata.ranges);
-        const current = await readSheetsCellStateBaseline({ drive, sheets, spreadsheetId, descriptors });
-        if (current.version !== rawLease.record.version || current.fingerprint !== rawLease.record.structuralFingerprint) {
+        const current = await readSheetsCellStateBaseline({
+            drive,
+            sheets,
+            spreadsheetId,
+            descriptors,
+        });
+        if (
+            current.version !== rawLease.record.version ||
+            current.fingerprint !== rawLease.record.structuralFingerprint
+        ) {
             await abort();
             throw publicError(SHEETS_REREAD_REQUIRED);
         }
@@ -826,31 +860,62 @@ export async function beginSheetsCellStateMutation({ spreadsheetId, readHandle, 
             sheets: current.sheets,
             async write(perform) {
                 let response;
-                try { response = await perform(); }
-                catch (error) {
+                try {
+                    response = await perform();
+                } catch (error) {
                     if (!settled) {
                         settled = true;
-                        try { store.completeAfterWriteFailure(rawLease.operationId, { expected }); } catch { /* preserve API error */ }
+                        try {
+                            store.completeAfterWriteFailure(
+                                rawLease.operationId,
+                                { expected },
+                            );
+                        } catch {
+                            /* preserve API error */
+                        }
                         release();
                     }
                     throw error;
                 }
                 try {
-                    const observed = await readSheetsCellStateBaseline({ drive, sheets, spreadsheetId, descriptors });
-                    const successor = store.completeSuccess(rawLease.operationId, {
-                        version: observed.version, structuralFingerprint: observed.fingerprint, metadata: observed.metadata,
-                    }, { expected });
+                    const observed = await readSheetsCellStateBaseline({
+                        drive,
+                        sheets,
+                        spreadsheetId,
+                        descriptors,
+                    });
+                    const successor = store.completeSuccess(
+                        rawLease.operationId,
+                        {
+                            version: observed.version,
+                            structuralFingerprint: observed.fingerprint,
+                            metadata: observed.metadata,
+                        },
+                        { expected },
+                    );
                     settled = true;
                     release();
                     setResultHandle(successor.readHandle, successor.expiresAt);
-                    setResultResourceState({ kind: SHEETS_CELL_STATE_KIND, ranges: observed.displayRanges });
+                    setResultResourceState({
+                        kind: SHEETS_CELL_STATE_KIND,
+                        ranges: observed.displayRanges,
+                    });
                 } catch {
                     if (!settled) {
                         settled = true;
-                        try { store.completeAfterWriteFailure(rawLease.operationId, { expected }); } catch { /* best effort */ }
+                        try {
+                            store.completeAfterWriteFailure(
+                                rawLease.operationId,
+                                { expected },
+                            );
+                        } catch {
+                            /* best effort */
+                        }
                         release();
                     }
-                    setResultWarning('The Sheets formatting write returned successfully, but its post-write state could not be observed. Its handle was invalidated; call readCellFormat before another formatting mutation.');
+                    setResultWarning(
+                        'The Sheets formatting write returned successfully, but its post-write state could not be observed. Its handle was invalidated; call readCellFormat before another formatting mutation.',
+                    );
                 }
                 return response;
             },
@@ -862,57 +927,226 @@ export async function beginSheetsCellStateMutation({ spreadsheetId, readHandle, 
     }
 }
 
-export async function beginSheetsStructureMutation({ spreadsheetId, readHandle, drive, sheets, legacyGuard = null }) {
+// Capture the full current height, including blank cells that may have acquired
+// values since the read. Validate before reserving a destructive API operation.
+function deletionTargets(structure, deletion) {
+    const sheet =
+        deletion.sheetId !== undefined
+            ? structure.find((item) => item.sheetId === deletion.sheetId)
+            : deletion.sheetName
+              ? structure.find((item) => item.title === deletion.sheetName)
+              : structure[0];
+    if (!sheet)
+        throw publicError(
+            'The requested sheet is not present. Call getSpreadsheetInfo again.',
+        );
+    const columns = deletion.columns ?? [
+        { startIndex: 1, endIndex: sheet.columnCount },
+    ];
+    const targets = columns.map(({ startIndex, endIndex }) => {
+        if (
+            !Number.isSafeInteger(startIndex) ||
+            !Number.isSafeInteger(endIndex) ||
+            startIndex < 1 ||
+            endIndex < startIndex ||
+            endIndex > sheet.columnCount
+        ) {
+            throw publicError(
+                'Deletion column ranges must be ordered, non-overlapping, and inside the current sheet grid.',
+            );
+        }
+        return {
+            sheetId: sheet.sheetId,
+            titleHash: hash(sheet.title),
+            startRow: 0,
+            endRow: sheet.rowCount,
+            startColumn: startIndex - 1,
+            endColumn: endIndex,
+        };
+    });
+    assertNoOverlaps(targets);
+    return targets;
+}
+
+export async function beginSheetsStructureMutation({
+    spreadsheetId,
+    readHandle,
+    drive,
+    sheets,
+    legacyGuard = null,
+    valueReadHandle,
+    deletion = null,
+}) {
     if (!isHandleRuntimeActive()) {
         if (legacyGuard) await legacyGuard();
-        const metadata = await getSheetMetadata(sheets, spreadsheetId, { includeObjects: true });
+        const metadata = await getSheetMetadata(sheets, spreadsheetId, {
+            includeObjects: true,
+        });
+        if (deletion) deletionTargets(metadata.sheets, deletion);
         return legacySheetsLease(spreadsheetId, {
             structure: metadata.sheets,
             sheets: metadata.sheets,
         });
     }
-    if (typeof readHandle !== 'string' || readHandle.length === 0) throw publicError(SHEETS_HANDLE_REQUIRED);
+    if (typeof readHandle !== 'string' || readHandle.length === 0)
+        throw publicError(SHEETS_HANDLE_REQUIRED);
     const context = getRequestContext();
     const store = getReadHandleStore();
     syncRuntimeBinding(context);
-    const expected = { resourceKind: 'sheets', resourceId: spreadsheetId, scope: 'resource', tabId: null };
+    const expected = {
+        resourceKind: 'sheets',
+        resourceId: spreadsheetId,
+        scope: 'resource',
+        tabId: null,
+    };
     let rawLease;
-    try { rawLease = store.beginMutation(readHandle, { expected }); } catch (error) { throw asPublic(error); }
+    try {
+        rawLease = store.beginMutation(readHandle, { expected });
+    } catch (error) {
+        throw asPublic(error);
+    }
     const release = await acquireMutationLock(`sheets:${spreadsheetId}`);
+    let valueLease;
     let settled = false;
     const abort = async () => {
         if (settled) return;
         settled = true;
-        try { store.abortBeforeWrite(rawLease.operationId, { expected }); } catch { /* original error wins */ }
+        try {
+            store.abortBeforeWrite(rawLease.operationId, { expected });
+        } catch {
+            /* original error wins */
+        }
+        if (valueLease) {
+            try {
+                store.abortBeforeWrite(valueLease.operationId, { expected });
+            } catch {
+                /* original error wins */
+            }
+        }
         release();
     };
     try {
         const metadata = store.getInternalMetadata(readHandle, { expected });
-        if (metadata?.kind !== SHEETS_STRUCTURE_KIND) throw publicError('This mutation requires a handle returned by getSpreadsheetInfo.');
-        const current = await readSheetsStructureBaseline({ drive, sheets, spreadsheetId });
-        if (current.version !== rawLease.record.version || current.fingerprint !== rawLease.record.structuralFingerprint) {
+        if (metadata?.kind !== SHEETS_STRUCTURE_KIND)
+            throw publicError(
+                'This mutation requires a handle returned by getSpreadsheetInfo.',
+            );
+        const current = await readSheetsStructureBaseline({
+            drive,
+            sheets,
+            spreadsheetId,
+        });
+        if (
+            current.version !== rawLease.record.version ||
+            current.fingerprint !== rawLease.record.structuralFingerprint
+        ) {
             await abort();
             throw publicError(SHEETS_REREAD_REQUIRED);
+        }
+        if (deletion) {
+            if (typeof valueReadHandle !== 'string' || !valueReadHandle) {
+                throw publicError(
+                    'This deletion also requires valueReadHandle from readSpreadsheet covering every cell being deleted, including blank rows.',
+                );
+            }
+            try {
+                valueLease = store.beginMutation(valueReadHandle, { expected });
+            } catch (error) {
+                throw asPublic(error);
+            }
+            const valueMetadata = store.getInternalMetadata(valueReadHandle, {
+                expected,
+            });
+            assertValueTargets(
+                valueMetadata,
+                deletionTargets(current.sheets, deletion),
+            );
+            const observed = await readSheetsValueBaseline({
+                drive,
+                sheets,
+                spreadsheetId,
+                descriptors: normalizeBaselineRanges(valueMetadata.ranges),
+            });
+            if (
+                observed.version !== valueLease.record.version ||
+                observed.fingerprint !== valueLease.record.structuralFingerprint
+            ) {
+                throw publicError(SHEETS_REREAD_REQUIRED);
+            }
         }
         return {
             active: true,
             structure: current.sheets,
             async write(perform) {
                 let response;
-                try { response = await perform(); }
-                catch (error) {
+                try {
+                    response = await perform();
+                } catch (error) {
                     if (!settled) {
                         settled = true;
-                        try { store.completeAfterWriteFailure(rawLease.operationId, { expected }); } catch { /* preserve error */ }
+                        try {
+                            store.completeAfterWriteFailure(
+                                rawLease.operationId,
+                                { expected },
+                            );
+                        } catch {
+                            /* preserve error */
+                        }
+                        if (valueLease) {
+                            try {
+                                store.completeAfterWriteFailure(
+                                    valueLease.operationId,
+                                    { expected },
+                                );
+                            } catch {
+                                /* preserve error */
+                            }
+                        }
                         release();
                     }
                     throw error;
                 }
+                if (valueLease) {
+                    // Deletion changes grid coordinates or removes the sheet. Neither
+                    // pre-delete projection can safely become a successor capability.
+                    for (const lease of [rawLease, valueLease]) {
+                        try {
+                            store.completeConsumed(lease.operationId, {
+                                expected,
+                            });
+                        } catch {
+                            try {
+                                store.completeAfterWriteFailure(
+                                    lease.operationId,
+                                    { expected },
+                                );
+                            } catch {
+                                /* already invalidated */
+                            }
+                            setResultWarning(
+                                'Deletion succeeded; reread structure and values before another mutation.',
+                            );
+                        }
+                    }
+                    settled = true;
+                    release();
+                    return response;
+                }
                 try {
-                    const observed = await readSheetsStructureBaseline({ drive, sheets, spreadsheetId });
-                    const successor = store.completeSuccess(rawLease.operationId, {
-                        version: observed.version, structuralFingerprint: observed.fingerprint, metadata: observed.metadata,
-                    }, { expected });
+                    const observed = await readSheetsStructureBaseline({
+                        drive,
+                        sheets,
+                        spreadsheetId,
+                    });
+                    const successor = store.completeSuccess(
+                        rawLease.operationId,
+                        {
+                            version: observed.version,
+                            structuralFingerprint: observed.fingerprint,
+                            metadata: observed.metadata,
+                        },
+                        { expected },
+                    );
                     settled = true;
                     release();
                     setResultHandle(successor.readHandle, successor.expiresAt);
@@ -923,10 +1157,19 @@ export async function beginSheetsStructureMutation({ spreadsheetId, readHandle, 
                 } catch {
                     if (!settled) {
                         settled = true;
-                        try { store.completeAfterWriteFailure(rawLease.operationId, { expected }); } catch { /* best effort */ }
+                        try {
+                            store.completeAfterWriteFailure(
+                                rawLease.operationId,
+                                { expected },
+                            );
+                        } catch {
+                            /* best effort */
+                        }
                         release();
                     }
-                    setResultWarning('The Sheets mutation returned successfully, but its post-write structure could not be observed. Its handle was invalidated; call getSpreadsheetInfo before another structural mutation.');
+                    setResultWarning(
+                        'The Sheets mutation returned successfully, but its post-write structure could not be observed. Its handle was invalidated; call getSpreadsheetInfo before another structural mutation.',
+                    );
                 }
                 return response;
             },
